@@ -1,0 +1,26 @@
+# Archivo: config.yaml
+
+credentials:
+  usernames:
+    omejia:
+      email: omejiariv@gmail.com
+      name: Oscar Mejia
+      password: '$2b$12$.55RmOPsIdWkYuiEw0egCeoSUnxq1qJDEsVV6ahKgHrG3QagGwpzy'
+
+    invitado:
+      email: invitado@none.com
+      name: Invitado
+      password: '$2b$12$G5aEryYgLFI49QwW/3adCerEsHZkYkkoe7py3XpdMfian/3lt/rLC'
+
+cookie:
+  expiry_days: 90
+  key: cuencaverde2025
+  name: cuencaverde
+preauthorized:
+  emails:
+  - andres.zapata@cuencaverde.org
+  - linda.berrio@cuencaverde.org
+  - direccion@cuencaverde.org
+  - subdir.tecnica@cuencaverde.org
+  - jose.gutierrez@cuencaverde.org
+
