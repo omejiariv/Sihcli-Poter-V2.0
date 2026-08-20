@@ -44,3 +44,11 @@ python-docx
 fiona
 xlrd>=2.0.1
 xgboost
+python-dotenv 1.2.2
+xarray
+rioxarray
+netCDF4
+dask
+pystac-client
+planetary-computer
+zarr

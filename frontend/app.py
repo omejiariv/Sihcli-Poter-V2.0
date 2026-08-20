@@ -1,4 +1,4 @@
-# app.py
+# frontend/app.py
 
 import os
 import sys
@@ -17,46 +17,18 @@ st.set_page_config(
 # --- 📂 IMPORTACIÓN ROBUSTA DE MÓDULOS ---
 try:
     from modules import selectors
-    from modules.utils import inicializar_torrente_sanguineo
+    # 🔴 NOTA V2.0: inicializar_torrente_sanguineo() fue eliminado de aquí. 
+    # El Frontend ya no carga matrices pesadas a la RAM.
 except ImportError:
     # Fallback de rutas
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
     from modules import selectors
-    from modules.utils import inicializar_torrente_sanguineo
-
-import uuid
-from sqlalchemy import text
-from modules.db_manager import get_engine
-
-def registrar_visita_silenciosa():
-    if 'sesion_activa_id' not in st.session_state:
-        st.session_state['sesion_activa_id'] = str(uuid.uuid4())
-        try:
-            # Inyecta la visita en segundo plano sin ralentizar la app
-            engine = get_engine()
-            with engine.begin() as conn:
-                conn.execute(
-                    text("INSERT INTO registro_visitas (sesion_id, modulo_visitado) VALUES (:sid, :mod)"),
-                    {"sid": st.session_state['sesion_activa_id'], "mod": "Inicio de App"}
-                )
-        except Exception:
-            pass # Si falla, la app sigue funcionando normal
-
-registrar_visita_silenciosa()
 
 # ==========================================
 # 📂 MENÚ DE NAVEGACIÓN PERSONALIZADO
 # ==========================================
 # Llama al menú expandible para mantener coherencia en todo el sistema
 selectors.renderizar_menu_navegacion("Inicio")
-
-# ==============================================================================
-# 💉 INYECTAR TORRENTE SANGUÍNEO AL INICIO (Sistema Inmunológico)
-# ==============================================================================
-try:
-    inicializar_torrente_sanguineo()
-except Exception as e:
-    pass # Fallback silencioso para no romper la UI en caso de error de importación
 
 # --- ESTILOS CSS PERSONALIZADOS (MEJORADOS) ---
 st.markdown("""
@@ -98,7 +70,7 @@ st.markdown('<p class="sub-header">Sistema de Información Hidroclimática Integ
 
 # Panel de Métricas Globales (Dashboard)
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Módulos Analíticos", "16 Especializados", "Operativos") # Actualizado a 16
+col1.metric("Módulos Analíticos", "16 Especializados", "Operativos") 
 col2.metric("Resolución Temporal", "1950 - 2070", "Datos Históricos + Proyecciones")
 col3.metric("Cobertura Geográfica", "Región Andina", "Topología de Cuencas")
 col4.metric("Motores de Decisión", "WRI / AHP / Earth Engine", "Estándares Globales")
@@ -139,7 +111,6 @@ with tab_dashboard:
         st.page_link("pages/05_🏔️_Geomorfologia.py", label="**Geomorfología**", icon="🏔️")
         st.markdown("<small>Análisis de Modelos Digitales de Elevación (DEM), redes de drenaje y morfometría.</small>", unsafe_allow_html=True)
     with c6:
-        # Renombrado según el Camino A
         st.page_link("pages/14_🌍_Satelite_Terrestre.py", label="**Satélite Terrestre**", icon="🌍")
         st.markdown("<small>Conexión a Earth Engine para monitoreo de coberturas Dynamic World a 10m.</small>", unsafe_allow_html=True)
 
@@ -271,4 +242,4 @@ with tab_aleph:
 
 # --- FOOTER ---
 st.caption("© 2026 omejia CV | SIHCLI-POTER v3.0 | Un Aleph Hidroclimático: Plataforma de Inteligencia Territorial")
-st.caption("💧 SIHCLI-POTER | Sistema de Información Hídrica y Climática | CuencaVerde")
+st.caption("💧 SIHCLI-POTER | Sistema de Información Hídrica y Climática |")
