@@ -1,0 +1,1284 @@
+# pages/02_💧_Aguas_Subterraneas.py
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+from sqlalchemy import text
+import geopandas as gpd
+import os
+import sys
+
+
+import folium
+from folium.features import DivIcon
+from folium import plugins
+from streamlit_folium import st_folium
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+from scipy.interpolate import griddata
+# ----------------------------------------
+
+# --- IMPORTACIÓN DE MÓDULOS (BLINDADA) ---
+try:
+    from modules import db_manager, hydrogeo_utils, selectors
+    from modules.config import Config
+    
+    # Módulos opcionales con manejo de fallo y blindaje anti-caché de Streamlit                          
+    try: 
+        from modules import land_cover                                 
+    except (ImportError, KeyError): 
+        land_cover = None                               
+                                                                        
+    try: 
+        from modules import analysis                                   
+    except (ImportError, KeyError): 
+        analysis = None
+        
+except ImportError as e:
+    st.error(f"Error importando módulos del sistema: {e}")
+    st.stop()
+
+# Configuración de Página
+st.set_page_config(page_title="Aguas Subterráneas", page_icon="💧", layout="wide")
+
+# ==========================================
+# 📂 NUEVO: MENÚ DE NAVEGACIÓN PERSONALIZADO
+# ==========================================
+# Llama al menú expandible y resalta la página actual
+selectors.renderizar_menu_navegacion("Aguas Subterráneas")
+
+# 🧠 Encendido automático del Gemelo Digital (Lectura de matrices maestras)
+try:
+    from modules.utils import encender_gemelo_digital
+    encender_gemelo_digital()
+except: pass
+
+if st.sidebar.button("🧹 Limpiar Memoria y Recargar"):
+    st.cache_data.clear()
+    st.rerun()
+
+st.title("💧 Aguas Subterráneas: El Corazón Invisible")
+with st.expander("🌊 Manifiesto de las Aguas Ocultas", expanded=False):
+    st.markdown("""
+    <div style="border-left: 5px solid #2980b9; padding: 15px; background-color: rgba(52, 152, 219, 0.1); border-radius: 5px;">
+        <b style="font-size: 0.95em;">El agua subterránea es el agua dulce líquida más abundante del planeta. Es la memoria milenaria de la lluvia. De ella dependen los bosques en la sequía, el caudal base de los ríos que vemos fluir, y la vida de miles de personas en las zonas más apartadas y frágiles. Es invisible, y por ello a menudo ignorada y sobreexplotada. Aquí la hacemos visible, para tratarla con el respeto, la gratitud y el amor que merece el recurso que hoy salva vidas y que será nuestro mayor escudo ante la crisis climática.</b>
+    </div>
+    """, unsafe_allow_html=True)
+st.divider()
+
+# --- 1. SELECTOR ESPACIAL Y CONEXIÓN ALEPH (Cerebro Estructural) ---       
+try:
+    ids_estaciones, nombre_zona_raw, altitud_ref, gdf_zona_dummy, nivel_jerarquico_raw = selectors.render_selector_espacial()
+except Exception as e:
+    st.error(f"Error en selector: {e}")
+    st.stop()
+
+engine = db_manager.get_engine()                                       
+
+# 🚀 CONEXIÓN ALEPH
+nombre_zona = st.session_state.get('aleph_lugar', nombre_zona_raw)
+nivel_jerarquico = st.session_state.get('aleph_escala', nivel_jerarquico_raw)
+
+if not nombre_zona or str(nombre_zona).strip() in ["", "None"]:
+    st.info("👈 Por favor, utiliza el menú lateral para seleccionar una zona.")
+    st.stop()
+
+# 🚀 RESCATE ESTRUCTURAL: Usar el caché de memoria viva (Si existe)
+gdf_zona = None
+if 'aleph_poligono' in st.session_state and st.session_state['aleph_poligono'] is not None and not st.session_state['aleph_poligono'].empty:
+    gdf_zona = st.session_state['aleph_poligono']
+
+# 🪂 PARACAÍDAS CARTOGRÁFICO ESTRUCTURAL (Idéntico a Biodiversidad y Segurísimo)
+if gdf_zona is None or gdf_zona.empty:
+    with st.spinner("🪂 Sincronizando topología estricta desde la matriz maestra..."):
+        try:
+            import geopandas as gpd
+            import unicodedata
+            import re
+            import pandas as pd
+            
+            def norm_text(t):
+                if not isinstance(t, str) or pd.isna(t): return ""
+                return unicodedata.normalize('NFKD', t.lower().strip()).encode('ascii', 'ignore').decode('utf-8')
+
+            # 🗺️ DICCIONARIO DE TRADUCCIÓN (Súper-Blindado)
+            ALIASES_MUNICIPIOS = {
+                "el carmen de viboral": "EL CARMEN DE VIBORAL",
+                "carmen de viboral": "EL CARMEN DE VIBORAL",
+                "el penol": "PEÑOL",
+                "penol": "PEÑOL",
+                "el retiro": "RETIRO",
+                "retiro": "RETIRO",
+                "carolina del principe": "CAROLINA",
+                "carolina": "CAROLINA",
+                "santa fe de antioquia": "Santa Fe De Antioquia",
+                "santafe de antioquia": "Santa Fe De Antioquia",
+                "pueblo rico": "PUEBLORRICO",
+                "pueblorrico": "PUEBLORRICO",
+                "san jose de la montana": "SAN JOSE DE LA MONTAÑA",
+                "san andres de cuerquia": "SAN ANDRES DE CUERQUIA",
+                "san vicente": "SAN VICENTE FERRER",
+                "san vicente ferrer": "SAN VICENTE FERRER",
+                "ciudad bolivar": "CIUDAD BOLIVAR",
+                "bolivar": "CIUDAD BOLIVAR"
+            }
+
+            lugar_crudo = str(nombre_zona).replace("CAR: ", "").strip()
+            lugar_norm_inicial = norm_text(lugar_crudo)
+            
+            if lugar_norm_inicial in ALIASES_MUNICIPIOS:
+                terr_norm = norm_text(ALIASES_MUNICIPIOS[lugar_norm_inicial])
+                lugar_limpio_exacto = ALIASES_MUNICIPIOS[lugar_norm_inicial] 
+            else:
+                terr_norm = norm_text(lugar_crudo)
+                lugar_limpio_exacto = lugar_crudo
+
+            nivel_norm = str(nivel_jerarquico).upper().strip()
+            
+            es_nacional = "NACION" in nivel_norm
+            es_departamento = "DEPARTAMENTO" in nivel_norm or "DEPARTAMENTAL" in nivel_norm or "COLOMBIA" in terr_norm
+            es_municipio = "MUNICIPAL" in nivel_norm or "MUNICIPIO" in nivel_norm
+            es_region = "REGION" in nivel_norm or "SUBREGION" in nivel_norm
+            es_car = "CAR" in nivel_norm or "AUTORIDAD" in nivel_norm
+            es_cuenca = "CUENCA" in nivel_norm or "NSS" in nivel_norm or "SZH" in nivel_norm
+            
+            encontrado = False
+
+            # --- 1. BÚSQUEDA DE CUENCAS ---
+            if es_cuenca:
+                from modules.data_processor import load_and_process_all_data
+                _, _, _, _, gdf_subcuencas, _ = load_and_process_all_data()
+                
+                if gdf_subcuencas is not None and not gdf_subcuencas.empty:
+                    codigo_match = re.search(r'\((.*?)\)', str(nombre_zona))
+                    cod_ideam = codigo_match.group(1).strip() if codigo_match else None
+                    
+                    if cod_ideam:
+                        cols_cod = [c for c in gdf_subcuencas.columns if c.lower() in ['nss1', 'nss2', 'nss3', 'szh', 'zh', 'ah']]
+                        for col in cols_cod:
+                            mask_ideam = gdf_subcuencas[col].astype(str).str.strip() == cod_ideam
+                            if mask_ideam.any():
+                                gdf_zona_tmp = gdf_subcuencas[mask_ideam]
+                                gdf_zona = gpd.GeoDataFrame(geometry=[gdf_zona_tmp.unary_union], crs=gdf_subcuencas.crs)
+                                encontrado = True
+                                break
+                                
+                    if not encontrado:
+                        def limpiar_texto(t):
+                            if not isinstance(t, str): return ""
+                            return re.sub(r'[^A-Z0-9]', '', ''.join(c for c in unicodedata.normalize('NFD', t.upper()) if unicodedata.category(c) != 'Mn'))
+                        terr_limpio = limpiar_texto(lugar_crudo)
+                        mask_c = gdf_subcuencas.apply(lambda row: terr_limpio in limpiar_texto(str(row.to_dict().values())), axis=1)
+                        if mask_c.any():
+                            gdf_zona_tmp = gdf_subcuencas[mask_c]
+                            gdf_zona = gpd.GeoDataFrame(geometry=[gdf_zona_tmp.unary_union], crs=gdf_subcuencas.crs)
+                            encontrado = True
+
+            # --- 2. BÚSQUEDA TERRITORIAL ESTRUCTURAL (TerritorioMaestro.geojson) ---
+            if not encontrado and not es_cuenca:
+                @st.cache_data(ttl=86400, show_spinner=False)
+                def get_territorio_maestro():
+                    import requests, io
+                    url = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
+                    try:
+                        res = requests.get(url, timeout=20)
+                        if res.status_code == 200:
+                            return gpd.read_file(io.BytesIO(res.content))
+                    except Exception:
+                        pass
+                    return gpd.GeoDataFrame()
+
+                gdf_tm = get_territorio_maestro()
+                
+                if not gdf_tm.empty:
+                    gdf_tm.columns = [c.lower() for c in gdf_tm.columns]
+                    
+                    if es_nacional or (es_departamento and ("ANTIOQUIA" in terr_norm or "COLOMBIA" in terr_norm)):
+                        col_depto = 'dpto_cnmbr' if 'dpto_cnmbr' in gdf_tm.columns else 'departamento'
+                        if col_depto in gdf_tm.columns and not es_nacional:
+                            mask = gdf_tm[col_depto].apply(norm_text).isin(['antioquia'])
+                        else:
+                            mask = pd.Series(True, index=gdf_tm.index)
+                            
+                        if mask.any():
+                            gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
+                            encontrado = True
+                                
+                    elif es_region:
+                        col_sub = 'subregion'
+                        if col_sub in gdf_tm.columns:
+                            mask = gdf_tm[col_sub].apply(norm_text) == terr_norm
+                            if mask.any():
+                                gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
+                                encontrado = True
+                                
+                    elif es_car:
+                        col_car = 'car'
+                        if col_car in gdf_tm.columns:
+                            if terr_norm == "amva":
+                                mask = gdf_tm[col_car].apply(norm_text).str.contains("amva|aburra", na=False)
+                            elif terr_norm == "corantioquia":
+                                mask_corantioquia = gdf_tm[col_car].apply(norm_text).str.contains("corantioquia", na=False)
+                                mask_no_amva = ~gdf_tm['mpio_cnmbr'].apply(norm_text).isin(['medellin', 'bello', 'itagui', 'envigado', 'sabaneta', 'copacabana', 'la estrella', 'girardota', 'caldas', 'barbosa'])
+                                mask = mask_corantioquia & mask_no_amva
+                            else:
+                                mask = gdf_tm[col_car].apply(norm_text).str.contains(terr_norm, na=False)
+
+                            if mask.any():
+                                gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
+                                encontrado = True
+                                
+                    elif es_municipio:
+                        col_mpio = 'mpio_cnmbr' if 'mpio_cnmbr' in gdf_tm.columns else 'municipio'
+                        if col_mpio in gdf_tm.columns:
+                            mask_norm = gdf_tm[col_mpio].apply(norm_text) == terr_norm
+                            mask_exacta = gdf_tm[col_mpio] == lugar_limpio_exacto
+                            mask = mask_norm | mask_exacta
+                            
+                            if mask.any():
+                                gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
+                                encontrado = True
+
+            if encontrado:
+                st.sidebar.success("🪂 ¡Polígono sincronizado (Topología Exacta)!")
+            else:
+                st.sidebar.error("⚠️ El polígono no existe en la matriz maestra.")
+                
+        except Exception as e:
+            st.sidebar.error(f"Error de sincronización estructural: {e}")
+
+st.sidebar.success(f"🔗 Conexión Aleph Activa: {nombre_zona}")
+
+# 🚀 FIX: AÑADIR EL BUFFER ESPACIAL AL SIDEBAR DE AGUAS SUBTERRÁNEAS
+st.sidebar.markdown("---")
+buffer_km = st.sidebar.slider(
+    "🎯 Radio de Búsqueda (Buffer en km):", 
+    min_value=0.0, max_value=50.0, value=25.0, step=1.0, 
+    help="Expande la zona para capturar estaciones vecinas y mejorar la interpolación de recarga."
+)
+
+# 🌍 EXPANSIÓN GEOMÉTRICA DE LA ZONA DE BÚSQUEDA
+gdf_limite_original = None
+if gdf_zona is not None and not gdf_zona.empty:
+    gdf_limite_original = gdf_zona.copy() # Guardamos la cuenca exacta para dibujarla luego
+    
+    if buffer_km > 0:
+        # Proyectamos a metros (Magna-Sirgas), expandimos y devolvemos a grados (WGS84)
+        gdf_zona_proj = gdf_zona.to_crs(epsg=3116)
+        gdf_zona_proj['geometry'] = gdf_zona_proj.geometry.buffer(buffer_km * 1000)
+        gdf_zona = gdf_zona_proj.to_crs(gdf_zona.crs)
+        
+# --- 2. PARÁMETROS ECO-HIDROLÓGICOS ---
+st.sidebar.divider()
+
+st.sidebar.header("🎛️ Parámetros del Modelo")
+
+# URL de Supabase proporcionada
+URL_RASTER_SUPABASE = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/rasters/Cob25m_WGS84.tif"
+
+modo_params = st.sidebar.radio(
+    "Fuente de Coberturas:", 
+    ["Automático (Satélite)", "Manual (Simulación)"],
+    horizontal=True
+)
+
+# Valores por defecto (se actualizarán si el satélite responde)
+pct_bosque, pct_agricola, pct_pecuario, pct_agua, pct_urbano = 40.0, 20.0, 30.0, 5.0, 5.0
+
+# 🛡️ FIX 1: Inicializamos la ruta temporal para que el Mapa Contexto sepa que existe
+ruta_temporal = None 
+
+# Lógica de Coberturas
+if modo_params == "Automático (Satélite)" and gdf_zona is not None and land_cover:
+    with st.sidebar.status("🛰️ Conectando con Supabase Raster...", expanded=False) as status:
+        try:
+            import requests
+            import tempfile
+            import os
+
+            # Definimos una ruta temporal segura en el servidor de Streamlit
+            ruta_temporal = os.path.join(tempfile.gettempdir(), "Cob25m_WGS84_cache.tif")
+            
+            # Descarga inteligente: Solo si el archivo no existe en el contenedor temporal
+            if not os.path.exists(ruta_temporal):
+                status.update(label="Descargando mapa base desde Supabase...", state="running")
+                response = requests.get(URL_RASTER_SUPABASE, stream=True, verify=False)
+                if response.status_code == 200:
+                    with open(ruta_temporal, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                else:
+                    st.sidebar.error(f"Error de conexión: Status {response.status_code}")
+                    ruta_temporal = None
+
+            # Procesamiento Espacial
+            if ruta_temporal and os.path.exists(ruta_temporal):
+                status.update(label=f"Analizando coberturas en {nombre_zona}...", state="running")
+                
+                # Usamos la ruta temporal para el cálculo
+                stats_raw = land_cover.calcular_estadisticas_zona(gdf_zona, ruta_temporal)
+                
+                if stats_raw:
+                    p_bosque, p_agricola, p_pecuario, p_agua, p_urbano = land_cover.agrupar_coberturas_turc(stats_raw)
+                    
+                    st.sidebar.success(f"✅ Datos extraídos para {nombre_zona}")
+                    pct_bosque, pct_agricola, pct_pecuario, pct_agua, pct_urbano = p_bosque, p_agricola, p_pecuario, p_agua, p_urbano
+                    
+                    # Visualización en sidebar
+                    st.sidebar.progress(min(100, int(pct_bosque)), text=f"Bosque: {pct_bosque:.1f}%")
+                    st.sidebar.progress(min(100, int(pct_pecuario + pct_agricola)), text=f"Agro: {(pct_pecuario+pct_agricola):.1f}%")
+                    status.update(label="Análisis completado", state="complete")
+                else:
+                    status.update(label="⚠️ Sin datos raster en la zona.", state="error")
+                    st.sidebar.warning("Usando valores manuales por defecto.")
+
+        except Exception as e:
+            st.sidebar.error(f"Error procesando raster: {e}")
+            status.update(label="Error en el motor espacial", state="error")
+else:
+    if modo_params == "Automático (Satélite)" and not land_cover:
+        st.sidebar.warning("Módulo land_cover no disponible.")
+        
+    # Modo Manual o Fallback
+    pct_bosque = st.sidebar.number_input("% Bosque", 0, 100, 40)
+    pct_agricola = st.sidebar.number_input("% Agrícola", 0, 100, 20)
+    pct_pecuario = st.sidebar.number_input("% Pecuario", 0, 100, 30)
+    pct_agua = st.sidebar.number_input("% Agua/Humedal", 0, 100, 5)
+    pct_urbano = max(0, 100 - (pct_bosque + pct_agricola + pct_pecuario + pct_agua))
+    st.sidebar.metric("% Urbano / Otro", f"{pct_urbano}%")
+
+# --- FACTORES HIDROGEOLÓGICOS ---
+st.sidebar.subheader("🌱 Suelo (Infiltración)")
+tipo_suelo = st.sidebar.select_slider(
+    "Textura Dominante:",
+    options=["Arcilloso (Baja)", "Franco-Arcilloso", "Franco (Media)", "Franco-Arenoso", "Arenoso (Alta)"],
+    value="Franco (Media)"
+)
+mapa_factores_suelo = {
+    "Arcilloso (Baja)": 0.6, 
+    "Franco-Arcilloso": 0.8, 
+    "Franco (Media)": 1.0, 
+    "Franco-Arenoso": 1.2, 
+    "Arenoso (Alta)": 1.35
+}
+factor_suelo = mapa_factores_suelo[tipo_suelo]
+
+st.sidebar.subheader("🪨 Geología (Recarga)")
+tipo_geo = st.sidebar.select_slider(
+    "Permeabilidad del Acuífero:",
+    options=["Muy Baja (Granitos)", "Baja", "Media (Sedimentarias)", "Alta", "Muy Alta (Aluvial/Kárstico)"],
+    value="Media (Sedimentarias)"
+)
+mapa_kg = {"Muy Baja (Granitos)": 0.3, "Baja": 0.5, "Media (Sedimentarias)": 0.7, "Alta": 0.85, "Muy Alta (Aluvial/Kárstico)": 0.95}
+kg_factor = mapa_kg[tipo_geo]
+
+# Cálculo de Coeficientes Ponderados
+kc_ponderado = ((pct_bosque * 1.0) + (pct_agricola * 0.85) + (pct_pecuario * 0.80) + (pct_agua * 1.05) + (pct_urbano * 0.40)) / 100.0
+ki_cobertura = ((pct_bosque * 0.50) + (pct_agricola * 0.30) + (pct_pecuario * 0.30) + (pct_agua * 0.90) + (pct_urbano * 0.05)) / 100.0
+ki_final = max(0.01, min(0.95, ki_cobertura * factor_suelo))
+
+c1, c2 = st.sidebar.columns(2)
+c1.metric("Infiltración Est.", f"{(ki_final*100):.0f}%")
+c2.metric("Recarga Potencial", f"{(kg_factor*100):.0f}%")
+
+st.sidebar.divider()
+meses_futuros = st.sidebar.slider("Horizonte Pronóstico", 12, 60, 24)
+ruido = st.sidebar.slider("Factor Incertidumbre", 0.0, 1.0, 0.1)
+
+# --- LÓGICA DE DATOS ---
+if gdf_zona is not None:
+    
+    # 1. Recuperar Estaciones (Consulta Geoespacial si faltan IDs)
+    if not ids_estaciones:
+        if gdf_zona.crs and gdf_zona.crs.to_string() != "EPSG:4326":
+            gdf_zona = gdf_zona.to_crs("EPSG:4326")
+            
+        minx, miny, maxx, maxy = gdf_zona.total_bounds
+        buff = 0.05
+        
+        # Consulta usando columnas corregidas (latitud/longitud)
+        q_geo = text(f"""
+            SELECT id_estacion, nombre, latitud, longitud, altitud, municipio 
+            FROM estaciones 
+            WHERE longitud BETWEEN {minx-buff} AND {maxx+buff} 
+            AND latitud BETWEEN {miny-buff} AND {maxy+buff}
+        """)
+        df_puntos = pd.read_sql(q_geo, engine)
+        
+        if not df_puntos.empty:
+            ids_estaciones = df_puntos['id_estacion'].astype(str).tolist()
+    else:
+        # Consulta por IDs específicos
+        ids_fmt = ",".join([f"'{x}'" for x in ids_estaciones])
+        q = text(f"SELECT id_estacion, nombre, latitud, longitud, altitud, municipio FROM estaciones WHERE id_estacion IN ({ids_fmt})")
+        df_puntos = pd.read_sql(q, engine)
+
+    if df_puntos.empty:
+        st.warning("❌ No se encontraron estaciones en esta zona.")
+        st.stop()
+
+    # 2. Procesamiento Hidrológico
+    with st.spinner("Procesando balance hídrico y recarga..."):
+        
+        # Obtener datos de lluvia
+        # Priorizamos la tabla 'precipitacion' nueva
+        ids_fmt = ",".join([f"'{x}'" for x in ids_estaciones])
+        q_rain = text(f"""
+            SELECT id_estacion, fecha, valor 
+            FROM precipitacion 
+            WHERE id_estacion IN ({ids_fmt})
+            ORDER BY fecha ASC
+        """)
+        df_raw = pd.read_sql(q_rain, engine)
+        
+        # Ejecutar Modelo Prophet (Pronóstico)
+        df_res = pd.DataFrame()
+        if not df_raw.empty:
+            # Asegurar tipos
+            df_raw['id_estacion'] = df_raw['id_estacion'].astype(str)
+            df_raw['fecha'] = pd.to_datetime(df_raw['fecha'])
+            
+            alt_calc = altitud_ref if altitud_ref else df_puntos['altitud'].mean()
+            
+            # Llamada al núcleo hidrogeológico
+            df_res = hydrogeo_utils.ejecutar_pronostico_prophet(
+                df_raw, meses_futuros, alt_calc, ki_final, ruido, kg=kg_factor, kc=kc_ponderado
+            )
+
+    st.markdown(f"### Análisis: {nombre_zona}")
+
+    # ==============================================================================
+    # 1. PANEL SUPERIOR DE INDICADORES
+    # ==============================================================================
+    if not df_res.empty:
+        df_hist = df_res[df_res['tipo'] == 'Histórico']
+        
+        if not df_hist.empty:
+            # --- 🗺️ A. CÁLCULO DE ÁREA EXACTA (GEOMETRÍA VIVA) ---
+            # Calculamos el área directamente del mapa seleccionado.
+            if gdf_zona is not None and not gdf_zona.empty:
+                area_km2 = gdf_zona.to_crs(epsg=3116).area.sum() / 1_000_000.0
+            else:
+                area_km2 = 10.0
+
+            # --- 🌍 B. NEXO CLIMÁTICO Y SINCRONIZACIÓN ALEPH ---
+            # Recuperamos la física calculada en la Página 01
+            lluvia_aleph = st.session_state.get('aleph_ppt_anual', 0.0)
+            etr_aleph = st.session_state.get('aleph_etr_anual', 0.0)
+            
+            delta_ppt_sim = st.session_state.get('sim_delta_ppt', 0.0) 
+            delta_temp_sim = st.session_state.get('sim_delta_temp', 0.0)
+            enso_estado = st.session_state.get('enso_fase', 'Neutro ⚖️')
+            
+            if delta_ppt_sim != 0.0 or delta_temp_sim != 0.0 or "Niño" in enso_estado or "Niña" in enso_estado:
+                st.success(f"🧠 **Nexo Atmosférico Activo:** El acuífero reacciona al clima global. (ENSO: {enso_estado} | CMIP6 Lluvia: {delta_ppt_sim}% | Temp: +{delta_temp_sim}°C)")
+            
+            if lluvia_aleph > 0:
+                st.caption("🌐 **Gemelo Digital:** Lluvia y ETR heredados con precisión espacial desde el modelo distribuido (Pág 01).")
+
+            factor_lluvia = 1 + (delta_ppt_sim / 100.0)
+            if "Niño Severo" in enso_estado: factor_lluvia *= 0.6
+            elif "Niño Moderado" in enso_estado: factor_lluvia *= 0.8
+            elif "Niña" in enso_estado: factor_lluvia *= 1.2
+            
+            # 🧠 Lógica Maestra: Si la Pág 01 tiene datos, los usamos. Si no, promediamos estaciones locales.
+            if lluvia_aleph > 0:
+                p_med = lluvia_aleph * factor_lluvia
+                etr_med = etr_aleph * (1 + (delta_temp_sim * 0.03))
+            else:
+                p_med = (df_hist['p_final'].mean() * 12) * factor_lluvia
+                etr_med = (df_hist['etr_mm'].mean() * 12) * (1 + (delta_temp_sim * 0.03)) 
+            
+            # Recalculamos la física
+            rec_med = max(0.0, (p_med - etr_med) * (ki_final * kg_factor))
+            inf_med = max(0.0, (p_med - etr_med) * ki_final)
+            esc_med = max(0.0, (p_med - etr_med) - rec_med)
+            
+            # Caudales Extremos y Medios
+            segundos_anio = 31536000
+            q_base_m3s = (rec_med * area_km2 * 1000) / segundos_anio
+            q_medio_m3s = (esc_med * area_km2 * 1000) / segundos_anio
+            
+            q_min_50a, q_eco = 0, 0
+            if analysis:
+                try:
+                    serie_p = df_hist.set_index('fecha')['p_final'] * factor_lluvia
+                    c_dir = (esc_med - rec_med) / p_med if p_med > 0 else 0.3
+                    stats = analysis.calculate_hydrological_statistics(serie_p, runoff_coeff=c_dir, area_km2=area_km2, q_base_m3s=q_base_m3s)
+                    q_min_50a = stats.get("Q_Min_50a", 0)
+                    q_eco = stats.get("Q_Ecologico_Q95", 0)
+                except: pass
+
+            # --- C. VISUALIZACIÓN DE MÉTRICAS (10 COLUMNAS) ---
+            st.markdown("##### 💧 Balance Hídrico y Oferta Subterránea (Simulación Activa)")
+            cols = st.columns(10)
+            
+            def fmt(v, u=""): return f"{v:,.0f} {u}"
+            
+            cols[0].metric("📏 Área", f"{area_km2:,.1f} km²")
+            cols[1].metric("🌧️ Lluvia", fmt(p_med, "mm/a"), delta=f"{delta_ppt_sim}%" if delta_ppt_sim!=0 else None)
+            cols[2].metric("☀️ ETR", fmt(etr_med, "mm/a"))
+            cols[3].metric("🌱 Infilt.", fmt(inf_med, "mm/a"))
+            cols[4].metric("💧 Recarga", fmt(rec_med, "mm/a"), help="Oferta hídrica subterránea")
+            cols[5].metric("🌊 Escorrentía", fmt(esc_med, "mm/a"))
+            cols[6].metric("⚖️ Q. Medio", f"{q_medio_m3s:.2f} m³/s")
+            cols[7].metric("📉 Q. Min 50a", f"{q_min_50a:.2f} m³/s", delta_color="inverse", help="Caudal mínimo (Tr=50a)")
+            cols[8].metric("🐟 Q. Eco.", f"{q_eco:.2f} m³/s", help="Caudal ambiental (Q95)")
+            cols[9].metric("📡 Ests.", len(df_puntos))
+            
+            # --- ❤️ BISTURÍ 2: EL LATIDO DEL RÍO (Conexión de Salida) ---
+            volumen_recarga_m3_año = rec_med * area_km2 * 1000
+            caudal_base_emergente_lps = (volumen_recarga_m3_año * 1000) / 31536000 # de m3/año a L/s
+            
+            st.info(f"💧 **El Latido del Río:** Esta recarga invisible no se queda estática; viaja lentamente por la roca durante meses. En la sequía más dura, emergerá en los nacimientos aportando **{caudal_base_emergente_lps:,.1f} Litros por segundo** al cauce. Es la sangre que mantiene vivo al ecosistema.")
+            
+            # 📜 EL MENSAJE DEL ARQUITECTO
+            st.markdown("""
+            <div style="text-align: right; padding-right: 10px;">
+                <i style="color: #7f8c8d; font-size: 0.9em;">✨ <b>Instrucción del Modelo:</b> Si vas a 'Clima e Hidrología', prendes 'El Niño Severo', y regresas a Aguas Subterráneas, sentirás el 'Latido del Río'.</i>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # INYECTAR A LA MEMORIA CENTRAL PARA CALIDAD Y TOMA DE DECISIONES
+            # 🛡️ BISTURÍ ANTI-BUCLES DE MEMORIA: Redondear a 2 decimales para evitar oscilaciones
+            recarga_float = round(float(rec_med), 2)
+            if st.session_state.get('aleph_recarga_mm') != recarga_float:
+                st.session_state['aleph_recarga_mm'] = recarga_float
+
+    st.divider()
+
+    # ==============================================================================
+    # 2. PREPARACIÓN DE DATOS ESPACIALES (CRÍTICO: Define df_mapa_stats)
+    # ==============================================================================
+    # Inicializamos df_mapa_stats con los metadatos básicos
+    df_mapa_stats = df_puntos.copy()
+    
+    # Si hay datos de lluvia, enriquecemos los puntos
+    if 'df_raw' in locals() and not df_raw.empty:
+        try:
+            # 1. Agrupar lluvia histórica por estación
+            grp = df_raw.groupby('id_estacion')['valor'].agg(['mean', 'std']).reset_index()
+            grp.columns = ['id_estacion', 'p_media', 'std_lluvia']
+            
+            # 2. Unir con df_mapa_stats
+            # Aseguramos tipos string para el join
+            df_mapa_stats['id_estacion'] = df_mapa_stats['id_estacion'].astype(str)
+            grp['id_estacion'] = grp['id_estacion'].astype(str)
+            
+            df_mapa_stats = pd.merge(df_mapa_stats, grp, on='id_estacion', how='left')
+            
+            # 3. Calcular Balance Puntual (Turc) para el mapa
+            # T = 28 - 0.006*h
+            df_mapa_stats['temp'] = 28 - (0.006 * df_mapa_stats['altitud'])
+            # L = 300 + 25T + 0.05T^3
+            df_mapa_stats['L_turc'] = 300 + 25*df_mapa_stats['temp'] + 0.05*(df_mapa_stats['temp']**3)
+            
+            # ETR y Recarga
+            def calc_etr(row):
+                if pd.isna(row['p_media']) or row['L_turc'] == 0: return 0
+                return row['p_media'] / np.sqrt(0.9 + (row['p_media']/row['L_turc'])**2)
+
+            df_mapa_stats['etr_media'] = df_mapa_stats.apply(calc_etr, axis=1)
+            
+            # Factores globales (del sidebar)
+            factor_recarga = ki_final * kg_factor
+            df_mapa_stats['recarga_calc'] = (df_mapa_stats['p_media'] - df_mapa_stats['etr_media']) * factor_recarga
+            df_mapa_stats['escorrentia_media'] = df_mapa_stats['p_media'] - df_mapa_stats['etr_media'] - df_mapa_stats['recarga_calc']
+            
+        except Exception as e:
+            st.warning(f"Advertencia calculando mapa: {e}")
+
+    # ==============================================================================
+    # 3. PESTAÑAS DE ANÁLISIS
+    # ==============================================================================
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 Serie Completa", "🗺️ Mapa Contexto", "💧 Mapa Recarga", "⚖️ Gobernanza", "📥 Descargas"])
+
+    # --- GUÍA TÉCNICA ENRIQUECIDA ---
+    with st.expander("📘 Guía Técnica: Metodología, Ecuaciones e Interpretación", expanded=False):
+        t1, t2, t3 = st.tabs(["🧮 Ecuaciones", "⚙️ Modelo Estocástico", "📖 Interpretación"])
+        
+        with t1:
+            st.markdown(r"""
+            #### 1. Balance Hídrico de Largo Plazo
+            Se utiliza el método de **Turc Modificado** para estimar la oferta hídrica en cuencas tropicales.
+            **Ecuación Fundamental:**
+            $$P = ETR + E_s + R + \Delta S$$
+            
+            Donde:
+            * **$P$ (Precipitación):** Entrada total de agua al sistema (mm/año).
+            * **$ETR$ (Evapotranspiración Real):** Agua que retorna a la atmósfera por evaporación del suelo y transpiración de plantas. Se calcula en función de la Temperatura ($T$) y la Lluvia ($P$):
+                $$ETR = \frac{P}{\sqrt{0.9 + (\frac{P}{L})^2}} \quad \text{donde} \quad L = 300 + 25T + 0.05T^3$$
+            * **$R$ (Recarga Potencial):** Fracción del agua que se infiltra profundamente y alimenta el acuífero.
+            * **$E_s$ (Escorrentía):** Flujo superficial rápido hacia los cauces.
+            """)            
+                        
+        with t2:
+            st.markdown(r"""
+            #### 2. Análisis de Extremos (Caudales)
+            Para la gestión del riesgo y concesiones, no basta con el promedio. Analizamos los extremos usando distribuciones de probabilidad:
+            
+            * **📉 Caudales Mínimos (Sequías):** Se ajustan a una distribución **Log-Normal de 2 Parámetros**.
+                * **$Q_{Min}^{50a}$:** El caudal mínimo esperado una vez cada 50 años (crítico para abastecimiento).
+                * **$Q_{95}$ (Ecológico):** El caudal que es superado el 95% del tiempo (garantía de sostenibilidad biótica).
+            
+            * **📈 Caudales Máximos (Crecientes):** Se ajustan a una distribución de **Gumbel (Valores Extremos Tipo I)**.
+                * Permite estimar cotas de inundación para periodos de retorno de 2.33, 5, 10, 50 y 100 años.
+            """)
+            
+        with t3:
+            st.info("""
+            **Interpretación de Resultados:**
+            * **Rendimiento Hídrico ($m^3/ha-año$):** Indica cuánta agua produce cada hectárea de la cuenca. Zonas boscosas suelen tener mayor rendimiento de regulación (Recarga).
+            * **Recarga vs. Escorrentía:** Una cuenca sana busca maximizar la Recarga (línea azul oscura en la gráfica) y moderar la Escorrentía superficial, reduciendo el riesgo de erosión e inundaciones.
+            """)
+
+    # --- TAB 1: SERIE TEMPORAL DETALLADA ---
+    with tab1:
+        if not df_res.empty:
+            # 1. Agrupar promedio regional (Mes a Mes)
+            df_avg = df_res.groupby(['fecha', 'tipo'])[[
+                'p_final', 'etr_mm', 'infiltracion_mm', 'recarga_mm', 
+                'escorrentia_mm', 'yhat_upper', 'yhat_lower'
+            ]].mean().reset_index().sort_values('fecha')
+
+            # 2. Cálculo de Rendimiento Hídrico (m³/ha)
+            # Factor 10: 1 mm = 10 m3/ha
+            # .clip(lower=0) asegura que no haya rendimientos negativos (físicamente imposibles)
+            df_avg['rendimiento_m3ha'] = ((df_avg['escorrentia_mm'] + df_avg['recarga_mm']) * 10).clip(lower=0)
+
+            # 3. Gráfica Multivariable
+            fig = go.Figure()
+            df_hist = df_avg[df_avg['tipo'] == 'Histórico']
+            df_fut = df_avg[df_avg['tipo'] == 'Proyección']
+            
+            # --- Variables de Entrada/Salida ---
+            fig.add_trace(go.Scatter(x=df_hist['fecha'], y=df_hist['p_final'], name='🌧️ Lluvia Histórica', line=dict(color='#95a5a6', width=1), visible='legendonly'))
+            fig.add_trace(go.Scatter(x=df_hist['fecha'], y=df_hist['etr_mm'], name='☀️ ETR', line=dict(color='#e67e22', width=1, dash='dot')))
+            
+            # --- Variables del Suelo ---
+            fig.add_trace(go.Scatter(x=df_hist['fecha'], y=df_hist['infiltracion_mm'], name='🌱 Infiltración Pot.', line=dict(color='#2ecc71', width=1.5)))
+            fig.add_trace(go.Scatter(x=df_hist['fecha'], y=df_hist['escorrentia_mm'], name='🌊 Escorrentía', line=dict(color='#27ae60', width=1.5)))
+            
+            # --- Variables Objetivo (Recarga) ---
+            # Recarga Real (Histórica)
+            fig.add_trace(go.Scatter(x=df_hist['fecha'], y=df_hist['recarga_mm'], name='💧 Recarga Real', line=dict(color='#2980b9', width=3), fill='tozeroy'))
+            
+            # PROYECCIONES (Futuro)
+            if not df_fut.empty:
+                # Lluvia Proyectada (Nueva)
+                fig.add_trace(go.Scatter(x=df_fut['fecha'], y=df_fut['p_final'], name='🌧️ Lluvia Proyectada', line=dict(color='#bdc3c7', width=1, dash='dot')))
+                
+                # Recarga Proyectada
+                fig.add_trace(go.Scatter(x=df_fut['fecha'], y=df_fut['recarga_mm'], name='🔮 Recarga Proy.', line=dict(color='#00d2d3', width=2, dash='dot')))
+                
+                # Incertidumbre
+                fig.add_trace(go.Scatter(x=df_fut['fecha'], y=df_fut['yhat_upper'], showlegend=False, line=dict(width=0), hoverinfo='skip'))
+                fig.add_trace(go.Scatter(x=df_fut['fecha'], y=df_fut['yhat_lower'], name='Incertidumbre', fill='tonexty', line=dict(width=0), fillcolor='rgba(0,210,211,0.1)', hoverinfo='skip'))
+
+            # --- Eje Secundario: Rendimiento Hídrico ---
+            fig.add_trace(go.Scatter(
+                x=df_hist['fecha'], y=df_hist['rendimiento_m3ha'], 
+                name='🚜 Rendimiento (m³/ha)', 
+                line=dict(color='#8e44ad', width=1),
+                yaxis='y2', opacity=0.3
+            ))
+
+            # Layout con doble eje
+            fig.update_layout(
+                title=f"Dinámica Hidrológica Completa: {nombre_zona}",
+                height=550, 
+                hovermode="x unified",
+                legend=dict(orientation="h", y=1.1),
+                yaxis=dict(title="Lámina de Agua (mm/mes)"),
+                yaxis2=dict(title="Rendimiento (m³/ha)", overlaying='y', side='right', showgrid=False)
+            )
+            st.plotly_chart(fig, width="stretch")
+            
+            with st.expander("📅 Ver Tabla de Datos Completa"):
+                st.dataframe(df_avg, width="stretch")
+        else:
+            st.info("Sin datos suficientes para el balance.")
+
+
+    # =========================================================================
+    # --- TAB 2: MAPA DE CONTEXTO ---
+    # =========================================================================
+    with tab2:
+        if st.button("🔄 Recargar Mapa Contexto", key="btn_ctx_uniq"): st.rerun()
+        
+        try:
+            pad = 0.05
+            min_lat, max_lat = df_puntos['latitud'].min(), df_puntos['latitud'].max()
+            min_lon, max_lon = df_puntos['longitud'].min(), df_puntos['longitud'].max()
+            
+            m = folium.Map(location=[(min_lat+max_lat)/2, (min_lon+max_lon)/2], zoom_start=11, tiles="CartoDB positron")
+            m.fit_bounds([[min_lat-pad, min_lon-pad], [max_lat+pad, max_lon+pad]])
+
+            st.markdown("<style>.leaflet-tooltip {white-space: normal !important; max-width: 300px;}</style>", unsafe_allow_html=True)
+
+            # --- 1. CAPAS HIDROGEOLÓGICAS (VECTOR CON COLORES Y HOVER) ---
+            if hasattr(hydrogeo_utils, 'cargar_capas_gis_optimizadas'):
+                try: 
+                    layers = hydrogeo_utils.cargar_capas_gis_optimizadas(engine, [min_lon-pad, min_lat-pad, max_lon+pad, max_lat+pad])
+                    
+                    if 'hidro' in layers:
+                        gdf_hidro = layers['hidro']
+                        cols_tooltip = [c for c in gdf_hidro.columns if c.lower() not in ['geometry', 'geom', 'shape', 'id', 'objectid', 'index']][:4]
+                        
+                        # 🚀 FIX 1: Generador de colores únicos y traslúcidos basados en el nombre de la unidad
+                        import hashlib
+                        def obtener_color_unico(feature):
+                            props = list(feature['properties'].values())
+                            val = str(props[0]) if props else "default"
+                            hash_obj = hashlib.md5(val.encode())
+                            return '#' + hash_obj.hexdigest()[:6]
+
+                        folium.GeoJson(
+                            gdf_hidro, 
+                            name="Hidrogeología", 
+                            style_function=lambda feature: {
+                                'fillColor': obtener_color_unico(feature), 
+                                'color': '#2c3e50', 
+                                'weight': 1, 
+                                'fillOpacity': 0.5 # 👈 Traslucidez
+                            },
+                            tooltip=folium.GeoJsonTooltip(fields=cols_tooltip) if cols_tooltip else None
+                        ).add_to(m)
+                except Exception as e: 
+                    pass
+
+            # --- 2. CAPA DE COBERTURAS (RASTER) ---
+            if land_cover and ruta_temporal and os.path.exists(ruta_temporal) and gdf_zona is not None:
+                try:
+                    img_cob, bounds_cob = land_cover.obtener_imagen_folium_coberturas(gdf_zona, ruta_temporal)
+                    if img_cob is not None:
+                        folium.raster_layers.ImageOverlay(img_cob, bounds_cob, opacity=0.6, name="Coberturas").add_to(m)
+                except Exception as e: 
+                    st.warning(f"No se pudo cargar la capa de coberturas en el mapa: {e}")
+
+            # --- 3. LEYENDA FLOTANTE DE COBERTURAS (FIX POSICIÓN ABSOLUTA) ---
+            from branca.element import Template, MacroElement
+            leyenda_html = """
+            {% macro html(this, kwargs) %}
+            <div style="position: absolute; bottom: 30px; left: 30px; width: 180px; height: auto; 
+                background-color: white; z-index:999999; font-size:12px; border:2px solid grey; 
+                padding: 10px; border-radius: 5px; box-shadow: 2px 2px 5px rgba(0,0,0,0.3); pointer-events: auto;">
+                <b>Coberturas (Leyenda)</b><br>
+                <i style="background: #228B22; width: 15px; height: 15px; float: left; margin-right: 5px; opacity: 0.8;"></i> Bosque/Natural<br>
+                <i style="background: #FFD700; width: 15px; height: 15px; float: left; margin-right: 5px; opacity: 0.8;"></i> Agrícola<br>
+                <i style="background: #FF8C00; width: 15px; height: 15px; float: left; margin-right: 5px; opacity: 0.8;"></i> Pecuario/Pastos<br>
+                <i style="background: #1E90FF; width: 15px; height: 15px; float: left; margin-right: 5px; opacity: 0.8;"></i> Cuerpos de Agua<br>
+                <i style="background: #A9A9A9; width: 15px; height: 15px; float: left; margin-right: 5px; opacity: 0.8;"></i> Urbano<br>
+            </div>
+            {% endmacro %}
+            """
+            macro = MacroElement()
+            macro._template = Template(leyenda_html)
+            m.get_root().add_child(macro)
+            
+            # Marcadores Estaciones
+            fg = folium.FeatureGroup(name="Estaciones", show=True)
+            for _, r in df_mapa_stats.iterrows():
+                if pd.notnull(r.get('latitud')) and pd.notnull(r.get('longitud')):
+                    p_val = r.get('p_media', 0) * 12
+                    r_val = r.get('recarga_calc', 0) * 12
+                    
+                    html = f"""
+                    <b>{r.get('nombre')}</b><br>
+                    ID: {r.get('id_estacion')}<br>
+                    🌧️ Lluvia: {p_val:,.0f} mm<br>
+                    💧 Recarga: {r_val:,.0f} mm
+                    """
+                    folium.Marker(
+                        [r['latitud'], r['longitud']], 
+                        popup=folium.Popup(html, max_width=200),
+                        icon=folium.Icon(color='blue', icon='tint')
+                    ).add_to(fg)
+            
+            fg.add_to(m)
+            folium.LayerControl().add_to(m)
+            
+            # 🚀 ADD: Botón de Pantalla Completa (Fullscreen)
+            from folium import plugins
+            plugins.Fullscreen(position='topright', title='Pantalla Completa', title_cancel='Salir de Pantalla Completa').add_to(m)
+            
+            import streamlit.components.v1 as components
+            components.html(m._repr_html_(), height=650)
+            
+        except Exception as e:
+            st.error(f"Error renderizando mapa de contexto: {e}")
+
+    # =========================================================================
+    # --- TAB 3: MAPA DE RECARGA (SUPERFICIE CONTINUA Y SEGURA) ---
+    # =========================================================================
+    with tab3:
+        st.markdown("##### 💧 Distribución Espacial de la Oferta Subterránea")
+        
+        if 'df_mapa_stats' not in locals() or df_mapa_stats.empty or 'recarga_calc' not in df_mapa_stats.columns:
+            st.warning("⚠️ No hay datos suficientes para generar el mapa. Verifica las estaciones.")
+        else:
+            df_valid = df_mapa_stats.dropna(subset=['latitud', 'longitud', 'recarga_calc']).copy()
+            
+            if len(df_valid) < 3:
+                st.warning(f"⚠️ **Faltan Puntos de Control:** Se encontraron {len(df_valid)} estación(es) válida(s). Para generar la interpolación se requieren mínimo 3 estaciones.")
+                st.info("💡 **Solución:** Aumenta el 'Radio de Búsqueda (Buffer)' en el panel lateral.")
+                
+                # Fallback: Solo puntos
+                if len(df_valid) > 0:
+                    c_lat, c_lon = df_valid['latitud'].mean(), df_valid['longitud'].mean()
+                    m_recarga_fallback = folium.Map(location=[c_lat, c_lon], zoom_start=10, tiles='cartodbpositron')
+
+                    if gdf_zona is not None and not gdf_zona.empty:
+                        folium.GeoJson(
+                            gdf_zona.to_crs(epsg=4326),
+                            style_function=lambda x: {'fillColor': 'none', 'color': '#2c3e50', 'weight': 3, 'dashArray': '5, 5'}
+                        ).add_to(m_recarga_fallback)
+
+                    for idx, row in df_valid.iterrows():
+                        folium.CircleMarker(
+                            location=[row['latitud'], row['longitud']], radius=8, color="black", weight=1, fill=True, fill_color="#3498db", fill_opacity=0.8,
+                            popup=f"<b>Estación:</b> {row['nombre']}<br><b>Recarga:</b> {row['recarga_calc']:.1f} mm/año"
+                        ).add_to(m_recarga_fallback)
+
+                    import streamlit.components.v1 as components
+                    components.html(m_recarga_fallback._repr_html_(), height=550)
+            else:
+                with st.spinner("Calculando superficie de recarga (PNG Base64)..."):
+                    try:
+                        c_lat, c_lon = df_valid['latitud'].mean(), df_valid['longitud'].mean()
+                        m_recarga = folium.Map(location=[c_lat, c_lon], zoom_start=10, tiles='cartodbpositron')
+
+                        # Dibujar el Límite EXACTO de la Cuenca
+                        if gdf_limite_original is not None and not gdf_limite_original.empty:
+                            folium.GeoJson(
+                                gdf_limite_original.to_crs(epsg=4326),
+                                name="Límite de Análisis",
+                                style_function=lambda x: {'fillColor': 'none', 'color': '#2c3e50', 'weight': 3, 'dashArray': '5, 5'}
+                            ).add_to(m_recarga)
+
+                        # Interpolación Matemática
+                        import numpy as np
+                        from scipy.interpolate import griddata
+                        import matplotlib.cm as cm
+                        from matplotlib.colors import Normalize
+                        
+                        margen = 0.1
+                        min_lon, max_lon = df_valid['longitud'].min() - margen, df_valid['longitud'].max() + margen
+                        min_lat, max_lat = df_valid['latitud'].min() - margen, df_valid['latitud'].max() + margen
+                        
+                        grid_lon, grid_lat = np.mgrid[min_lon:max_lon:100j, min_lat:max_lat:100j]
+                        puntos = df_valid[['longitud', 'latitud']].values
+                        valores = df_valid['recarga_calc'].values
+                        
+                        try:
+                            grid_z = griddata(puntos, valores, (grid_lon, grid_lat), method='cubic')
+                        except:
+                            grid_z = griddata(puntos, valores, (grid_lon, grid_lat), method='linear')
+                            
+                        grid_z = np.nan_to_num(grid_z, nan=np.nanmean(valores))
+
+                        # 🚀 FIX 3: Traducción de Matriz a Imagen PNG Codificada (Base64)
+                        # Rotamos y volteamos la matriz para que coincida con la geografía norte-sur
+                        grid_z_img = np.flipud(grid_z.T) 
+                        
+                        norm = Normalize(vmin=valores.min(), vmax=valores.max())
+                        cmap = cm.get_cmap('YlGnBu') 
+                        rgba_img = cmap(norm(grid_z_img))
+                        colored_grid_uint8 = (rgba_img * 255).astype(np.uint8)
+                        
+                        from PIL import Image
+                        import base64
+                        from io import BytesIO
+                        
+                        # Creamos la imagen real en memoria
+                        img_pil = Image.fromarray(colored_grid_uint8, mode='RGBA')
+                        buffered = BytesIO()
+                        img_pil.save(buffered, format="PNG")
+                        img_base64 = base64.b64encode(buffered.getvalue()).decode()
+                        url_imagen_segura = f"data:image/png;base64,{img_base64}"
+                        
+                        folium.raster_layers.ImageOverlay(
+                            image=url_imagen_segura,
+                            bounds=[[min_lat, min_lon], [max_lat, max_lon]],
+                            opacity=0.65,
+                            name="Superficie de Recarga Continua"
+                        ).add_to(m_recarga)
+                        
+                        # Estaciones
+                        for idx, row in df_valid.iterrows():
+                            folium.CircleMarker(
+                                location=[row['latitud'], row['longitud']], radius=5, color="black", weight=1, fill=True, fill_color="#e74c3c", fill_opacity=1,
+                                popup=f"<b>Estación:</b> {row['nombre']}<br><b>Recarga:</b> {row['recarga_calc']:.1f} mm/año"
+                            ).add_to(m_recarga)
+
+                        folium.LayerControl().add_to(m_recarga)
+                        
+                        # 🚀 ADD: Leyenda Dinámica (Colormap) para la Recarga
+                        import branca.colormap as cm_branca
+                        colormap = cm_branca.LinearColormap(
+                            colors=['#ffffcc', '#a1dab4', '#41b6c4', '#2c7fb8', '#253494'], # Escala YlGnBu
+                            vmin=valores.min(), 
+                            vmax=valores.max()
+                        )
+                        colormap.caption = 'Recarga Potencial (mm/año)'
+                        colormap.add_to(m_recarga)
+
+                        # 🚀 ADD: Botón de Pantalla Completa (Fullscreen)
+                        from folium import plugins
+                        plugins.Fullscreen(position='topright', title='Pantalla Completa', title_cancel='Salir de Pantalla Completa').add_to(m_recarga)
+                        
+                        import streamlit.components.v1 as components
+                        components.html(m_recarga._repr_html_(), height=650)
+                        
+                        st.caption("🗺️ Superficie interpolada a partir de los puntos de control. Las zonas más oscuras indican mayor recarga potencial al acuífero.")
+                        
+                    except Exception as e:
+                        st.error(f"Error generando la superficie continua: {e}")
+                        
+    # =========================================================================
+    # ⚖️ TAB 4: ADMINISTRACIÓN SOSTENIBLE Y GOBERNANZA HÍDRICA
+    # =========================================================================
+    with tab4:
+        st.markdown("---")
+        st.markdown(f"### ⚖️ Administración Sostenible: Oferta vs Demanda Subterránea: {nombre_zona}")
+        st.markdown("Este motor compara la recarga natural con la extracción. Utiliza **Imputación Heurística** para corregir vacíos de información en las bases de datos ambientales (caudales en cero y pozos sin coordenadas).")
+
+        if gdf_zona is not None and not gdf_zona.empty:
+            
+            # ---------------------------------------------------------------------
+            # 1. CONEXIÓN A LA BASE MAESTRA EN SUPABASE (VÍA URL PÚBLICA)
+            # ---------------------------------------------------------------------
+            @st.cache_data(show_spinner=False, ttl=3600)
+            def cargar_concesiones_maestras():
+                import geopandas as gpd
+                from supabase import create_client
+                import pandas as pd
+                
+                url_sb = None
+                key_sb = None
+                if "SUPABASE_URL" in st.secrets:
+                    url_sb = st.secrets["SUPABASE_URL"]
+                    key_sb = st.secrets["SUPABASE_KEY"]
+                elif "supabase" in st.secrets:
+                    url_sb = st.secrets["supabase"].get("url") or st.secrets["supabase"].get("SUPABASE_URL")
+                    key_sb = st.secrets["supabase"].get("key") or st.secrets["supabase"].get("SUPABASE_KEY")
+                elif "iri" in st.secrets and "SUPABASE_URL" in st.secrets["iri"]:
+                    url_sb = st.secrets["iri"]["SUPABASE_URL"]
+                    key_sb = st.secrets["iri"]["SUPABASE_KEY"]
+                elif "connections" in st.secrets and "supabase" in st.secrets["connections"]:
+                    url_sb = st.secrets["connections"]["supabase"]["SUPABASE_URL"]
+                    key_sb = st.secrets["connections"]["supabase"]["SUPABASE_KEY"]
+                    
+                if not url_sb or not key_sb:
+                    st.error("❌ Faltan credenciales de Supabase en secrets.")
+                    return gpd.GeoDataFrame()
+                    
+                try:
+                    cliente = create_client(url_sb, key_sb)
+                    bucket = "sihcli_maestros"
+                    rutas_posibles = [
+                        "Puntos_de_interes/Metabolismo_Hidrico_Antioquia_Maestro.geojson",
+                        "Metabolismo_Hidrico_Antioquia_Maestro.geojson"
+                    ]
+                    
+                    gdf_maestro = gpd.GeoDataFrame()
+                    for ruta in rutas_posibles:
+                        try:
+                            url_publica = cliente.storage.from_(bucket).get_public_url(ruta)
+                            gdf_maestro = gpd.read_file(url_publica)
+                            if not gdf_maestro.empty: break
+                        except Exception:
+                            continue
+                    
+                    if gdf_maestro.empty: return gpd.GeoDataFrame()
+                        
+                    gdf_subt = gdf_maestro[gdf_maestro['Tipo_Fuente'] == 'Subterranea'].copy()
+                    
+                    if not gdf_subt.empty and gdf_subt.crs != "EPSG:3116":
+                        gdf_subt = gdf_subt.to_crs(epsg=3116)
+                        
+                    return gdf_subt
+                    
+                except Exception as e:
+                    st.error(f"❌ Error crítico procesando la base: {e}")
+                    return gpd.GeoDataFrame()
+
+            # ---------------------------------------------------------------------
+            # 2. CONECTOR: ADN DEL TERRITORIO (REGIONES Y CORPORACIONES)
+            # ---------------------------------------------------------------------
+            @st.cache_data(show_spinner=False, ttl=86400)
+            def cargar_territorio_maestro(_rev=3):
+                import pandas as pd
+                import streamlit as st
+                from supabase import create_client
+                import io
+                import unicodedata
+                
+                url_sb = None
+                key_sb = None
+                if "SUPABASE_URL" in st.secrets:
+                    url_sb = st.secrets["SUPABASE_URL"]
+                    key_sb = st.secrets["SUPABASE_KEY"]
+                elif "supabase" in st.secrets:
+                    url_sb = st.secrets["supabase"].get("url") or st.secrets["supabase"].get("SUPABASE_URL")
+                    key_sb = st.secrets["supabase"].get("key") or st.secrets["supabase"].get("SUPABASE_KEY")
+                elif "iri" in st.secrets and "SUPABASE_URL" in st.secrets["iri"]:
+                    url_sb = st.secrets["iri"]["SUPABASE_URL"]
+                    key_sb = st.secrets["iri"]["SUPABASE_KEY"]
+                elif "connections" in st.secrets and "supabase" in st.secrets["connections"]:
+                    url_sb = st.secrets["connections"]["supabase"]["SUPABASE_URL"]
+                    key_sb = st.secrets["connections"]["supabase"]["SUPABASE_KEY"]
+                    
+                if not url_sb or not key_sb: return pd.DataFrame()
+                    
+                try:
+                    cliente = create_client(url_sb, key_sb)
+                    res = cliente.storage.from_("sihcli_maestros").download("territorio_maestro.xlsx")
+                    df_territorio = pd.read_excel(io.BytesIO(res))
+                    
+                    def normalizar(texto):
+                        if pd.isna(texto): return ""
+                        return unicodedata.normalize('NFKD', str(texto).lower().strip()).encode('ascii', 'ignore').decode('utf-8')
+                        
+                    df_territorio.columns = df_territorio.columns.str.lower().str.strip()
+                    
+                    if 'municipio' in df_territorio.columns:
+                        df_territorio['municipio_norm'] = df_territorio['municipio'].apply(normalizar)
+                    if 'region' in df_territorio.columns:
+                        df_territorio['region'] = df_territorio['region'].astype(str).str.title()
+                    if 'car' in df_territorio.columns:
+                        df_territorio['car'] = df_territorio['car'].astype(str).str.upper()
+                        
+                    return df_territorio
+                    
+                except Exception as e:
+                    return pd.DataFrame()
+                    
+            # ---------------------------------------------------------------------
+            # 3. DESCARGA Y CRUCE INTELIGENTE
+            # ---------------------------------------------------------------------
+            with st.spinner("📥 Descargando Metabolismo Hídrico y ADN del Territorio desde Supabase..."):
+                st.cache_data.clear()
+                gdf_concesiones = cargar_concesiones_maestras()
+                df_territorio = cargar_territorio_maestro()
+                
+                if not gdf_concesiones.empty and not df_territorio.empty:
+                    import unicodedata
+                    def normalizar(texto):
+                        if pd.isna(texto): return ""
+                        return unicodedata.normalize('NFKD', str(texto).lower().strip()).encode('ascii', 'ignore').decode('utf-8')
+                    
+                    gdf_concesiones['municipio_norm'] = gdf_concesiones['Municipio'].apply(normalizar)
+                    df_terr_limpio = df_territorio[['municipio_norm', 'region', 'car']].drop_duplicates(subset=['municipio_norm'])
+                    gdf_concesiones = gdf_concesiones.merge(df_terr_limpio, on='municipio_norm', how='left')
+                    
+                    gdf_concesiones['Region'] = gdf_concesiones['region'].fillna('Desconocida')
+                    mask_aut = gdf_concesiones['Autoridad'].isin(['Otra Corporacion', 'No Registrado']) | gdf_concesiones['Autoridad'].isna()
+                    gdf_concesiones.loc[mask_aut, 'Autoridad'] = gdf_concesiones.loc[mask_aut, 'car']
+
+                if gdf_concesiones.empty:
+                    st.error("⚠️ La base maestra cargó vacía. Verifica que el archivo Metabolismo_Hidrico esté en Supabase.")
+                else:
+                    st.success(f"✅ Enlace establecido: {len(gdf_concesiones):,.0f} pozos globales en memoria y enriquecidos con su Región.")
+
+            # ---------------------------------------------------------------------
+            # 4. BALANCE HÍDRICO (TABULAR PARA REGIONES, ESPACIAL PARA MUNICIPIOS)
+            # ---------------------------------------------------------------------
+            if not gdf_concesiones.empty:
+                import unicodedata
+                import pandas as pd
+                
+                nombre_zona_as = st.session_state.get('nombre_seleccion', 'el Territorio')
+                nivel_sel = st.session_state.get('nivel_seleccion', 'Municipal')
+                
+                def normalizar(texto):
+                    if pd.isna(texto): return ""
+                    return unicodedata.normalize('NFKD', str(texto).lower().strip()).encode('ascii', 'ignore').decode('utf-8')
+
+                concesiones_locales = gpd.GeoDataFrame()
+                
+                # 1. Normalizar Municipio en la base maestra
+                gdf_concesiones['municipio_norm'] = gdf_concesiones['Municipio'].apply(normalizar)
+                
+                # 2. Inyectar ADN (Región y CAR) desde el territorio_maestro
+                if 'df_territorio' in locals() and not df_territorio.empty:
+                    df_terr_limpio = df_territorio.drop_duplicates(subset=['municipio_norm'])
+                    mapa_region = dict(zip(df_terr_limpio['municipio_norm'], df_terr_limpio['region'].astype(str).str.title()))
+                    mapa_car = dict(zip(df_terr_limpio['municipio_norm'], df_terr_limpio['car'].astype(str).str.upper()))
+                    
+                    gdf_concesiones['Region'] = gdf_concesiones['municipio_norm'].map(mapa_region).fillna('Desconocida')
+                    gdf_concesiones['Autoridad'] = gdf_concesiones['municipio_norm'].map(mapa_car).fillna(gdf_concesiones['Autoridad'])
+
+                # =================================================================
+                # ESTRATEGIA A: 100% TABULAR (Cero Geometría, Cero Congelamiento)
+                # =================================================================
+                if nivel_sel in ["Regional", "Jurisdicción Ambiental (CAR)", "Departamental", "Nacional (Colombia)"]:
+                    
+                    zona_normalizada = normalizar(nombre_zona_as)
+                    termino_busqueda = zona_normalizada.replace("region", "").replace("car", "").replace(":", "").strip()
+                    
+                    if nivel_sel == "Regional":
+                        concesiones_locales = gdf_concesiones[gdf_concesiones['Region'].apply(normalizar).str.contains(termino_busqueda, na=False)].copy()
+                    elif nivel_sel == "Jurisdicción Ambiental (CAR)":
+                        concesiones_locales = gdf_concesiones[gdf_concesiones['Autoridad'].apply(normalizar).str.contains(termino_busqueda, na=False)].copy()
+                    else:
+                        concesiones_locales = gdf_concesiones.copy()
+                        
+                    # ELIMINAMOS EL RESCATE ESPACIAL AQUÍ PARA SALVAR LA MEMORIA.
+
+                # =================================================================
+                # ESTRATEGIA B: ESPACIAL PURA (Solo para Municipios)
+                # =================================================================
+                else:
+                    if gdf_zona is not None and not gdf_zona.empty:
+                        gdf_zona_3116 = gdf_zona.to_crs(epsg=3116).copy()
+                        gdf_zona_3116['geometry'] = gdf_zona_3116.geometry.make_valid()
+                        
+                        try: 
+                            concesiones_locales = gpd.sjoin(gdf_concesiones, gdf_zona_3116, how='inner', predicate='intersects')
+                            concesiones_locales = concesiones_locales[~concesiones_locales.index.duplicated(keep='first')]
+                        except Exception as e:
+                            st.error(f"Error espacial: {e}")
+
+                # -------------------------------------------------------------
+                # Totales Finales del Balance
+                # -------------------------------------------------------------
+                caudal_total_demandado_lps = concesiones_locales['Caudal_Lps'].sum() if not concesiones_locales.empty else 0.0
+                total_captaciones = len(concesiones_locales)
+                
+                # Oferta (Recarga del modelo)
+                volumen_recarga_m3_ano = st.session_state.get('recarga_total_m3', 0.0)
+                if volumen_recarga_m3_ano == 0.0 and gdf_zona is not None and not gdf_zona.empty:
+                    area_m2 = gdf_zona.to_crs(epsg=3116).area.sum()
+                    volumen_recarga_m3_ano = area_m2 * 0.25
+                    
+                caudal_oferta_lps = (volumen_recarga_m3_ano * 1000) / 31536000
+                ipa_porcentaje = (caudal_total_demandado_lps / caudal_oferta_lps) * 100 if caudal_oferta_lps > 0 else 0
+                
+                # ---------------------------------------------------------------------
+                # 5. EL DASHBOARD DE GOBERNANZA
+                # ---------------------------------------------------------------------
+                st.caption(f"ℹ️ **Telemetría Inteligente:** {len(gdf_concesiones):,.0f} pozos georreferenciados en la base global.")
+                st.markdown(f"#### 📊 Balance Acuífero en: {nombre_zona}")
+                
+                c_bal1, c_bal2, c_bal3, c_bal4 = st.columns(4)
+                c_bal1.metric("💧 Oferta (Recarga Natural)", f"{caudal_oferta_lps:,.1f} L/s")
+                
+                c_bal2.metric(
+                    "🚰 Demanda (Concesiones)", 
+                    f"{caudal_total_demandado_lps:,.1f} L/s", 
+                    f"-{total_captaciones} captaciones totales", delta_color="inverse"
+                )
+                
+                if ipa_porcentaje < 10: color_ipa, estado_ipa = "🟢", "Subexplotado"
+                elif ipa_porcentaje < 40: color_ipa, estado_ipa = "🟡", "Alerta Temprana"
+                else: color_ipa, estado_ipa = "🔴", "Sobreexplotado"
+                    
+                c_bal3.metric("⚖️ Índice de Presión (IPA)", f"{ipa_porcentaje:,.1f} %", f"{color_ipa} {estado_ipa}", delta_color="off")
+                c_bal4.metric("🌊 Margen de Seguridad", f"{(caudal_oferta_lps - caudal_total_demandado_lps):,.1f} L/s", "Caudal ecológico")
+                
+                # ==============================================================================
+                # 🏆 RANKING MUNICIPAL DE DEMANDA (L/s)
+                # ==============================================================================
+                st.markdown("---")
+                st.markdown("### 🏆 Top 15: Ranking de Explotación Subterránea")
+                st.caption("Municipios con mayor y menor volumen de concesiones otorgadas (L/s) en la base de datos.")
+                
+                if not gdf_concesiones.empty:
+                    import plotly.graph_objects as go
+                    from plotly.subplots import make_subplots
+                    
+                    # 1. Agrupar sumando solo el caudal
+                    df_ranking = gdf_concesiones.groupby('Municipio')['Caudal_Lps'].sum().reset_index()
+                        
+                    # 2. Filtrar ceros y "No Registrados"
+                    df_ranking = df_ranking[(df_ranking['Caudal_Lps'] > 0) & (~df_ranking['Municipio'].isin(['No Registrado', 'Sin Información']))]
+                    df_ranking = df_ranking.sort_values('Caudal_Lps', ascending=False)
+                    
+                    if len(df_ranking) > 0:
+                        # Separar los Top 15 (Mayor y Menor)
+                        top_15 = df_ranking.head(15).sort_values('Caudal_Lps', ascending=True) 
+                        bottom_15 = df_ranking.tail(15).sort_values('Caudal_Lps', ascending=False) 
+                        
+                        fig = make_subplots(rows=1, cols=2, subplot_titles=("🔴 Top 15: Mayor Extracción", "🟢 Top 15: Menor Extracción"))
+                        
+                        # Barras Rojas (Los que más extraen)
+                        fig.add_trace(go.Bar(
+                            x=top_15['Caudal_Lps'], y=top_15['Municipio'], orientation='h',
+                            marker=dict(color='#ef4444'), text=top_15['Caudal_Lps'].apply(lambda x: f"{x:,.1f} L/s"), textposition='inside',
+                            insidetextanchor='end', hovertemplate="<b>%{y}</b><br>Demanda: %{x:.1f} L/s<extra></extra>"
+                        ), row=1, col=1)
+                        
+                        # Barras Verdes (Los que menos extraen)
+                        fig.add_trace(go.Bar(
+                            x=bottom_15['Caudal_Lps'], y=bottom_15['Municipio'], orientation='h',
+                            marker=dict(color='#10b981'), text=bottom_15['Caudal_Lps'].apply(lambda x: f"{x:,.1f} L/s"), textposition='inside',
+                            insidetextanchor='start', hovertemplate="<b>%{y}</b><br>Demanda: %{x:.1f} L/s<extra></extra>"
+                        ), row=1, col=2)
+                        
+                        fig.update_layout(height=600, showlegend=False, template="plotly_white", margin=dict(l=0, r=0, t=40, b=0))
+                        fig.update_xaxes(title_text="Caudal Concesionado (L/s)")
+                        
+                        st.plotly_chart(fig, width="stretch")
+                    else:
+                        st.info("No hay datos suficientes para generar el ranking.")
+                
+                st.markdown(f"### 📥 Exportar Inventario Subterráneo - {nombre_zona}")
+                
+                if not concesiones_locales.empty:
+                    cols_to_drop = ['geometry', 'municipio_norm', 'region', 'car', 'index_right']
+                    cols_to_drop = [c for c in cols_to_drop if c in concesiones_locales.columns]
+                    df_descarga = pd.DataFrame(concesiones_locales.drop(columns=cols_to_drop, errors='ignore'))
+                    
+                    # 🚀 BLINDAJE ESPACIAL: Extrae coordenadas solo si el punto existe y es válido
+                    centroides = concesiones_locales.geometry.centroid
+                    df_descarga['Longitud_X'] = centroides.apply(lambda p: p.x if p and not p.is_empty else 0.0)
+                    df_descarga['Latitud_Y'] = centroides.apply(lambda p: p.y if p and not p.is_empty else 0.0)
+                    
+                    csv_data = df_descarga.to_csv(index=False, sep=';').encode('utf-8')
+                    
+                    st.download_button(
+                        label=f"💾 Descargar Base de Datos de {nombre_zona_as.title()} (CSV)",
+                        data=csv_data,
+                        file_name=f"Inventario_Pozos_{nombre_zona_as}.csv",
+                        mime="text/csv",
+                        width="stretch"
+                    )
+                else:
+                    st.warning("No hay datos subterráneos disponibles para descargar en esta selección.")
+
+            else:
+                st.info("No se encontraron registros de extracción para esta zona.")
+        else:
+            st.info("👈 Selecciona un municipio o cuenca en el panel lateral para calcular el balance hídrico subterráneo.")
+
+    # =========================================================================
+    # 📥 TAB 5: DESCARGAS GENERALES
+    # =========================================================================
+    with tab5:
+        st.markdown("### 💾 Exportación de Datos y Mapas (Formatos SIG)")
+        st.info("💡 **Nota SIG:** Los polígonos se exportan en formato **GeoJSON** (estándar web equivalente al Shapefile, legible nativamente por ArcGIS y QGIS). La superficie de recarga se exporta como **Matriz XYZ (CSV)** para que tu software SIG genere el Raster mediante interpolación limpia y sin colapsar la memoria de la nube.")
+        
+        col1, col2 = st.columns(2)
+        
+        # 1. Datos Tabulares Originales
+        if 'df_res' in locals() and not df_res.empty:
+            col1.download_button("📊 1. Descargar Balance Hídrico (.csv)", df_res.to_csv(index=False).encode('utf-8'), f"balance_{nombre_zona}.csv", "text/csv")
+        
+        # 2. Exportación Vectorial (Alternativa a Shapefile)
+        if 'df_mapa_stats' in locals() and not df_mapa_stats.empty and 'recarga_calc' in df_mapa_stats.columns:
+            df_valid = df_mapa_stats.dropna(subset=['latitud', 'longitud', 'recarga_calc']).copy()
+            
+            # Convertimos las estaciones a GeoDataFrame para exportar como GeoJSON
+            gdf_export = gpd.GeoDataFrame(df_valid, geometry=gpd.points_from_xy(df_valid.longitud, df_valid.latitud), crs="EPSG:4326")
+            geojson_data = gdf_export.to_json().encode('utf-8')
+            
+            col2.download_button("🗺️ 2. Puntos de Control y Recarga (Vectorial GeoJSON)", geojson_data, f"Estaciones_Recarga_{nombre_zona}.geojson", "application/geo+json")
+            
+            # 3. Exportación de Matriz Raster a CSV (Formato XYZ)
+            st.markdown("---")
+            if len(df_valid) >= 3:
+                # Preparamos una matriz XYZ básica con los puntos de control para fácil interpolación en QGIS
+                xyz_csv = df_valid[['longitud', 'latitud', 'recarga_calc']].to_csv(index=False, header=['X_Longitud', 'Y_Latitud', 'Z_Recarga_mm']).encode('utf-8')
+                st.download_button("🔲 3. Matriz de Recarga para generar Raster (CSV XYZ)", xyz_csv, f"Matriz_Recarga_XYZ_{nombre_zona}.csv", "text/csv")
