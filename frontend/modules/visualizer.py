@@ -2371,6 +2371,24 @@ def display_climate_forecast_tab(df_enso, **kwargs):
                                 df_proy['Límite_Superior'] = df_proy['Proyección'] + umbral_incertidumbre
                                 df_proy['Límite_Inferior'] = df_proy['Proyección'] - umbral_incertidumbre
                                 
+                                # =========================================================
+                                # 🛠️ FIX VISUAL: EL PEGAMENTO (Unir historia y proyección)
+                                # =========================================================
+                                # Extraemos el último registro histórico real
+                                ultimo_punto = df_ml.iloc[[-1]].copy()
+                                
+                                # Creamos un DataFrame puente ("nexo") con la misma estructura de la proyección
+                                punto_nexo = pd.DataFrame({
+                                    'Fecha': ultimo_punto['Fecha'],
+                                    'Proyección': ultimo_punto['Valor'],
+                                    'Límite_Superior': ultimo_punto['Valor'], # La incertidumbre nace en 0
+                                    'Límite_Inferior': ultimo_punto['Valor']
+                                })
+                                
+                                # Concatenamos el nexo al inicio del DataFrame de proyección
+                                df_proy = pd.concat([punto_nexo, df_proy], ignore_index=True)
+                                # =========================================================
+
                                 # 6. Renderizado Gráfico de Alta Fidelidad
                                 fig_ml = go.Figure()
 
@@ -4859,6 +4877,12 @@ def display_station_table_tab(**kwargs):
 
 # LAND_COVER (Coberturas)
 def display_land_cover_analysis_tab(df_long, gdf_stations, **kwargs):
+    # 🚀 FIX: Importamos las librerías base AL INICIO para que todas las pestañas las hereden
+    import pandas as pd
+    import numpy as np
+    import geopandas as gpd
+    import folium
+    
     st.subheader("🌿 Análisis de Cobertura del Suelo y Escenarios")
 
     # 1. Configuración
@@ -4869,10 +4893,15 @@ def display_land_cover_analysis_tab(df_long, gdf_stations, **kwargs):
     except: pass
     
     # --- ☁️ MIGRACIÓN A SUPABASE STORAGE ---
-    SUPABASE_PROJECT_ID = "ldunpssoxvifemoyeuac" # Tu ID de proyecto
-    url_nube = f"https://{SUPABASE_PROJECT_ID}.supabase.co/storage/v1/object/public/rasters/Cob2026_Actualizada.tif"
+    SUPABASE_PROJECT_ID = "ldunpssoxvifemoyeuac"
     
-    raster_path = url_nube
+    # 🚀 FIX: El archivo PRINCIPAL ahora es 2026 (Se mostrará por defecto)
+    url_principal_2026 = f"https://{SUPABASE_PROJECT_ID}.supabase.co/storage/v1/object/public/rasters/Cob2026_Actualizada.tif"
+    
+    # El archivo HISTÓRICO es 2020 (Solo se usará en la pestaña comparativa)
+    url_base_2020 = f"https://{SUPABASE_PROJECT_ID}.supabase.co/storage/v1/object/public/rasters/Cob25m_WGS84.tif"
+    
+    raster_path = url_principal_2026
     
     if Config and hasattr(Config, "LAND_COVER_RASTER_PATH") and str(Config.LAND_COVER_RASTER_PATH).startswith("http"):
         raster_path = Config.LAND_COVER_RASTER_PATH
@@ -4911,22 +4940,61 @@ def display_land_cover_analysis_tab(df_long, gdf_stations, **kwargs):
     # 3. Procesamiento
     try:
         scale = 10 if view_mode == "Regional" else 1
+        
+        # 1. Descargamos el mapa principal (Aseguramos que la variable se llame 'data')
         data, transform, crs, nodata = lc.process_land_cover_raster(
             raster_path, gdf_mask=gdf_mask, scale_factor=scale
         )
         
         if data is None:
-            st.warning("🗺️ La zona seleccionada es demasiado pequeña o se encuentra fuera del límite del mapa satelital departamental.")
+            st.warning("🗺️ La zona seleccionada es demasiado pequeña o se encuentra fuera del límite del mapa satelital...")
             return
+
+        # ====================================================================
+        # 🛡️ FILTRO ANTI-SOMBRAS / ANTI-NUBES (Purificación de Agua)
+        # ====================================================================
+        url_base_2020 = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/rasters/Cob25m_WGS84.tif"
+        with st.spinner("Sincronizando modelo 2020 para purificación de sombras..."):
+            try:
+                data_2020, transform_2020, crs_2020, nodata_2020 = lc.process_land_cover_raster(url_base_2020, gdf_mask=gdf_mask, scale_factor=scale)
+                if data_2020 is not None:
+                    from PIL import Image
+                    import numpy as np
+                    
+                    # Alineamos los tamaños de los píxeles
+                    if data_2020.shape != data.shape:
+                        data_2020_resized = np.array(Image.fromarray(data_2020).resize((data.shape[1], data.shape[0]), resample=Image.NEAREST))
+                    else:
+                        data_2020_resized = data_2020
+                        
+                    # Si 2026 (data) marca agua (13) pero 2020 no lo era, es sombra de montaña y la revertimos
+                    mask_falsa_agua = (data == 13) & (data_2020_resized != 13)
+                    data[mask_falsa_agua] = data_2020_resized[mask_falsa_agua]
+            except Exception:
+                # 🚀 FIX: Garantizamos que las variables existan (como 'vacías') para que las siguientes pestañas no colapsen
+                data_2020 = None
+                transform_2020 = None
+                crs_2020 = None
+                nodata_2020 = None
+        # ====================================================================
+
+        # ====================================================================
+        # 🚀 RECORTADOR DE MÁSCARA DESDE LA RAÍZ
+        # ====================================================================
+        if gdf_mask is not None and not gdf_mask.empty:
+            from rasterio.features import geometry_mask
+            gdf_mask_proj = gdf_mask.to_crs(crs) if gdf_mask.crs.to_string() != str(crs) else gdf_mask
+            mask_outside = geometry_mask(gdf_mask_proj.geometry, out_shape=data.shape, transform=transform, invert=False)
+            data[mask_outside] = 0
             
-        # Cálculo Estadístico
+        # Cálculo Estadístico (Ahora con la data 100% purificada)
         df_res, area_total_km2 = lc.calculate_land_cover_stats(
             data, transform, crs, nodata, manual_area_km2=area_cuenca_km2
         )
 
         # 4. Visualización
         tab_map, tab_comp, tab_stat, tab_sim = st.tabs([
-            "🗺️ Mapa 2020", 
+            "🗺️ Mapa Actual (2026)", 
             "⚖️ Comparativa (2020 vs 2026)", 
             "📊 Tabla & Gráficos", 
             "🎛️ Simulador SCS-CN"
@@ -4941,7 +5009,7 @@ def display_land_cover_analysis_tab(df_long, gdf_stations, **kwargs):
                 
                 tiff_bytes = lc.get_tiff_bytes(data, transform, crs, nodata)
                 if tiff_bytes:
-                    st.download_button("📥 Bajar Mapa (TIFF)", tiff_bytes, "cobertura.tif", "image/tiff")
+                    st.download_button("📥 Bajar Mapa (TIFF)", tiff_bytes, "cobertura_2026.tif", "image/tiff")
 
             with c_map:
                 from rasterio.transform import array_bounds
@@ -4958,14 +5026,14 @@ def display_land_cover_analysis_tab(df_long, gdf_stations, **kwargs):
 
                 m = folium.Map(location=center, zoom_start=12 if view_mode=="Territorio" else 8, tiles="CartoDB positron")
                 
+                from folium import plugins
                 plugins.Fullscreen(position='topright', title='Pantalla completa', title_cancel='Salir', force_separate_button=True).add_to(m)
 
-                # Capa del Raster Base (2020)
+                # Capa del Raster Principal (2026)
                 img_url = lc.get_raster_img_b64(data, nodata)
                 if img_url:
-                    folium.raster_layers.ImageOverlay(image=img_url, bounds=bounds, opacity=0.75, name="Cobertura").add_to(m)
+                    folium.raster_layers.ImageOverlay(image=img_url, bounds=bounds, opacity=0.75, name="Cobertura 2026").add_to(m)
 
-                # Capa Interactiva (Hover sin la palabra "Tipo:")
                 if use_hover:
                     with st.spinner("Generando capa interactiva..."):
                         scale_vec = 50 if view_mode == "Regional" else 1
@@ -4979,28 +5047,21 @@ def display_land_cover_analysis_tab(df_long, gdf_stations, **kwargs):
                             folium.GeoJson(
                                 gdf_vec,
                                 style_function=lambda x: {'fillColor': '#ffffff', 'color': 'none', 'fillOpacity': 0},
-                                tooltip=folium.GeoJsonTooltip(fields=['Cobertura'], labels=False), # <-- Se oculta la etiqueta aquí
+                                tooltip=folium.GeoJsonTooltip(fields=['Cobertura'], labels=False),
                                 name="Hover Info"
                             ).add_to(m)
 
-                # Capa de la Divisoria de Cuenca
                 if view_mode == "Territorio" and gdf_mask is not None:
                     try:
                         gdf_mask_viz = gdf_mask.to_crs(epsg=4326) if gdf_mask.crs.to_string() != "EPSG:4326" else gdf_mask
-                        folium.GeoJson(
-                            gdf_mask_viz, 
-                            style_function=lambda x: {'color': 'black', 'fill': False, 'weight': 2},
-                            name="Límite Territorio"
-                        ).add_to(m)
-                    except Exception as e:
-                        print(f"Error proyectando máscara: {e}")
+                        folium.GeoJson(gdf_mask_viz, style_function=lambda x: {'color': 'black', 'fill': False, 'weight': 2}, name="Límite Territorio").add_to(m)
+                    except: pass
 
                 folium.LayerControl().add_to(m)
                 
-                # 1. RENDERIZAR MAPA (Usando la librería nativa que ya tenías)
-                st_folium(m, height=600, use_container_width=True, key="map_lc_final")
+                from streamlit_folium import st_folium
+                st_folium(m, height=600, use_container_width=True, key="map_lc_2026")
                 
-                # 2. INYECTAR LEYENDA HORIZONTAL (Alineada en la interfaz de usuario)
                 if show_legend:
                     st.markdown("#### 🎨 Leyenda de Ecosistemas")
                     legend_html = "<div style='display: flex; flex-wrap: wrap; gap: 12px; padding: 10px; background-color: #f8f9fa; border-radius: 8px; border: 1px solid #e0e0e0;'>"
@@ -5009,239 +5070,152 @@ def display_land_cover_analysis_tab(df_long, gdf_stations, **kwargs):
                         legend_html += f"<div style='display: flex; align-items: center;'><div style='width: 16px; height: 16px; background-color: {hex_color}; border: 1px solid #999; margin-right: 6px; border-radius: 3px;'></div><span style='font-size: 13px; color: #333;'>{name}</span></div>"
                     legend_html += "</div>"
                     st.markdown(legend_html, unsafe_allow_html=True)
-                    
+
         # =====================================================================
         # --- PESTAÑA 2: COMPARATIVA SINCRONIZADA DUALMAP (LÍNEA BASE VS 2026) ---
         # =====================================================================
         with tab_comp:
             st.markdown("### ⚖️ Comparativa de Cambios de Cobertura (2020 vs 2026)")
             
-            st.markdown("#### ⚙️ Configuración del Satélite")
-            opciones_raster = {
-                "Baja Resolución (Actualizada 1)": "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/rasters/Cob2026_Actualizada1.tif",
-                "Media Resolución (Actualizada 2)": "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/rasters/Cob2026_Actualizada2.tif",
-                "Alta Resolución (Actualizada 3)": "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/rasters/Cob2026_Actualizada3.tif"
-            }
-            
-            resolucion_elegida = st.selectbox(
-                "Selecciona el escenario satelital de 2026 para evaluar el impacto de la resolución:", 
-                list(opciones_raster.keys())
-            )
-            url_2026_dinamica = opciones_raster[resolucion_elegida]
-            
-            st.info("💡 **Vista Sincronizada:** Desplaza o haz zoom en un mapa y el otro lo seguirá automáticamente.")
-            
-            from folium.plugins import DualMap
-            import streamlit.components.v1 as components
-            import geopandas as gpd
-            import numpy as np
-            import pandas as pd
-            from PIL import Image
-            
-            m_dual = DualMap(location=center, zoom_start=12 if view_mode=="Territorio" else 8)
-            folium.TileLayer("CartoDB positron").add_to(m_dual.m1)
-            folium.TileLayer("CartoDB positron").add_to(m_dual.m2)
-            
-            # --- MAPA IZQUIERDO (2020) ---
-            if 'img_url' in locals() and img_url:
-                folium.raster_layers.ImageOverlay(
-                    image=img_url, bounds=bounds, opacity=0.85, name="Cobertura 2020"
-                ).add_to(m_dual.m1)
+            # 🛑 CONTROL AMIGABLE: Si el archivo 2020 no cubre la zona, detenemos la pestaña suavemente.
+            if data_2020 is None:
+                st.info("👋 **Aviso de Cobertura Espacial:**\n\nEl mapa comparativo no puede generarse porque el archivo de Línea Base (2020) está enfocado principalmente en el centro de Antioquia y **no cubre esta área de análisis**.\n\n*Puedes continuar explorando el estado actual (2026) en la primera pestaña.*", icon="ℹ️")
+            else:
+                st.info("💡 **Vista Sincronizada:** Desplaza o haz zoom en un mapa y el otro lo seguirá automáticamente.")
                 
-                # Restauramos la memoria original del Hover 2020 (Super rápido)
-                if use_hover and 'gdf_vec' in locals() and not gdf_vec.empty:
-                    folium.GeoJson(
-                        gdf_vec,
-                        style_function=lambda x: {'fillColor': '#ffffff', 'color': 'none', 'fillOpacity': 0},
-                        tooltip=folium.GeoJsonTooltip(fields=['Cobertura'], aliases=['Ecosistema 2020:']),
-                        name="Hover 2020"
-                    ).add_to(m_dual.m1)
-            
-            # --- MAPA DERECHO (2026) ---
-            try:
-                data_2026, transform_2026, crs_2026, nodata_2026 = lc.process_land_cover_raster(
-                    url_2026_dinamica, gdf_mask=gdf_mask, scale_factor=scale
-                )
+                from folium.plugins import DualMap
+                import streamlit.components.v1 as components
+                import pandas as pd
                 
-                traductor_dw = {0: 13, 1: 9, 2: 7, 3: 12, 4: 8, 5: 10, 6: 1, 7: 11, 8: 11}
-                
+                # Recortamos el 2020 exactamente igual que el 2026
                 if gdf_mask is not None and not gdf_mask.empty:
                     from rasterio.features import geometry_mask
-                    gdf_mask_proj = gdf_mask.to_crs(crs_2026) if gdf_mask.crs.to_string() != str(crs_2026) else gdf_mask
-                    mask_outside = geometry_mask(gdf_mask_proj.geometry, out_shape=data_2026.shape, transform=transform_2026, invert=False)
-                else:
-                    mask_outside = np.zeros_like(data_2026, dtype=bool)
+                    gdf_mask_proj_2020 = gdf_mask.to_crs(crs_2020) if gdf_mask.crs.to_string() != str(crs_2020) else gdf_mask
+                    mask_outside_2020 = geometry_mask(gdf_mask_proj_2020.geometry, out_shape=data_2020.shape, transform=transform_2020, invert=False)
+                    data_2020[mask_outside_2020] = 0
                 
-                data_2026_reclass = np.zeros_like(data_2026)
-                for google_val, tu_val in traductor_dw.items():
-                    data_2026_reclass[(data_2026 == google_val) & (~mask_outside)] = tu_val
-                    
-                if 'data' in locals() and data is not None:
-                    data_2020_resized = np.array(Image.fromarray(data).resize((data_2026_reclass.shape[1], data_2026_reclass.shape[0]), resample=Image.NEAREST))
-                    mask_falsa_agua = (data_2026_reclass == 13) & (data_2020_resized != 13)
-                    data_2026_reclass[mask_falsa_agua] = data_2020_resized[mask_falsa_agua]
-                
-                img_url_2026 = lc.get_raster_img_b64(data_2026_reclass, nodata=0)
-                
-                if img_url_2026:
-                    folium.raster_layers.ImageOverlay(
-                        image=img_url_2026, bounds=bounds, opacity=0.85, name="Cobertura 2026"
-                    ).add_to(m_dual.m2)
-                
-                # Hover 2026 optimizado con límite expandido
-                if use_hover:
-                    with st.spinner("Generando hover 2026..."):
-                        try:
-                            gdf_vec_2026 = lc.vectorize_raster_optimized(data_2026_reclass, transform_2026, crs_2026, nodata=0, max_shapes=15000)
-                            if gdf_vec_2026 is not None and not gdf_vec_2026.empty:
-                                folium.GeoJson(
-                                    gdf_vec_2026, style_function=lambda x: {'fillColor': '#ffffff', 'color': 'none', 'fillOpacity': 0},
-                                    tooltip=folium.GeoJsonTooltip(fields=['Cobertura'], aliases=['Ecosistema 2026:']), name="Hover 2026"
-                                ).add_to(m_dual.m2)
-                        except: pass
-                    
-                df_res_2026_fair, area_efectiva_2026 = lc.calculate_land_cover_stats(
-                    data_2026_reclass, transform_2026, crs_2026, nodata=0, manual_area_km2=area_cuenca_km2
-                )
                 df_res_2020_fair, area_efectiva_2020 = lc.calculate_land_cover_stats(
-                    data, transform, crs, nodata=nodata, manual_area_km2=area_cuenca_km2
+                    data_2020, transform_2020, crs_2020, nodata=0, manual_area_km2=area_cuenca_km2
                 )
-            except Exception as e:
-                st.warning(f"Error procesando el escenario 2026: {e}")
+                
+                m_dual = DualMap(location=center, zoom_start=12 if view_mode=="Territorio" else 8)
+                folium.TileLayer("CartoDB positron").add_to(m_dual.m1)
+                folium.TileLayer("CartoDB positron").add_to(m_dual.m2)
+                
+                # --- MAPA IZQUIERDO (2020) ---
+                img_url_2020 = lc.get_raster_img_b64(data_2020, nodata=0)
+                if img_url_2020:
+                    folium.raster_layers.ImageOverlay(image=img_url_2020, bounds=bounds, opacity=0.85, name="Cobertura 2020").add_to(m_dual.m1)
+                
+                # --- MAPA DERECHO (2026 - Que ya calculamos y purificamos) ---
+                if 'img_url' in locals() and img_url:
+                    folium.raster_layers.ImageOverlay(image=img_url, bounds=bounds, opacity=0.85, name="Cobertura 2026").add_to(m_dual.m2)
+                
+                folium.LayerControl().add_to(m_dual.m1)
+                folium.LayerControl().add_to(m_dual.m2)
+                
+                components.html(m_dual._repr_html_(), height=550)
+                
+                # --- TABLA DE DESPLAZAMIENTO Y DIAGNÓSTICO ---
+                st.markdown("---")
+                st.markdown("#### 📊 Matriz de Desplazamiento (2020 vs 2026)")
+                
+                if 'df_res_2020_fair' in locals() and 'df_res' in locals() and not df_res_2020_fair.empty:
+                    area_efectiva_2026 = area_total_km2 # Area procesada en el paso principal
+                    st.info(f"📐 **Área con Información Válida:** Línea Base 2020: **{area_efectiva_2020:,.2f} km²** | Escenario 2026: **{area_efectiva_2026:,.2f} km²**.")
+                    
+                    df_comp = pd.merge(
+                        df_res[['Cobertura', 'Área (km²)']], 
+                        df_res_2020_fair[['Cobertura', 'Área (km²)']], 
+                        on='Cobertura', how='outer'
+                    ).fillna(0)
+                    
+                    df_comp.columns = ['Ecosistema / Cobertura', 'Escenario 2026 (km²)', 'Línea Base 2020 (km²)']
+                    df_comp['Variación Neta (km²)'] = df_comp['Escenario 2026 (km²)'] - df_comp['Línea Base 2020 (km²)']
+                    
+                    st.dataframe(df_comp.style.format({
+                        'Escenario 2026 (km²)': '{:,.2f}', 'Línea Base 2020 (km²)': '{:,.2f}', 
+                        'Variación Neta (km²)': lambda x: f"+{x:,.2f}" if x > 0 else f"{x:,.2f}"
+                    }), use_container_width=True)
 
-            # --- VECTORES ADICIONALES ---
-            if gdf_mask is not None and not gdf_mask.empty:
-                try:
-                    gdf_mask_viz = gdf_mask.to_crs(epsg=4326) if gdf_mask.crs.to_string() != "EPSG:4326" else gdf_mask
-                    style_cuenca = lambda x: {'color': 'black', 'fillColor': 'none', 'weight': 2.5, 'dashArray': '5, 5'}
-                    folium.GeoJson(gdf_mask_viz, style_function=style_cuenca, name="Límite Territorio").add_to(m_dual.m1)
-                    folium.GeoJson(gdf_mask_viz, style_function=style_cuenca, name="Límite Territorio").add_to(m_dual.m2)
-                except: pass
+                    st.markdown("### 🧠 Diagnóstico Ecosistémico Automatizado")
+                    cat_naturales = ['Bosque', 'Vegetación Herbácea / Arbustiva', 'Humedales', 'Agua / Cuerpos de Agua']
+                    cat_antropicas = ['Zonas Urbanas', 'Cultivos permanentes', 'Cultivos transitorios', 'Pastos', 'Areas Agrícolas Heterogéneas', 'Zonas degradadas -canteras, escombreras, minas']
+                    
+                    df_nat = df_comp[df_comp['Ecosistema / Cobertura'].isin(cat_naturales)]
+                    df_ant = df_comp[df_comp['Ecosistema / Cobertura'].isin(cat_antropicas)]
+                    nat_2020, nat_2026 = df_nat['Línea Base 2020 (km²)'].sum(), df_nat['Escenario 2026 (km²)'].sum()
+                    ant_2020, ant_2026 = df_ant['Línea Base 2020 (km²)'].sum(), df_ant['Escenario 2026 (km²)'].sum()
+                    delta_nat, delta_ant = nat_2026 - nat_2020, ant_2026 - ant_2020
+                    
+                    bosque_row = df_comp[df_comp['Ecosistema / Cobertura'] == 'Bosque']
+                    delta_bosque = bosque_row['Variación Neta (km²)'].values[0] if not bosque_row.empty else 0
+                    urbano_row = df_comp[df_comp['Ecosistema / Cobertura'] == 'Zonas Urbanas']
+                    delta_urbano = urbano_row['Variación Neta (km²)'].values[0] if not urbano_row.empty else 0
+                    
+                    estado_general = "🟢 Recuperación Ecológica" if delta_nat > 0 else "🔴 Presión Ecosistémica"
+                    resumen = f"**Análisis de Dinámica de Coberturas (2020 - 2026)**\n\nEl territorio presenta una tendencia de **{estado_general}**. "
+                    
+                    if delta_ant > 0: resumen += f"Se evidencia un avance de la frontera de intervención humana (+**{delta_ant:,.2f} km²**). "
+                    else: resumen += f"Se observa una retracción de las actividades antrópicas en **{abs(delta_ant):,.2f} km²**. "
+                    
+                    if delta_bosque < 0: resumen += f"\n\n* **⚠️ Riesgo Estructural:** La pérdida de **{abs(delta_bosque):,.2f} km²** de bosque sugiere fragmentación de hábitats."
+                    elif delta_bosque > 0: resumen += f"\n\n* **🌱 Ganancia en Biodiversidad:** El aumento de **{delta_bosque:,.2f} km²** fortalece corredores biológicos."
+                    
+                    if delta_urbano > 0.5: resumen += f"\n* **🏙️ Impermeabilización:** El crecimiento urbano (+{delta_urbano:,.2f} km²) reduce la infiltración."
 
-            try:
-                url_predios = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PrediosEjecutados.geojson"
-                gdf_predios = gpd.read_file(url_predios)
-                style_predios = lambda x: {'color': '#FF0000', 'fillColor': '#FF0000', 'weight': 2, 'fillOpacity': 0.4}
-                # interactive=False permite que el ratón ignore el predio y lea el hover que hay debajo
-                folium.GeoJson(gdf_predios, style_function=style_predios, name="Predios Ejecutados", interactive=False).add_to(m_dual.m1)
-                folium.GeoJson(gdf_predios, style_function=style_predios, name="Predios Ejecutados", interactive=False).add_to(m_dual.m2)
-            except: pass
-                
-            folium.LayerControl().add_to(m_dual.m1)
-            folium.LayerControl().add_to(m_dual.m2)
-            
-            # --- 🚀 CORRECCIÓN AQUÍ: RENDERIZAR MAPA DUAL Y UNA SOLA LEYENDA ---
-            components.html(m_dual._repr_html_(), height=550)
-            
-            if show_legend:
-                st.markdown("#### 🎨 Leyenda de Ecosistemas")
-                legend_html = "<div style='display: flex; flex-wrap: wrap; gap: 12px; padding: 10px; background-color: #f8f9fa; border-radius: 8px; border: 1px solid #e0e0e0;'>"
-                for cat_id, hex_color in lc.LAND_COVER_COLORS.items():
-                    name = lc.LAND_COVER_LEGEND.get(cat_id, f"Categoría {cat_id}")
-                    legend_html += f"<div style='display: flex; align-items: center;'><div style='width: 16px; height: 16px; background-color: {hex_color}; border: 1px solid #999; margin-right: 6px; border-radius: 3px;'></div><span style='font-size: 13px; color: #333;'>{name}</span></div>"
-                legend_html += "</div>"
-                st.markdown(legend_html, unsafe_allow_html=True)
-            
-            # --- TABLA DE DESPLAZAMIENTO Y DIAGNÓSTICO ---
-            st.markdown("---")
-            st.markdown(f"#### 📊 Matriz de Desplazamiento ({resolucion_elegida})")
-            
-            if 'df_res_2020_fair' in locals() and 'df_res_2026_fair' in locals() and not df_res_2020_fair.empty:
-                st.info(f"📐 **Área con Información Válida:** Línea Base 2020: **{area_efectiva_2020:,.2f} km²** | Escenario 2026: **{area_efectiva_2026:,.2f} km²**.")
-                
-                df_comp = pd.merge(
-                    df_res_2026_fair[['Cobertura', 'Área (km²)']], 
-                    df_res_2020_fair[['Cobertura', 'Área (km²)']], 
-                    on='Cobertura', how='outer'
-                ).fillna(0)
-                
-                df_comp.columns = ['Ecosistema / Cobertura', 'Escenario 2026 (km²)', 'Línea Base 2020 (km²)']
-                df_comp['Variación Neta (km²)'] = df_comp['Escenario 2026 (km²)'] - df_comp['Línea Base 2020 (km²)']
-                
-                st.dataframe(df_comp.style.format({
-                    'Escenario 2026 (km²)': '{:,.2f}', 'Línea Base 2020 (km²)': '{:,.2f}', 
-                    'Variación Neta (km²)': lambda x: f"+{x:,.2f}" if x > 0 else f"{x:,.2f}"
-                }), use_container_width=True)
+                    if delta_nat >= 0: st.success(resumen)
+                    else: st.warning(resumen)
 
-                st.markdown("### 🧠 Diagnóstico Ecosistémico Automatizado")
-                cat_naturales = ['Bosque', 'Vegetación Herbácea / Arbustiva', 'Humedales', 'Agua / Cuerpos de Agua']
-                cat_antropicas = ['Zonas Urbanas', 'Cultivos permanentes', 'Cultivos transitorios', 'Pastos', 'Areas Agrícolas Heterogéneas', 'Zonas degradadas -canteras, escombreras, minas']
-                
-                df_nat = df_comp[df_comp['Ecosistema / Cobertura'].isin(cat_naturales)]
-                df_ant = df_comp[df_comp['Ecosistema / Cobertura'].isin(cat_antropicas)]
-                nat_2020, nat_2026 = df_nat['Línea Base 2020 (km²)'].sum(), df_nat['Escenario 2026 (km²)'].sum()
-                ant_2020, ant_2026 = df_ant['Línea Base 2020 (km²)'].sum(), df_ant['Escenario 2026 (km²)'].sum()
-                delta_nat, delta_ant = nat_2026 - nat_2020, ant_2026 - ant_2020
-                bosque_row = df_comp[df_comp['Ecosistema / Cobertura'] == 'Bosque']
-                delta_bosque = bosque_row['Variación Neta (km²)'].values[0] if not bosque_row.empty else 0
-                urbano_row = df_comp[df_comp['Ecosistema / Cobertura'] == 'Zonas Urbanas']
-                delta_urbano = urbano_row['Variación Neta (km²)'].values[0] if not urbano_row.empty else 0
-                
-                estado_general = "🟢 Recuperación Ecológica" if delta_nat > 0 else "🔴 Presión Ecosistémica"
-                resumen = f"**Análisis de Dinámica de Coberturas (2020 - 2026)**\n\nEl territorio presenta una tendencia de **{estado_general}**. "
-                
-                if delta_ant > 0: resumen += f"Se evidencia un avance de la frontera de intervención humana (+**{delta_ant:,.2f} km²**). "
-                else: resumen += f"Se observa una retracción de las actividades antrópicas en **{abs(delta_ant):,.2f} km²**. "
-                
-                if delta_bosque < 0: resumen += f"\n\n* **⚠️ Riesgo Estructural:** La pérdida de **{abs(delta_bosque):,.2f} km²** de bosque sugiere fragmentación de hábitats."
-                elif delta_bosque > 0: resumen += f"\n\n* **🌱 Ganancia en Biodiversidad:** El aumento de **{delta_bosque:,.2f} km²** fortalece corredores biológicos."
-                
-                if delta_urbano > 0.5: resumen += f"\n* **🏙️ Impermeabilización:** El crecimiento urbano (+{delta_urbano:,.2f} km²) reduce la infiltración."
+                    # --- LUPA EN PREDIOS INTERVENIDOS ---
+                    if 'gdf_predios' in locals() and not gdf_predios.empty:
+                        st.markdown("---")
+                        st.markdown("#### 🎯 Impacto Focalizado: Predios Intervenidos")
+                        try:
+                            gdf_predios_proj = gdf_predios.to_crs(crs) if gdf_predios.crs.to_string() != str(crs) else gdf_predios
+                            mask_predios = geometry_mask(gdf_predios_proj.geometry, out_shape=data.shape, transform=transform, invert=False)
+                            
+                            if data_2020.shape != data.shape:
+                                data_2020_base = np.array(Image.fromarray(data_2020).resize((data.shape[1], data.shape[0]), resample=Image.NEAREST))
+                            else:
+                                data_2020_base = data_2020
+                                
+                            fair_mask = (data_2020_base > 0) & (data > 0)
+                            
+                            data_2020_predios = np.where((~mask_predios) & fair_mask, data_2020_base, 0)
+                            data_2026_predios = np.where((~mask_predios) & fair_mask, data, 0)
+                            
+                            df_predios_2020, _ = lc.calculate_land_cover_stats(data_2020_predios, transform, crs, nodata=0, manual_area_km2=None)
+                            df_predios_2026, _ = lc.calculate_land_cover_stats(data_2026_predios, transform, crs, nodata=0, manual_area_km2=None)
+                            
+                            if not df_predios_2020.empty and not df_predios_2026.empty:
+                                df_comp_predios = pd.merge(
+                                    df_predios_2026[['Cobertura', 'Área (km²)']], df_predios_2020[['Cobertura', 'Área (km²)']], on='Cobertura', how='outer'
+                                ).fillna(0)
+                                
+                                df_comp_predios.columns = ['Ecosistema', 'Escenario 2026 (km²)', 'Línea Base 2020 (km²)']
+                                df_comp_predios['Variación Neta (km²)'] = df_comp_predios['Escenario 2026 (km²)'] - df_comp_predios['Línea Base 2020 (km²)']
+                                
+                                st.dataframe(df_comp_predios.style.format({
+                                    'Escenario 2026 (km²)': '{:,.4f}', 'Línea Base 2020 (km²)': '{:,.4f}', 
+                                    'Variación Neta (km²)': lambda x: f"+{x:,.4f}" if x > 0 else f"{x:,.4f}"
+                                }), use_container_width=True)
+                                
+                                bosque_predios = df_comp_predios[df_comp_predios['Ecosistema'] == 'Bosque']
+                                delta_b_predios = bosque_predios['Variación Neta (km²)'].values[0] if not bosque_predios.empty else 0
+                                
+                                if delta_b_predios > 0:
+                                    st.success(f"🌟 **Efectividad de Gestión Confirmada:** Dentro de los predios gestionados, la cobertura boscosa aumentó en **{delta_b_predios:,.4f} km²**.")
+                                elif delta_b_predios < 0:
+                                    st.warning(f"⚠️ **Alerta en Áreas de Gestión:** Se detecta una pérdida de **{abs(delta_b_predios):,.4f} km²** de bosque dentro de los predios. Sugiere revisión en campo.")
+                            else:
+                                st.info("No se detectaron coberturas válidas dentro de los predios en esta resolución.")
+                        except Exception as e:
+                            st.error(f"Error calculando matriz de predios: {e}")
 
-                if delta_nat >= 0: st.success(resumen)
-                else: st.warning(resumen)
-
-                # --- LUPA EN PREDIOS INTERVENIDOS ---
-                if 'gdf_predios' in locals() and not gdf_predios.empty:
-                    st.markdown("---")
-                    st.markdown("#### 🎯 Impacto Focalizado: Predios Intervenidos")
-                    try:
-                        from rasterio.features import geometry_mask
-                        from PIL import Image
-                        
-                        gdf_predios_proj = gdf_predios.to_crs(crs_2026) if gdf_predios.crs.to_string() != str(crs_2026) else gdf_predios
-                        mask_predios = geometry_mask(gdf_predios_proj.geometry, out_shape=data_2026_reclass.shape, transform=transform_2026, invert=False)
-                        
-                        if data.shape != data_2026_reclass.shape:
-                            data_2020_base = np.array(Image.fromarray(data).resize((data_2026_reclass.shape[1], data_2026_reclass.shape[0]), resample=Image.NEAREST))
-                        else:
-                            data_2020_base = data
-                            
-                        fair_mask = (data_2020_base > 0) & (data_2026_reclass > 0)
-                        
-                        data_2020_predios = np.where((~mask_predios) & fair_mask, data_2020_base, 0)
-                        data_2026_predios = np.where((~mask_predios) & fair_mask, data_2026_reclass, 0)
-                        
-                        df_predios_2020, _ = lc.calculate_land_cover_stats(data_2020_predios, transform_2026, crs_2026, nodata=0, manual_area_km2=None)
-                        df_predios_2026, _ = lc.calculate_land_cover_stats(data_2026_predios, transform_2026, crs_2026, nodata=0, manual_area_km2=None)
-                        
-                        if not df_predios_2020.empty and not df_predios_2026.empty:
-                            df_comp_predios = pd.merge(
-                                df_predios_2026[['Cobertura', 'Área (km²)']], df_predios_2020[['Cobertura', 'Área (km²)']], on='Cobertura', how='outer'
-                            ).fillna(0)
-                            
-                            df_comp_predios.columns = ['Ecosistema', 'Escenario 2026 (km²)', 'Línea Base 2020 (km²)']
-                            df_comp_predios['Variación Neta (km²)'] = df_comp_predios['Escenario 2026 (km²)'] - df_comp_predios['Línea Base 2020 (km²)']
-                            
-                            st.dataframe(df_comp_predios.style.format({
-                                'Escenario 2026 (km²)': '{:,.4f}', 'Línea Base 2020 (km²)': '{:,.4f}', 
-                                'Variación Neta (km²)': lambda x: f"+{x:,.4f}" if x > 0 else f"{x:,.4f}"
-                            }), use_container_width=True)
-                            
-                            bosque_predios = df_comp_predios[df_comp_predios['Ecosistema'] == 'Bosque']
-                            delta_b_predios = bosque_predios['Variación Neta (km²)'].values[0] if not bosque_predios.empty else 0
-                            
-                            if delta_b_predios > 0:
-                                st.success(f"🌟 **Efectividad de Gestión Confirmada:** Dentro de los predios gestionados, la cobertura boscosa aumentó en **{delta_b_predios:,.4f} km²**.")
-                            elif delta_b_predios < 0:
-                                st.warning(f"⚠️ **Alerta en Áreas de Gestión:** Se detecta una pérdida de **{abs(delta_b_predios):,.4f} km²** de bosque dentro de los predios. Sugiere revisión en campo.")
-                        else:
-                            st.info("No se detectaron coberturas válidas dentro de los predios en esta resolución.")
-                    except Exception as e:
-                        st.error(f"Error calculando matriz de predios: {e}")
-            else:
-                st.info("Calculando matriz de transición...")
-                        
+        # =====================================================================
+        # --- PESTAÑA 3: TABLA Y GRÁFICOS ---
+        # =====================================================================
         with tab_stat:
             c1, c2 = st.columns([1, 1])
             with c1:
@@ -5261,6 +5235,10 @@ def display_land_cover_analysis_tab(df_long, gdf_stations, **kwargs):
             if view_mode == "Territorio":
                 st.markdown("### 💧 Simulador de Escorrentía y Retención (SCS-CN)")
                 st.info("Este módulo traduce los cambios de cobertura en impactos directos sobre el ciclo hidrológico de la cuenca.")
+
+                # 🚀 FIX 1: NOTA INFORMATIVA SI NO HAY HISTÓRICO 2020
+                if 'data_2020' in locals() and data_2020 is None:
+                    st.warning("⚠️ **Aviso de Línea Base:** No contamos con imagen satelital histórica de 2020 para esta región específica. Por fines de modelación, los valores de la Línea Base (2020) se han igualado al Estado Actual (2026) para permitirte proyectar escenarios futuros.")
                 
                 with st.expander("⚙️ Configuración de Curvas de Número (CN)", expanded=False):
                     st.write("Ajusta el valor de escorrentía típico para cada ecosistema (0 = Retención Total, 100 = Impermeable).")
@@ -5273,12 +5251,12 @@ def display_land_cover_analysis_tab(df_long, gdf_stations, **kwargs):
                         'suelo': cc[4].number_input("Suelo Desnudo", value=90)
                     }
                 
-                # Recuperar DataFrames Base y 2026 de la pestaña comparativa
-                df_base = df_res_2020_fair if 'df_res_2020_fair' in locals() else df_res
-                df_2026 = df_res_2026_fair if 'df_res_2026_fair' in locals() else pd.DataFrame()
+                # 🚀 FIX 2: RECUPERAR DATAFRAMES CORRECTAMENTE
+                df_2026 = df_res  # La matriz 2026 oficial purificada
+                df_base = df_res_2020_fair if 'df_res_2020_fair' in locals() and 'data_2020' in locals() and data_2020 is not None else df_res
                 
                 cn_2020 = lc.calculate_weighted_cn(df_base, cn_cfg)
-                cn_2026 = lc.calculate_weighted_cn(df_2026, cn_cfg) if not df_2026.empty else cn_2020
+                cn_2026 = lc.calculate_weighted_cn(df_2026, cn_cfg)
                 
                 st.markdown("#### 🎯 Proyectar Escenario Futuro")
                 st.write("**Ajusta los deslizadores para simular un tercer escenario hipotético (La suma debe ser 100%):**")
@@ -5333,10 +5311,17 @@ def display_land_cover_analysis_tab(df_long, gdf_stations, **kwargs):
                         fig_sim.update_layout(barmode='group', title="Comparativa de Volúmenes de Escorrentía (Millones de m³)")
                         st.plotly_chart(fig_sim, use_container_width=True)
                         
-                        if vol_2026 > vol_2020:
-                            st.warning(f"⚠️ **Observación Hídrica:** El cambio de coberturas entre 2020 y 2026 generó un aumento de **{vol_2026-vol_2020:.2f} Millones de m³** en la escorrentía superficial anual.")
+                        # 🚀 FIX 3: CAJA INTELIGENTE DE OBSERVACIÓN HÍDRICA
+                        if 'data_2020' in locals() and data_2020 is None:
+                            st.info("🌱 **Observación Hídrica:** Al no disponer de datos históricos (2020) en esta zona, no es posible calcular la evolución pasada. Sin embargo, utiliza los deslizadores superiores para evaluar cómo futuros esfuerzos de restauración o urbanización impactarán el volumen de escorrentía.")
                         else:
-                            st.success(f"🌱 **Observación Hídrica:** La evolución de coberturas ha logrado reducir la escorrentía en **{abs(vol_2026-vol_2020):.2f} Millones de m³**, favoreciendo la infiltración.")
+                            delta_escorrentia = vol_2026 - vol_2020
+                            if delta_escorrentia > 0.01:
+                                st.error(f"⚠️ **Alerta Hídrica:** El cambio de coberturas entre 2020 y 2026 generó un aumento de **{delta_escorrentia:.2f} Millones de m³** en la escorrentía superficial anual.")
+                            elif delta_escorrentia < -0.01:
+                                st.success(f"🌱 **Observación Hídrica:** La evolución de coberturas ha logrado reducir la escorrentía en **{abs(delta_escorrentia):.2f} Millones de m³**, favoreciendo la infiltración.")
+                            else:
+                                st.info("🌱 **Observación Hídrica:** La escorrentía se ha mantenido estable entre la Línea Base y el Estado Actual.")
 
                 else:
                     st.warning("⚠️ La suma de los porcentajes del escenario simulado debe ser exactamente 100%.")
@@ -6306,147 +6291,103 @@ def generar_mapa_interactivo(grid_data, bounds, gdf_stations, gdf_zona, gdf_buff
     return m
 
 # -------------------------------------------------------------------------
-# FUNCIÓN COMPARATIVA MULTIESCALAR (VERSIÓN PREMIUM: CON SELECTOR DE ETIQUETA 🏷️)
+# FUNCIÓN COMPARATIVA MULTIESCALAR (VERSIÓN SUPABASE MASTER)
 # -------------------------------------------------------------------------
-def display_multiscale_tab(df_ignored, gdf_stations, gdf_subcuencas):
+def display_multiscale_tab(df_long=None, gdf_stations=None, gdf_subcuencas=None, **kwargs):
+    import streamlit as st
     try:
         from modules.db_manager import get_engine
         import pandas as pd
-        import geopandas as gpd
-        import plotly.express as px
+        import plotly.graph_objects as go
     except ImportError:
         st.error("Error importando módulos necesarios.")
         return
 
-    st.markdown("#### 🗺️ Comparativa de Regímenes de Lluvia")
-    st.info("💡 Análisis Multiescalar: Integra datos de Lluvia, Regiones (BD) y Cuencas (Mapa).")
+    st.markdown("#### 🗺️ Comparativa de Regímenes de Lluvia (Fuente Maestra)")
+    st.info("💡 **Análisis Multiescalar:** Los datos presentados aquí son extraídos de la Matriz Hidrológica Maestra pre-calculada, garantizando 100% de coherencia matemática con el Simulador Integral (WEAP).")
 
-    # 1. RECUPERACIÓN DE DATOS (TODO DESDE LA BD)
+    # 1. CARGAMOS LA TABLA LIGERA (SOLO JERARQUÍAS Y NOMBRES)
     try:
         engine = get_engine()
-        with engine.connect() as conn:
-            df_fresh = pd.read_sql("SELECT fecha, id_estacion, valor FROM precipitacion", conn)
-            df_meta_bd = pd.read_sql("SELECT id_estacion, nombre, municipio, subregion, latitud, longitud FROM estaciones", conn)
-            try:
-                gdf_polys_bd = gpd.read_postgis("SELECT * FROM cuencas", conn, geom_col="geometry")
-            except Exception:
-                gdf_polys_bd = None 
+        # Solo traemos las columnas descriptivas para armar los filtros
+        q_meta = 'SELECT "Jerarquia", "Territorio", "LLAVE_UNIVERSAL" FROM matriz_hidrologica_maestra'
+        df_meta = pd.read_sql(q_meta, engine)
     except Exception as e:
-        st.error(f"Error crítico conectando a Base de Datos: {e}")
+        st.error(f"Error crítico conectando a la Matriz Maestra en Supabase: {e}")
+        return
+        
+    if df_meta.empty:
+        st.warning("⚠️ La Matriz Hidrológica Maestra está vacía. Ejecuta la 'Forja' en el panel de administrador.")
         return
 
-    # 2. PROCESAMIENTO DE DATOS
-    df_fresh['fecha'] = pd.to_datetime(df_fresh['fecha'])
-    df_fresh['MES_NUM'] = df_fresh['fecha'].dt.month
-    df_fresh['id_estacion'] = df_fresh['id_estacion'].astype(str).str.strip()
-    df_datos = df_fresh.copy()
-
-    df_meta = df_meta_bd.copy()
-    df_meta.columns = [str(c).strip().lower() for c in df_meta.columns]
-    df_meta['id_estacion'] = df_meta['id_estacion'].astype(str).str.strip()
-
-    # --- 3. CÁLCULO DE CUENCA CON SPATIAL JOIN INVERSO ---
-    col_cuenca_default = None
-    opciones_nombre_cuenca = [] 
-    mapping_cuencas = pd.DataFrame()
-    
-    gdf_polys = gdf_polys_bd if gdf_polys_bd is not None else gdf_subcuencas
-
-    if gdf_polys is not None:
-        try:
-            gdf_polys.columns = [str(c).strip().lower() for c in gdf_polys.columns]
-            if gdf_polys.crs is None: gdf_polys.set_crs("EPSG:4326", inplace=True)
-            
-            cols_ignore = ['geometry', 'id', 'gid', 'objectid', 'shape_leng', 'shape_area', 'index_right']
-            opciones_nombre_cuenca = [c for c in gdf_polys.columns if c not in cols_ignore and not c.startswith('shape')]
-            
-            df_meta['longitud'] = pd.to_numeric(df_meta['longitud'], errors='coerce')
-            df_meta['latitud'] = pd.to_numeric(df_meta['latitud'], errors='coerce')
-            puntos_validos = df_meta.dropna(subset=['longitud', 'latitud']).copy()
-            
-            if not puntos_validos.empty:
-                gdf_puntos = gpd.GeoDataFrame(
-                    puntos_validos, 
-                    geometry=gpd.points_from_xy(puntos_validos.longitud, puntos_validos.latitud),
-                    crs="EPSG:4326"
-                )
-                
-                if gdf_puntos.crs != gdf_polys.crs: gdf_polys = gdf_polys.to_crs(gdf_puntos.crs)
-                
-                # 🔥 EL TRUCO INVERSO: Cada polígono busca su punto más cercano
-                gdf_cruce = gpd.sjoin_nearest(gdf_polys, gdf_puntos, how="left", distance_col="dist")
-                
-                mapping_cuencas = gdf_cruce[['id_estacion'] + opciones_nombre_cuenca].dropna(subset=['id_estacion'])
-                
-                if 'nom_nss3' in opciones_nombre_cuenca: col_cuenca_default = 'nom_nss3'
-                elif 'subc_lbl' in opciones_nombre_cuenca: col_cuenca_default = 'subc_lbl'
-                elif opciones_nombre_cuenca: col_cuenca_default = opciones_nombre_cuenca[0]
-
-        except Exception as e:
-            pass
-
-    # 4. MERGE FINAL DE TODO
-    df_full = pd.merge(df_datos, df_meta, on='id_estacion', how='inner')
-    
-    # Inyectamos el cruce espacial a los datos base
-    if not mapping_cuencas.empty:
-        df_full = pd.merge(df_full, mapping_cuencas, on='id_estacion', how='left')
-
-    # 5. DETECCIÓN DE COLUMNAS
-    col_municipio = next((c for c in df_full.columns if c in ['municipio', 'mpio', 'mpio_cnmbr']), None)
-    col_region = next((c for c in df_full.columns if c in ['subregion', 'region', 'zona']), None)
-    
-    # 6. INTERFAZ GRÁFICA
-    meses_mapa = {1: 'Ene', 2: 'Feb', 3: 'Mar', 4: 'Abr', 5: 'May', 6: 'Jun', 
-                  7: 'Jul', 8: 'Ago', 9: 'Sep', 10: 'Oct', 11: 'Nov', 12: 'Dic'}
-    df_full['Nombre_Mes'] = df_full['MES_NUM'].map(meses_mapa)
-
+    # 2. INTERFAZ GRÁFICA DE FILTROS
     c1, c2 = st.columns([1, 2])
+    
     with c1:
-        opts = []
-        if col_municipio: opts.append("Municipio")
-        if col_region: opts.append("Región") 
-        if opciones_nombre_cuenca: opts.append("Cuenca")
-        
-        if not opts:
-            st.warning("⚠️ No se detectaron agrupaciones geográficas.")
+        # Detectamos las jerarquías disponibles en la BD (ej: MUNICIPIO, CUENCA, REGION)
+        opts_jerarquia = sorted([str(x) for x in df_meta['Jerarquia'].dropna().unique() if str(x) != 'nan'])
+        if not opts_jerarquia:
+            st.warning("⚠️ No se detectaron jerarquías geográficas válidas.")
             return
 
-        nivel = st.radio("Agrupar por:", opts)
-        campo_filtro = None
-        
-        if nivel == "Municipio": campo_filtro = col_municipio
-        elif nivel == "Región": campo_filtro = col_region
-        elif nivel == "Cuenca":
-            if opciones_nombre_cuenca:
-                idx_def = 0
-                if col_cuenca_default in opciones_nombre_cuenca:
-                    idx_def = opciones_nombre_cuenca.index(col_cuenca_default)
-                
-                col_seleccionada = st.selectbox("🏷️ Etiqueta de Cuenca:", opciones_nombre_cuenca, index=idx_def)
-                campo_filtro = col_seleccionada
-            else:
-                st.warning("No hay etiquetas de texto en el mapa de cuencas.")
-                return
+        # Para que por defecto aparezca NSS3 (Cuencas) o Municipio
+        idx_def = opts_jerarquia.index('NSS3') if 'NSS3' in opts_jerarquia else 0
+        nivel_seleccionado = st.radio("Agrupar por Nivel:", opts_jerarquia, index=idx_def)
 
-        # Llenar lista de items excluyendo nulos
-        items = sorted([str(x) for x in df_full[campo_filtro].dropna().unique() if str(x).lower() != 'nan'])
+        # Filtramos la tabla para dejar solo los territorios de ese nivel
+        df_nivel = df_meta[df_meta['Jerarquia'] == nivel_seleccionado].copy()
+        items_territorio = sorted(df_nivel['Territorio'].dropna().tolist())
 
     with c2:
-        seleccion = st.multiselect(f"Seleccione {nivel}:", items, default=items[:3] if len(items)>2 else items)
-
-    if seleccion:
-        df_gp = df_full[df_full[campo_filtro].astype(str).isin(seleccion)]
-        df_gp = df_gp.groupby(['MES_NUM', 'Nombre_Mes', campo_filtro])['valor'].mean().reset_index().sort_values('MES_NUM')
-
-        fig = px.line(
-            df_gp, x='Nombre_Mes', y='valor', color=campo_filtro,
-            title=f"Régimen de Precipitación - Comparativa por {nivel}", markers=True
+        territorios_seleccionados = st.multiselect(
+            f"Seleccione Territorios ({nivel_seleccionado}):", 
+            items_territorio, 
+            default=items_territorio[:3] if len(items_territorio) > 2 else items_territorio
         )
-        fig.update_xaxes(categoryorder='array', categoryarray=list(meses_mapa.values()), title="Mes")
+
+    # 3. EXTRACCIÓN DE DATOS Y GRAFICACIÓN
+    if territorios_seleccionados:
+        from sqlalchemy import text
+        import plotly.graph_objects as go
         
-        st.plotly_chart(fig, use_container_width=True)
-        st.download_button("📥 Descargar CSV", df_gp.to_csv(index=False).encode('utf-8-sig'), "comparativa.csv")
+        fig = go.Figure()
+        meses = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
+        datos_para_csv = []
+        
+        for terr in territorios_seleccionados:
+            # Consulta combinando Jerarquia (que ya seleccionaste en el radio button) y Territorio exacto
+            q_clima = text('''
+                SELECT "P_01", "P_02", "P_03", "P_04", "P_05", "P_06", 
+                       "P_07", "P_08", "P_09", "P_10", "P_11", "P_12" 
+                FROM matriz_hidrologica_maestra 
+                WHERE "Jerarquia" = :j AND "Territorio" = :t
+            ''')
+            df_clima = pd.read_sql(q_clima, engine, params={"j": nivel_seleccionado, "t": terr})
+            
+            if not df_clima.empty:
+                valores_mensuales = df_clima.iloc[0].values
+                
+                for m_idx, m_nombre in enumerate(meses):
+                    datos_para_csv.append({
+                        "Jerarquia": nivel_seleccionado,
+                        "Territorio": terr,
+                        "Mes": m_nombre,
+                        "Precipitacion_mm": valores_mensuales[m_idx]
+                    })
+                
+                fig.add_trace(go.Scatter(
+                    x=meses, y=valores_mensuales, mode='lines+markers', name=terr,
+                    hovertemplate="<b>%{x}</b><br>Lluvia: %{y:.1f} mm<extra></extra>"
+                ))
+            else:
+                st.toast(f"No se encontraron datos climáticos forjados para {terr}", icon="⚠️")
+        
+        if datos_para_csv:
+            fig.update_layout(title=f"Régimen de Precipitación Consolidado", height=500, xaxis_title="Mes", yaxis_title="Precipitación Media (mm)", hovermode="x unified", template="plotly_white")
+            st.plotly_chart(fig, width="stretch")
+            
+            df_export = pd.DataFrame(datos_para_csv)
+            st.download_button("📥 Descargar Datos de la Gráfica (CSV)", df_export.to_csv(index=False).encode('utf-8-sig'), f"comparativa_{nivel_seleccionado}.csv")
 
 def display_enso_system_dynamics_tab(df_monthly_filtered, nombre_zona, gdf_zona=None, **kwargs):
     from modules.config import Config
@@ -6462,27 +6403,49 @@ def display_enso_system_dynamics_tab(df_monthly_filtered, nombre_zona, gdf_zona=
     # ==================================================================
     # 1. TELEMETRÍA ESTRUCTURAL 
     # ==================================================================
-    pob_total = st.session_state.get('aleph_pob_total', 0)
-    area_km2 = st.session_state.get('aleph_area_km2', 0.0)
-    altitud_m = st.session_state.get('aleph_altitud_m', 1500.0)
-    rurh_m3s = st.session_state.get('aleph_concesiones_m3s', 0.0)
+    # 🚀 FIX: Forzamos a Float para evitar que el cero venga como texto ('0') y rompa la matemática
+    pob_total = float(st.session_state.get('aleph_pob_total', 0.0))
+    area_km2 = float(st.session_state.get('aleph_area_km2', 0.0))
+    altitud_m = float(st.session_state.get('aleph_altitud_m', 1500.0))
+    rurh_m3s = float(st.session_state.get('aleph_concesiones_m3s', 0.0))
     
+    # Cálculo de Área (¡Éste ya vimos que funciona perfecto!)
     if area_km2 <= 0 and gdf_zona is not None and not gdf_zona.empty:
         try:
             gdf_zona_calc = gdf_zona.copy()
-            if gdf_zona_calc.crs is None: gdf_zona_calc.set_crs("EPSG:4326", inplace=True)
+            if gdf_zona_calc.crs is None: 
+                gdf_zona_calc = gdf_zona_calc.set_crs("EPSG:4326")
             area_km2 = gdf_zona_calc.to_crs(epsg=3116).area.sum() / 1e6
             st.session_state['aleph_area_km2'] = area_km2
-        except: pass
+        except: 
+            pass
+
+    # 🚀 FIX DEFINITIVO: Asignación de Población blindada
+    if pob_total <= 0:
+        zona_str = str(nombre_zona).upper()
+        if "ANTIOQUIA" in zona_str:
+            pob_total = 6901160.0
+            st.session_state['aleph_pob_total'] = pob_total
+        elif "COLOMBIA" in zona_str:
+            pob_total = 52828000.0
+            st.session_state['aleph_pob_total'] = pob_total
+        elif area_km2 > 0:
+            # Plan de contingencia: Multiplicar el área real por 35 habitantes
+            pob_total = max((area_km2 * 35.0), 10000.0)
+            st.session_state['aleph_pob_total'] = pob_total
             
     alertas_criticas = []
     if area_km2 <= 0:
         area_km2 = 100.0
         alertas_criticas.append("Área territorial no detectada (Usando 100 km²).")
-    if pob_total <= 0:
-        pob_total = 50000
+    if pob_total <= 0: 
+        pob_total = 50000.0
         alertas_criticas.append("Población no detectada (Usando 50,000 hab).")
         
+    # 🚀 NUEVO: Alerta inteligente si la topografía no está en la base de datos
+    if altitud_m <= 0:
+        alertas_criticas.append("Altitud no detectada en BD. Ejecuta el 'Motor Aleph' en Mapas Avanzados.")
+
     if alertas_criticas:
         st.warning(f"⚠️ **Telemetría Incompleta:** {' | '.join(alertas_criticas)}")
     

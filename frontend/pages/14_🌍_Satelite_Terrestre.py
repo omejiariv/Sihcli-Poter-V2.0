@@ -138,6 +138,8 @@ if gdf_zona is None or gdf_zona.empty:
                     codigo_match = re.search(r'\((.*?)\)', str(nombre_zona))
                     cod_ideam = codigo_match.group(1).strip() if codigo_match else None
                     
+                    encontrado = False
+                    
                     if cod_ideam:
                         cols_cod = [c for c in gdf_subcuencas.columns if c.lower() in ['nss1', 'nss2', 'nss3', 'szh', 'zh', 'ah']]
                         for col in cols_cod:
@@ -152,10 +154,31 @@ if gdf_zona is None or gdf_zona.empty:
                         def limpiar_texto(t):
                             if not isinstance(t, str): return ""
                             return re.sub(r'[^A-Z0-9]', '', ''.join(c for c in unicodedata.normalize('NFD', t.upper()) if unicodedata.category(c) != 'Mn'))
+                        
                         terr_limpio = limpiar_texto(lugar_crudo)
                         mask_c = gdf_subcuencas.apply(lambda row: terr_limpio in limpiar_texto(str(row.to_dict().values())), axis=1)
+                        
                         if mask_c.any():
                             gdf_zona_tmp = gdf_subcuencas[mask_c]
+                            
+                            # =========================================================================
+                            # 🛡️ INTERCEPTOR ESPACIAL ESTRICTO (MATA CLONES)
+                            # =========================================================================
+                            codigo_unico = st.session_state.get('aleph_codigo_cuenca', 'N/A')
+                            
+                            if codigo_unico != 'N/A':
+                                mask_estricta = (gdf_subcuencas['NSS3'] == codigo_unico) | \
+                                                (gdf_subcuencas['NSS2'] == codigo_unico) | \
+                                                (gdf_subcuencas['NSS1'] == codigo_unico)
+                                
+                                if mask_estricta.any():
+                                    gdf_zona_tmp = gdf_subcuencas[mask_estricta]
+                                    
+                            # 🔪 SEGURO ANTI-FRANKENSTEIN
+                            if len(gdf_zona_tmp) > 1:
+                                gdf_zona_tmp = gdf_zona_tmp.iloc[[0]]
+                            # =========================================================================
+                            
                             gdf_zona = gpd.GeoDataFrame(geometry=[gdf_zona_tmp.unary_union], crs=gdf_subcuencas.crs)
                             encontrado = True
 
@@ -164,14 +187,23 @@ if gdf_zona is None or gdf_zona.empty:
                 gdf_tm = fetch_territorio_maestro() 
                 
                 if not gdf_tm.empty:
-                    if es_nacional or (es_departamento and ("ANTIOQUIA" in terr_norm or "COLOMBIA" in terr_norm)):
-                        col_depto = 'dpto_cnmbr' if 'dpto_cnmbr' in gdf_tm.columns else 'departamento'
-                        if col_depto in gdf_tm.columns and not es_nacional:
-                            mask = gdf_tm[col_depto].apply(norm_text).isin(['antioquia'])
+                    # 🚀 FIX: Rescate seguro de variables y blindaje absoluto
+                    lugar_seguro = str(locals().get('nombre_zona', locals().get('lugar_crudo', '')))
+                    es_antioquia = "ANTIOQUIA" in lugar_seguro.upper() or "ANTIOQUIA" in str(terr_norm).upper()
+                    
+                    if es_nacional or es_departamento or es_antioquia:
+                        # Búsqueda dinámica de la columna
+                        col_depto = next((col for col in gdf_tm.columns if col.lower() in ['dpto_cnmbr', 'departamento']), None)
+                        
+                        if col_depto and not es_nacional:
+                            # Filtro indestructible
+                            mask = gdf_tm[col_depto].astype(str).str.upper().str.strip() == 'ANTIOQUIA'
                         else:
                             mask = pd.Series(True, index=gdf_tm.index)
                             
                         if mask.any():
+                            # Reparamos geometrías y fusionamos
+                            gdf_tm['geometry'] = gdf_tm.geometry.make_valid()
                             gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
                             encontrado = True
                                 

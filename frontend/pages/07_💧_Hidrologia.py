@@ -27,13 +27,22 @@ selectors.renderizar_menu_navegacion("Hidrología")
 # =========================================================================
 # 🧠 1. EXTRACCIÓN DEL SELECTOR ESPACIAL (EL ALEPH) Y CEREBRO ESTRUCTURAL
 # =========================================================================
-st.sidebar.markdown("---")
 territorio_str = st.session_state.get('aleph_lugar', 'COLOMBIA')
 nivel_jerarquico = st.session_state.get('aleph_escala', 'NACIONAL')
 
 if not territorio_str or str(territorio_str).strip() in ["", "None", "-- Seleccione --"]:
     st.info("👈 Seleccione un Territorio (Cuenca, Municipio o Región) en el menú lateral para iniciar.")
     st.stop()
+
+# --- INICIALIZACIÓN ESTRUCTURAL DE ESCALAS ---
+nivel_norm = str(st.session_state.get('aleph_escala', '')).upper().strip()
+es_nacional = "NACION" in nivel_norm
+es_departamento = "DEPARTAMENTO" in nivel_norm or "DEPARTAMENTAL" in nivel_norm
+es_municipio = "MUNICIPAL" in nivel_norm or "MUNICIPIO" in nivel_norm
+es_region = "REGION" in nivel_norm or "SUBREGION" in nivel_norm
+es_car = "CAR" in nivel_norm or "AUTORIDAD" in nivel_norm
+es_cuenca = "CUENCA" in nivel_norm or "NSS" in nivel_norm or "SZH" in nivel_norm
+# ---------------------------------------------    
 
 # =========================================================================
 # 2. CONTROLES TEMPORALES
@@ -47,7 +56,6 @@ anio_analisis = st.sidebar.slider(
 if nivel_jerarquico != "Estaciones":
     st.success(f"Analizando Hidrología para el territorio: **{territorio_str}** (Nivel: {nivel_jerarquico}) | **Año de Análisis: {anio_analisis}**")
 
-st.sidebar.markdown("---")
 buffer_km = st.sidebar.slider("🎯 Radio de Búsqueda (Buffer en km):", min_value=0.0, max_value=50.0, value=15.0, step=1.0)
 
 # 🪂 FUNCIÓN CACHEADA GLOBALMENTE
@@ -119,14 +127,6 @@ with st.spinner("🌍 Ejecutando radar espacial avanzado y extrayendo datos sate
             terr_norm = norm_text(lugar_crudo)
             lugar_limpio_exacto = lugar_crudo
 
-        nivel_norm = str(nivel_jerarquico).upper().strip()
-        es_nacional = "NACION" in nivel_norm
-        es_departamento = "DEPARTAMENTO" in nivel_norm or "DEPARTAMENTAL" in nivel_norm or "COLOMBIA" in terr_norm
-        es_municipio = "MUNICIPAL" in nivel_norm or "MUNICIPIO" in nivel_norm
-        es_region = "REGION" in nivel_norm or "SUBREGION" in nivel_norm
-        es_car = "CAR" in nivel_norm or "AUTORIDAD" in nivel_norm
-        es_cuenca = "CUENCA" in nivel_norm or "NSS" in nivel_norm or "SZH" in nivel_norm
-        
         encontrado = False
 
         if es_nacional:
@@ -137,8 +137,11 @@ with st.spinner("🌍 Ejecutando radar espacial avanzado y extrayendo datos sate
 
         elif es_cuenca:
             if gdf_subcuencas is not None and not gdf_subcuencas.empty:
-                codigo_match = re.search(r'\((.*?)\)', str(territorio_str))
-                cod_ideam = codigo_match.group(1).strip() if codigo_match else None
+                # 🔥 FIX REGEX: Extraer el ÚLTIMO contenido entre paréntesis para evitar 
+                # caer en trampas de texto como "(md)" o "(mi)" en el nombre de la cuenca.
+                todos_parentesis = re.findall(r'\((.*?)\)', str(territorio_str))
+                cod_ideam = todos_parentesis[-1].strip() if todos_parentesis else None
+                
                 if cod_ideam:
                     cols_cod = [c for c in gdf_subcuencas.columns if c.lower() in ['nss1', 'nss2', 'nss3', 'szh', 'zh', 'ah']]
                     for col in cols_cod:
@@ -152,11 +155,48 @@ with st.spinner("🌍 Ejecutando radar espacial avanzado y extrayendo datos sate
                     def limpiar_texto(t):
                         if not isinstance(t, str): return ""
                         return re.sub(r'[^A-Z0-9]', '', ''.join(c for c in unicodedata.normalize('NFD', t.upper()) if unicodedata.category(c) != 'Mn'))
+                    
                     mask_c = gdf_subcuencas.apply(lambda row: limpiar_texto(lugar_crudo) in limpiar_texto(str(row.to_dict().values())), axis=1)
+                    
                     if mask_c.any():
                         gdf_zona_tmp = gdf_subcuencas[mask_c]
-                        gdf_zona = gpd.GeoDataFrame(geometry=[gdf_zona_tmp.unary_union], crs=gdf_subcuencas.crs)
-                        encontrado = True
+                        
+                        # =========================================================================
+                        # 🛡️ INTERCEPTOR ESPACIAL Y AGREGADOR MULTIESCALA (V3 - Búsqueda Total)
+                        # =========================================================================
+                        codigo_unico = st.session_state.get('aleph_codigo_cuenca', 'N/A')
+                        
+                        if codigo_unico != 'N/A':
+                            # 1. Diccionario de columnas en mayúsculas para evitar errores
+                            cols_upper = {c.upper(): c for c in gdf_subcuencas.columns}
+                            
+                            # 2. Máscara inicial (Falso para todos)
+                            mask_estricta = (gdf_subcuencas.index == -1) 
+                            
+                            # 3. Lista exhaustiva de columnas de códigos Y NOMBRES en Supabase
+                            columnas_busqueda = [
+                                'NSS3', 'NSS2', 'NSS1', 'SZH', 'ZH', 'AH',
+                                'NOM_SZH', 'NOMZH', 'NOMAH', 'NOM_ZH', 'NOM_AH',
+                                'NOM_NSS1', 'NOM_NSS2', 'NOM_NSS3'
+                            ]
+                            
+                            # Normalizamos lo que estamos buscando a texto en mayúsculas
+                            codigo_str = str(codigo_unico).strip().upper()
+                            
+                            # 4. Sumar coincidencias donde sea que esté (Código o Nombre)
+                            for jerarquia in columnas_busqueda:
+                                if jerarquia in cols_upper:
+                                    col_real = cols_upper[jerarquia]
+                                    # Convertimos la columna a texto y mayúsculas para un match perfecto
+                                    mask_estricta = mask_estricta | (gdf_subcuencas[col_real].astype(str).str.strip().str.upper() == codigo_str)
+                            
+                            if mask_estricta.any():
+                                gdf_zona_tmp = gdf_subcuencas[mask_estricta]
+                                
+                                # 🔥 AGREGADOR LIBERADO: Fusiona todas las subcuencas en el macropolígono
+                                gdf_zona = gpd.GeoDataFrame(geometry=[gdf_zona_tmp.unary_union], crs=gdf_subcuencas.crs)
+                                encontrado = True
+                        # =========================================================================
 
         if not encontrado and not es_cuenca and not es_nacional:
             gdf_tm = fetch_territorio_maestro() 
@@ -230,6 +270,42 @@ else:
     st.markdown("---")
     st.subheader(f"📊 Perfil Hidro-Climático: {territorio_str}")
 
+    # ==========================================
+    # 🗺️ MINI-MAPA SATELITAL DE CONTEXTO
+    # ==========================================
+    if gdf_zona is not None and not gdf_zona.empty:
+        with st.expander("📍 Ver Contexto Geográfico Satelital", expanded=False):
+            try:
+                import folium
+                import streamlit.components.v1 as components
+                
+                # Obtenemos el centroide para centrar la cámara
+                centroide = gdf_zona.to_crs(epsg=4326).geometry.centroid.iloc[0]
+                m = folium.Map(location=[centroide.y, centroide.x], zoom_start=11)
+                
+                # Capa Satelital Esri
+                tile_url = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+                folium.TileLayer(
+                    tiles=tile_url, attr='Esri', name='Satélite', overlay=False, control=False
+                ).add_to(m)
+                
+                # Proyectar el polígono de la cuenca sobre el mapa
+                folium.GeoJson(
+                    gdf_zona.to_crs(epsg=4326),
+                    style_function=lambda x: {
+                        'fillColor': '#f1c40f', # Amarillo resaltado
+                        'color': '#e67e22',
+                        'weight': 3,
+                        'fillOpacity': 0.3
+                    },
+                    tooltip=territorio_str
+                ).add_to(m)
+                
+                components.html(m._repr_html_(), height=350)
+            except Exception as e:
+                st.caption(f"Error cargando el mapa de contexto: {e}")
+    # ==========================================
+
     with st.spinner(f"📡 Procesando {len(ids_estaciones)} estaciones vía FastAPI..."):
         payload = {"territorio": territorio_str, "ids_estaciones": ids_estaciones}
         try:
@@ -253,24 +329,87 @@ else:
                     try: area_km2 = gdf_zona.to_crs(epsg=3116).geometry.area.sum() / 1e6
                     except: pass 
                     
-                    if not es_escala_masiva:
-                        morph = calculate_morphometry(gdf_zona, dem_path=ruta_dem_nube)
-                        alt_promedio = morph.get("alt_prom_m", 2000)
-                        alt_min = morph.get("alt_min_m", 0)
-                        alt_max = morph.get("alt_max_m", 4000)
-                        indice_forma = morph.get("indice_forma", 0)
-                        perimetro = morph.get("perimetro_km", 0)
-                    else:
-                        st.info("⚡ **Optimización de Rendimiento:** Procesamiento raster 3D detallado desactivado para escalas mayores. Usando estimación.")
-                        alt_min, alt_max, alt_promedio = 0, 5300, 1500
+                    # =========================================================================
+                    # 🚀 NUEVO MOTOR PURE-SQL: CONSULTA ESTRICTA A LA MATRIZ MAESTRA
+                    # =========================================================================
+                    try:
+                        from sqlalchemy import text
+                        from modules.db_manager import get_engine
+                        engine = get_engine()
+                        
+                        nombre_puro = str(territorio_str).split(" - (")[0].strip()
+                        nombre_limpio = normalizar_texto(nombre_puro).upper().replace(" ", "_")
+                        
+                        if es_municipio: prefijo_nivel = "MUNICIPAL"
+                        elif es_departamento: prefijo_nivel = "DEPARTAMENTAL"
+                        elif es_region: prefijo_nivel = "REGIONAL"
+                        elif es_car: prefijo_nivel = "CAR"
+                        else: prefijo_nivel = "%" # Búsqueda general para cuencas
+
+                        # Excepciones sintácticas de la base de datos forjada
+                        if prefijo_nivel == "CAR" and "VALLE_DE_ABURRA" in nombre_limpio: nombre_limpio = "AMVA"
+
+                        # Generamos la llave maestra. Si no es cuenca, obligamos a que coincida exactamente
+                        llave_exacta = f"{prefijo_nivel}_{nombre_limpio}_TOTAL"
+                        
+                        with engine.connect() as conn:
+                            if prefijo_nivel != "%":
+                                # Búsqueda 100% estricta para divisiones político-administrativas
+                                query = text('''
+                                    SELECT "H_Minima", "H_Maxima", "H_Media", "Coef_C3", "Coef_C2", "Coef_C1", "Coef_C0"
+                                    FROM matriz_hidrogeomorfologica_maestra 
+                                    WHERE "LLAVE_UNIVERSAL" = :llave_exacta
+                                ''')
+                                result = conn.execute(query, {"llave_exacta": llave_exacta}).fetchone()
+                            else:
+                                # Búsqueda amplia para cuencas (NSS1, NSS2, NSS3, SZH, etc.)
+                                llave_busqueda = f"%_{nombre_limpio}_TOTAL"
+                                query = text('''
+                                    SELECT "H_Minima", "H_Maxima", "H_Media", "Coef_C3", "Coef_C2", "Coef_C1", "Coef_C0"
+                                    FROM matriz_hidrogeomorfologica_maestra 
+                                    WHERE "LLAVE_UNIVERSAL" LIKE :llave_busqueda 
+                                    OR "Territorio" ILIKE :nombre_puro
+                                    ORDER BY 
+                                        CASE WHEN "LLAVE_UNIVERSAL" LIKE :llave_busqueda THEN 1 ELSE 2 END
+                                    LIMIT 1
+                                ''')
+                                result = conn.execute(query, {"llave_busqueda": llave_busqueda, "nombre_puro": nombre_puro}).fetchone()
+                            
+                            if result:
+                                # Solo aplicamos validación de bordes nulos o negativos que vengan del DEM
+                                alt_min = result[0] if result[0] is not None and result[0] >= 0 else 0
+                                alt_max = result[1] if result[1] is not None else 4000
+                                alt_promedio = result[2] if result[2] is not None else 2000
+                                
+                                st.session_state['coefs_hipso'] = {
+                                    'C3': result[3], 'C2': result[4], 'C1': result[5], 'C0': result[6]
+                                }
+                            else:
+                                alt_min, alt_max, alt_promedio = 0, 4000, 2000
+                                st.sidebar.caption("⚠️ Entidad no hallada en Matriz. Extrayendo estimación.")
+                                
+                    except Exception as e:
+                        alt_min, alt_max, alt_promedio = 0, 4000, 2000
+                        st.sidebar.caption(f"⚠️ Error conectando a Matriz: {e}")
+                    # =========================================================================
 
                 if alt_max <= alt_min: alt_max = alt_min + 100
 
-                st.sidebar.markdown("---")
                 st.sidebar.subheader("⛰️ Gestión 3D (Hipsometría)")
                 
-                # 🚀 FIX: Slider Hipsometría SIEMPRE visible
-                cota_gestion = st.sidebar.slider("Cota de Gestión (msnm):", int(alt_min), int(alt_max), int(alt_min), 50)
+                # 🚀 FIX LLAVE DE ESTADO: Creamos una clave alfanumérica pura para evitar cualquier cruce en la memoria caché
+                import re
+                clave_slider = re.sub(r'[^a-zA-Z0-9]', '_', str(territorio_str))
+                
+                cota_gestion = st.sidebar.slider(
+                    "Cota de Gestión (msnm):", 
+                    min_value=int(alt_min), 
+                    max_value=int(alt_max), 
+                    value=int(alt_min), 
+                    step=50,
+                    key=f"sl_hipso_{clave_slider}",
+                    help="Desliza para simular restricciones operativas o cotas de inundación."
+                )
 
                 area_cota_km2 = area_km2
                 etp_cota = etp_real.copy()
@@ -278,12 +417,16 @@ else:
 
                 if cota_gestion > alt_min and gdf_zona is not None:
                     if not es_escala_masiva:
-                        hypso_data = calculate_hypsometric_curve(gdf_zona, dem_path=ruta_dem_nube)
-                        if hypso_data and len(hypso_data.get("elevations", [])) > 0:
-                            elevs = hypso_data["elevations"]
-                            areas = hypso_data["area_percent"]
-                            valid_areas = areas[elevs >= cota_gestion]
-                            area_porcentaje = valid_areas.max() if len(valid_areas) > 0 else 0.0
+                        try:
+                            # 🔥 FIX: La curva hipsométrica también debe recibir el polígono reproyectado en metros
+                            hypso_data = calculate_hypsometric_curve(gdf_zona.to_crs(epsg=3116), dem_path=ruta_dem_nube)
+                            if hypso_data and len(hypso_data.get("elevations", [])) > 0:
+                                elevs = hypso_data["elevations"]
+                                areas = hypso_data["area_percent"]
+                                valid_areas = areas[elevs >= cota_gestion]
+                                area_porcentaje = valid_areas.max() if len(valid_areas) > 0 else 0.0
+                        except:
+                            area_porcentaje = max(0.0, 100.0 * (1.0 - ((cota_gestion - alt_min) / (alt_max - alt_min))))
                     else:
                         # Estimación lineal rápida para escalas gigantes
                         area_porcentaje = max(0.0, 100.0 * (1.0 - ((cota_gestion - alt_min) / (alt_max - alt_min))))
@@ -303,7 +446,6 @@ else:
                 else:
                     factor_infiltracion, info_cobertura = 0.25, "Promedio Regional Andino"
 
-                st.sidebar.markdown("---")
                 st.sidebar.subheader("🌍 Escenarios Climáticos")
                 escenario_climatico = st.sidebar.selectbox(
                     "Simulación Prospectiva:",
@@ -339,6 +481,22 @@ else:
                 fig.add_trace(go.Scatter(x=datos["meses"], y=balance_humedo["caudal_m3s"], name="Max", mode='lines', line=dict(color='rgba(142, 68, 173, 0)'), showlegend=False), secondary_y=True)
                 fig.add_trace(go.Scatter(x=datos["meses"], y=balance_seco["caudal_m3s"], name="Rango Histórico", mode='lines', line=dict(color='rgba(142, 68, 173, 0)'), fill='tonexty', fillcolor='rgba(142, 68, 173, 0.15)'), secondary_y=True)
                 fig.add_trace(go.Scatter(x=datos["meses"], y=balance_medio["caudal_m3s"], name="Caudal Medio (m³/s)", mode='lines', line=dict(color='#8e44ad', width=4)), secondary_y=True)
+
+                # ==========================================
+                # 💉 CIRUGÍA: INYECCIÓN DE CAUDAL BASE
+                # ==========================================
+                # Calculamos el caudal base como el 35% del caudal medio mensual
+                caudal_base_mensual = [c * 0.35 for c in balance_medio["caudal_m3s"]]
+                
+                fig.add_trace(go.Scatter(
+                    x=datos["meses"], 
+                    y=caudal_base_mensual, 
+                    name="Caudal Base (Aporte Subterráneo)", 
+                    mode='lines', 
+                    line=dict(color='saddlebrown', width=2, dash='dash'), 
+                    showlegend=True
+                ), secondary_y=True)
+                # ==========================================
 
                 # 🚀 FIX: Leyenda centrada en la parte superior (x=0.5) para que el gráfico use todo el ancho
                 fig.update_layout(
@@ -384,10 +542,27 @@ else:
                 
                 with st.expander("🤖 Ver Diagnóstico Hidro-Climático Automático", expanded=True):
                     st.markdown("### Análisis del Sistema")
-                    if lluvia_total > etp_total:
-                        st.success(f"💧 **Estado Estructural:** Superávit hídrico natural. La precipitación supera la demanda.")
+                    
+                    # 1. Cálculos de Oferta Neta
+                    oferta_bruta = lluvia_total - etp_total
+                    
+                    # Extraemos recarga (si no existe en memoria, asumimos un 15% por defecto)
+                    recarga_acuifero = st.session_state.get('recarga_acuifero_mm', oferta_bruta * 0.15) 
+                    
+                    # Caudal ecológico (25% de la oferta bruta según normativas estándar)
+                    caudal_ecologico = oferta_bruta * 0.25 
+                    
+                    # La verdadera Oferta Neta
+                    oferta_neta = oferta_bruta - recarga_acuifero - caudal_ecologico
+                    
+                    # 2. Renderizado del Mensaje
+                    if oferta_neta > 0:
+                        st.success(f"💧 **Estado Estructural:** Superávit hídrico natural. La lluvia supera la evapotranspiración, dejando una **Oferta Neta de {oferta_neta:,.0f} mm/año** (descontando {recarga_acuifero:,.0f} mm de recarga de acuíferos y {caudal_ecologico:,.0f} mm de caudal ecológico).")
+                    elif oferta_bruta > 0:
+                        st.warning(f"⚠️ **Estado Estructural:** Tensión hídrica. Hay excedente bruto, pero al descontar acuíferos y caudal ecológico, la Oferta Neta es deficitaria ({oferta_neta:,.0f} mm/año).")
                     else:
-                        st.error(f"🏜️ **Estado Estructural:** Déficit hídrico crónico. Evaporación supera la lluvia.")
+                        st.error(f"🏜️ **Estado Estructural:** Déficit crónico. La evapotranspiración potencial supera la lluvia.")
+                        
                     st.markdown(f"🌊 **Productividad Hídrica:** La cuenca produce **{rendimiento_lsk:.1f} Litros/segundo por cada km²**.")
 
                 st.markdown("---")
@@ -448,27 +623,32 @@ else:
                             
                             if not df_rurh_f.empty: 
                                 rurh_bd_m3s = float(df_rurh_f[col_val_r].sum())
-                            else:
+                            elif not es_cuenca: # Solo aplica comodín si NO es cuenca, para evitar arrastrar todo Antioquia
                                 clave = n_upper.split()[0] if len(n_upper.split()) > 1 else n_upper
                                 mask_f = df_rurh['terr_clean'].str.contains(clave, na=False)
                                 if mask_f.any(): 
                                     rurh_bd_m3s = float(df_rurh[mask_f][col_val_r].sum())
+                            else:
+                                rurh_bd_m3s = 0.0 # Si es cuenca y no se encontró, inicia en 0 para no distorsionar
 
                 except Exception as e:
                     st.warning(f"⚠️ Estimaciones locales. Detalle BD: {e}")
 
-                col_D1, col_D2, col_D3 = st.columns(3)
+                col_D1, col_D2, col_D3, col_D4 = st.columns(4)
                 with col_D1:
                     pob_weap = st.number_input("👥 Población a Abastecer:", min_value=0, value=int(pob_bd), step=1000, help="Extraído automáticamente de la Matriz Demográfica.")
                 with col_D2:
                     dotacion_weap = st.number_input("🚰 Dotación (L/hab/día):", min_value=50, max_value=400, value=150)
                 with col_D3:
+                    # RURH ahora es editable por el usuario
+                    presion_rurh_input = st.number_input("🏭 Presión RURH (m³/s):", min_value=0.0, value=float(rurh_bd_m3s), format="%.4f", help="Extraído del RURH. Puede editarse si posee un aforo más preciso.")
+                with col_D4:
                     retorno_weap = st.slider("♻️ Retorno al Río (%):", min_value=0, max_value=100, value=80)
 
                 demanda_humana_m3s = (pob_weap * dotacion_weap) / (1000 * 86400)
                 consumo_neto_humano_m3s = demanda_humana_m3s * (1.0 - (retorno_weap / 100.0))
-                demanda_total_m3s = demanda_humana_m3s + rurh_bd_m3s
-                consumo_neto_total = consumo_neto_humano_m3s + rurh_bd_m3s
+                demanda_total_m3s = demanda_humana_m3s + presion_rurh_input
+                consumo_neto_total = consumo_neto_humano_m3s + presion_rurh_input
                 
                 oferta_m3s = caudal_medio
                 iua = (demanda_total_m3s / oferta_m3s) * 100 if oferta_m3s > 0 else 100.0
@@ -484,7 +664,7 @@ else:
                 cm1, cm2, cm3, cm4 = st.columns(4)
                 cm1.metric("🌊 Oferta Física Dinámica", f"{oferta_m3s:.3f} m³/s", "De la cuenca activa")
                 cm2.metric("👥 Demanda Humana", f"{demanda_humana_m3s:.3f} m³/s", f"{int(pob_weap)} habs", delta_color="inverse")
-                cm3.metric("🏭 Presión RURH", f"{rurh_bd_m3s:.3f} m³/s", "Concesiones CAR", delta_color="inverse")
+                cm3.metric("🏭 Presión RURH", f"{presion_rurh_input:.3f} m³/s", "Concesiones CAR", delta_color="inverse")
                 
                 caudal_restante = oferta_m3s - consumo_neto_total
                 cm4.metric("🏞️ Caudal Libre", f"{caudal_restante:.3f} m³/s", "Volumen residual")

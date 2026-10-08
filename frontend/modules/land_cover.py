@@ -63,6 +63,46 @@ LAND_COVER_COLORS = {
     9: "#228B22", 10: "#9ACD32", 11: "#8B4513", 12: "#00CED1", 13: "#0000FF"
 }
 
+def homologar_leyenda_satelite(data):
+    """
+    Piedra Rosetta: Traduce mapas de Earth Engine (ESA / Dynamic World) 
+    al estándar Corine Land Cover (1-13) al vuelo.
+    """
+    if data is None: return data
+    data_reclass = np.copy(data)
+    
+    # 1. Detectar si es ESA WorldCover (Usa decenas: 10, 20, 30, 50...)
+    if np.any(data == 10) or np.any(data == 50):
+        mapping_esa = {
+            10: 9,   # Árboles -> Bosque
+            20: 10,  # Matorrales -> Veg. Arbustiva
+            30: 7,   # Pastizales -> Pastos
+            40: 5,   # Cultivos -> Cultivos transitorios
+            50: 1,   # Construido -> Zonas Urbanas
+            60: 11,  # Suelo desnudo -> Áreas abiertas sin cobertura
+            80: 13,  # Cuerpos de agua -> Agua
+            90: 12   # Humedales -> Humedales
+        }
+        for k, v in mapping_esa.items():
+            data_reclass[data == k] = v
+            
+    # 2. Detectar si es Dynamic World (Usa 0 a 8)
+    # Validamos que no tenga valores mayores a 8 (para no confundir con Corine que llega a 13)
+    elif np.any(data == 1) and np.any(data == 6) and not np.any(data > 10):
+        mapping_dw = {
+            0: 13,   # Agua -> Agua
+            1: 9,    # Árboles -> Bosque
+            2: 7,    # Pastos -> Pastos
+            3: 5,    # Cultivos -> Cultivos
+            4: 10,   # Matorrales -> Veg. Arbustiva
+            5: 11,   # Suelo desnudo -> Áreas abiertas
+            6: 1     # Construido -> Zonas Urbanas
+        }
+        for k, v in mapping_dw.items():
+            data_reclass[data == k] = v
+            
+    return data_reclass
+
 # --- 2. FUNCIONES AUXILIARES ---
 def get_pixel_area_in_km2(transform, crs, height, width):
     px_w, px_h = abs(transform[0]), abs(transform[4])
@@ -85,7 +125,6 @@ def process_land_cover_raster(raster_path, gdf_mask=None, scale_factor=1):
                 else: gdf_proj = gdf_mask
                 
                 try:
-                    # 🚀 FIX QUIRÚRGICO: all_touched=True salva a las cuencas diminutas
                     out_image, out_transform = mask(src, gdf_proj.geometry, crop=True, all_touched=True)
                     data = out_image[0]
                 except ValueError: return None, None, None, None
@@ -93,6 +132,10 @@ def process_land_cover_raster(raster_path, gdf_mask=None, scale_factor=1):
                 new_height, new_width = int(src.height / scale_factor), int(src.width / scale_factor)
                 data = src.read(1, out_shape=(new_height, new_width), resampling=Resampling.nearest)
                 out_transform = src.transform * src.transform.scale((src.width / data.shape[-1]), (src.height / data.shape[-2]))
+                
+            # 🚀 CIRUGÍA: Traducimos los píxeles antes de enviarlos al sistema
+            data = homologar_leyenda_satelite(data)
+            
         return data, out_transform, crs, nodata
     except Exception as e:
         print(f"Error procesando raster: {e}")

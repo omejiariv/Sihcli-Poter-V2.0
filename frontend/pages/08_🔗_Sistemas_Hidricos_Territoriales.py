@@ -180,7 +180,6 @@ nodo_seleccionado = st.sidebar.selectbox("Seleccione el Nodo Principal:", nodos_
 datos_nodo = sistemas_embalses[nodo_seleccionado]
 
 # 📜 Lógica Legal de Captación y Trasvase
-st.sidebar.markdown("---")
 st.sidebar.markdown("#### ⚖️ Marco Legal (Trasvases)")
 st.sidebar.caption("Simulación de abstracción representativa de la red hídrica.")
 

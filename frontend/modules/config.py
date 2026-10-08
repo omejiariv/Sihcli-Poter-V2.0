@@ -44,7 +44,9 @@ class Config:
     # URLs exactas de los Rasters (Reemplazan las viejas rutas locales de la carpeta data/)
     DEM_FILE_PATH = f"{BUCKET_RASTERS}/DemAntioquia_EPSG3116.tif"
     PRECIP_RASTER_PATH = f"{BUCKET_RASTERS}/PPAMAnt.tif"
-    LAND_COVER_RASTER_PATH = f"{BUCKET_RASTERS}/Cob25m_WGS84.tif"
+    
+    # ⏪ ROLLBACK ESTRATÉGICO: Volvemos al mapa original estabilizado
+    LAND_COVER_FILE_PATH = f"{BUCKET_RASTERS}/Cob2026_Actualizada.tif" 
 
     # URLs exactas de los Archivos Maestros pesados
     POBLACION_MAESTRA_URL = f"{BUCKET_MAESTROS}/Poblacion_Colombia_Maestra.parquet"

@@ -48,6 +48,16 @@ st.set_page_config(page_title="Aguas Subterráneas", page_icon="💧", layout="w
 # Llama al menú expandible y resalta la página actual
 selectors.renderizar_menu_navegacion("Aguas Subterráneas")
 
+# --- INICIALIZACIÓN ESTRUCTURAL DE ESCALAS ---
+nivel_norm = str(st.session_state.get('aleph_escala', '')).upper().strip()
+es_nacional = "NACION" in nivel_norm
+es_departamento = "DEPARTAMENTO" in nivel_norm or "DEPARTAMENTAL" in nivel_norm
+es_municipio = "MUNICIPAL" in nivel_norm or "MUNICIPIO" in nivel_norm
+es_region = "REGION" in nivel_norm or "SUBREGION" in nivel_norm
+es_car = "CAR" in nivel_norm or "AUTORIDAD" in nivel_norm
+es_cuenca = "CUENCA" in nivel_norm or "NSS" in nivel_norm or "SZH" in nivel_norm
+# ---------------------------------------------
+
 # 🧠 Encendido automático del Gemelo Digital (Lectura de matrices maestras)
 try:
     from modules.utils import encender_gemelo_digital
@@ -89,7 +99,7 @@ gdf_zona = None
 if 'aleph_poligono' in st.session_state and st.session_state['aleph_poligono'] is not None and not st.session_state['aleph_poligono'].empty:
     gdf_zona = st.session_state['aleph_poligono']
 
-# 🪂 PARACAÍDAS CARTOGRÁFICO ESTRUCTURAL (Idéntico a Biodiversidad y Segurísimo)
+# 🪂 PARACAÍDAS CARTOGRÁFICO ESTRUCTURAL
 if gdf_zona is None or gdf_zona.empty:
     with st.spinner("🪂 Sincronizando topología estricta desde la matriz maestra..."):
         try:
@@ -168,109 +178,140 @@ if gdf_zona is None or gdf_zona.empty:
                         def limpiar_texto(t):
                             if not isinstance(t, str): return ""
                             return re.sub(r'[^A-Z0-9]', '', ''.join(c for c in unicodedata.normalize('NFD', t.upper()) if unicodedata.category(c) != 'Mn'))
+                        
                         terr_limpio = limpiar_texto(lugar_crudo)
                         mask_c = gdf_subcuencas.apply(lambda row: terr_limpio in limpiar_texto(str(row.to_dict().values())), axis=1)
+                        
                         if mask_c.any():
                             gdf_zona_tmp = gdf_subcuencas[mask_c]
+                            
+                            # =========================================================================
+                            # 🛡️ INTERCEPTOR ESPACIAL ESTRICTO (MATA CLONES)
+                            # =========================================================================
+                            codigo_unico = st.session_state.get('aleph_codigo_cuenca', 'N/A')
+                            
+                            if codigo_unico != 'N/A':
+                                mask_estricta = (gdf_subcuencas['NSS3'] == codigo_unico) | \
+                                                (gdf_subcuencas['NSS2'] == codigo_unico) | \
+                                                (gdf_subcuencas['NSS1'] == codigo_unico)
+                                
+                                if mask_estricta.any():
+                                    gdf_zona_tmp = gdf_subcuencas[mask_estricta]
+                                    
+                            # 🔪 SEGURO ANTI-FRANKENSTEIN
+                            if len(gdf_zona_tmp) > 1:
+                                gdf_zona_tmp = gdf_zona_tmp.iloc[[0]]
+                            # =========================================================================
+                            
                             gdf_zona = gpd.GeoDataFrame(geometry=[gdf_zona_tmp.unary_union], crs=gdf_subcuencas.crs)
                             encontrado = True
 
             # --- 2. BÚSQUEDA TERRITORIAL ESTRUCTURAL (TerritorioMaestro.geojson) ---
             if not encontrado and not es_cuenca:
-                @st.cache_data(ttl=86400, show_spinner=False)
-                def get_territorio_maestro():
-                    import requests, io
-                    url = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
-                    try:
-                        res = requests.get(url, timeout=20)
-                        if res.status_code == 200:
-                            return gpd.read_file(io.BytesIO(res.content))
-                    except Exception:
-                        pass
-                    return gpd.GeoDataFrame()
-
-                gdf_tm = get_territorio_maestro()
+                import geopandas as gpd
                 
-                if not gdf_tm.empty:
-                    gdf_tm.columns = [c.lower() for c in gdf_tm.columns]
+                # 🚀 Lectura directa desde la URL para evitar cachés corruptos
+                url = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
+                
+                try:
+                    gdf_tm = gpd.read_file(url)
                     
-                    if es_nacional or (es_departamento and ("ANTIOQUIA" in terr_norm or "COLOMBIA" in terr_norm)):
-                        col_depto = 'dpto_cnmbr' if 'dpto_cnmbr' in gdf_tm.columns else 'departamento'
-                        if col_depto in gdf_tm.columns and not es_nacional:
-                            mask = gdf_tm[col_depto].apply(norm_text).isin(['antioquia'])
-                        else:
-                            mask = pd.Series(True, index=gdf_tm.index)
+                    if not gdf_tm.empty:
+                        es_antioquia = "ANTIOQUIA" in str(nombre_zona).upper() or "ANTIOQUIA" in str(terr_norm).upper()
+                        
+                        # 🕵️ DIAGNÓSTICO VISUAL (Solo se activa si buscas Antioquia)
+                        if es_antioquia:
+                            st.sidebar.markdown("### 🕵️ Reporte de Diagnóstico")
+                            st.sidebar.write(f"1. Filas cargadas en memoria: {len(gdf_tm)}")
+                            st.sidebar.write(f"2. ¿Detectó Antioquia?: True (Zona: {nombre_zona})")
+                        
+                        if es_nacional or es_departamento or es_antioquia:
+                            col_depto = next((col for col in gdf_tm.columns if col.lower() in ['dpto_cnmbr', 'departamento']), None)
                             
-                        if mask.any():
-                            gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
-                            encontrado = True
-                                
-                    elif es_region:
-                        col_sub = 'subregion'
-                        if col_sub in gdf_tm.columns:
-                            mask = gdf_tm[col_sub].apply(norm_text) == terr_norm
-                            if mask.any():
-                                gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
-                                encontrado = True
-                                
-                    elif es_car:
-                        col_car = 'car'
-                        if col_car in gdf_tm.columns:
-                            if terr_norm == "amva":
-                                mask = gdf_tm[col_car].apply(norm_text).str.contains("amva|aburra", na=False)
-                            elif terr_norm == "corantioquia":
-                                mask_corantioquia = gdf_tm[col_car].apply(norm_text).str.contains("corantioquia", na=False)
-                                mask_no_amva = ~gdf_tm['mpio_cnmbr'].apply(norm_text).isin(['medellin', 'bello', 'itagui', 'envigado', 'sabaneta', 'copacabana', 'la estrella', 'girardota', 'caldas', 'barbosa'])
-                                mask = mask_corantioquia & mask_no_amva
-                            else:
-                                mask = gdf_tm[col_car].apply(norm_text).str.contains(terr_norm, na=False)
-
-                            if mask.any():
-                                gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
-                                encontrado = True
-                                
-                    elif es_municipio:
-                        col_mpio = 'mpio_cnmbr' if 'mpio_cnmbr' in gdf_tm.columns else 'municipio'
-                        if col_mpio in gdf_tm.columns:
-                            mask_norm = gdf_tm[col_mpio].apply(norm_text) == terr_norm
-                            mask_exacta = gdf_tm[col_mpio] == lugar_limpio_exacto
-                            mask = mask_norm | mask_exacta
+                            if es_antioquia:
+                                st.sidebar.write(f"3. Columna de búsqueda hallada: {col_depto}")
                             
-                            if mask.any():
-                                gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
-                                encontrado = True
+                            if col_depto:
+                                mask = gdf_tm[col_depto].astype(str).str.upper().str.strip() == 'ANTIOQUIA'
+                                
+                                if es_antioquia:
+                                    st.sidebar.write(f"4. Polígonos departamentales encontrados: {mask.sum()}")
+                                
+                                if mask.any():
+                                    # Hacemos make_valid por si hay geometrías rotas en el JSON
+                                    gdf_tm['geometry'] = gdf_tm.geometry.make_valid()
+                                    gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
+                                    encontrado = True
+                                    if es_antioquia: 
+                                        st.sidebar.write("5. ✅ ¡Fusión matemática exitosa!")
+                                        
+                        elif es_region:
+                            col_sub = 'subregion'
+                            if col_sub in gdf_tm.columns:
+                                mask = gdf_tm[col_sub].apply(norm_text) == terr_norm
+                                if mask.any():
+                                    gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
+                                    encontrado = True
+                                    
+                        elif es_car:
+                            col_car = 'car'
+                            if col_car in gdf_tm.columns:
+                                if terr_norm == "amva":
+                                    mask = gdf_tm[col_car].apply(norm_text).str.contains("amva|aburra", na=False)
+                                elif terr_norm == "corantioquia":
+                                    mask_corantioquia = gdf_tm[col_car].apply(norm_text).str.contains("corantioquia", na=False)
+                                    mask_no_amva = ~gdf_tm['mpio_cnmbr'].apply(norm_text).isin(['medellin', 'bello', 'itagui', 'envigado', 'sabaneta', 'copacabana', 'la estrella', 'girardota', 'caldas', 'barbosa'])
+                                    mask = mask_corantioquia & mask_no_amva
+                                else:
+                                    mask = gdf_tm[col_car].apply(norm_text).str.contains(terr_norm, na=False)
 
+                                if mask.any():
+                                    gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
+                                    encontrado = True
+                                    
+                        elif es_municipio:
+                            col_mpio = 'mpio_cnmbr' if 'mpio_cnmbr' in gdf_tm.columns else 'municipio'
+                            if col_mpio in gdf_tm.columns:
+                                mask_norm = gdf_tm[col_mpio].apply(norm_text) == terr_norm
+                                mask_exacta = gdf_tm[col_mpio] == lugar_limpio_exacto
+                                mask = mask_norm | mask_exacta
+                                
+                                if mask.any():
+                                    gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
+                                    encontrado = True
+
+                except Exception as e:
+                    st.sidebar.error(f"Error de sincronización estructural: {e}")
+
+            # --- 3. VERIFICACIÓN FINAL ---
             if encontrado:
                 st.sidebar.success("🪂 ¡Polígono sincronizado (Topología Exacta)!")
             else:
                 st.sidebar.error("⚠️ El polígono no existe en la matriz maestra.")
                 
         except Exception as e:
-            st.sidebar.error(f"Error de sincronización estructural: {e}")
+            st.sidebar.error(f"Error general procesando zona: {e}")
 
 st.sidebar.success(f"🔗 Conexión Aleph Activa: {nombre_zona}")
 
-# 🚀 FIX: AÑADIR EL BUFFER ESPACIAL AL SIDEBAR DE AGUAS SUBTERRÁNEAS
-st.sidebar.markdown("---")
+# 🚀 FIX: AÑADIR EL BUFFER ESPACIAL AL SIDEBAR
 buffer_km = st.sidebar.slider(
     "🎯 Radio de Búsqueda (Buffer en km):", 
     min_value=0.0, max_value=50.0, value=25.0, step=1.0, 
-    help="Expande la zona para capturar estaciones vecinas y mejorar la interpolación de recarga."
+    help="Expande la zona para capturar estaciones vecinas."
 )
 
 # 🌍 EXPANSIÓN GEOMÉTRICA DE LA ZONA DE BÚSQUEDA
 gdf_limite_original = None
 if gdf_zona is not None and not gdf_zona.empty:
-    gdf_limite_original = gdf_zona.copy() # Guardamos la cuenca exacta para dibujarla luego
+    gdf_limite_original = gdf_zona.copy()
     
     if buffer_km > 0:
-        # Proyectamos a metros (Magna-Sirgas), expandimos y devolvemos a grados (WGS84)
         gdf_zona_proj = gdf_zona.to_crs(epsg=3116)
         gdf_zona_proj['geometry'] = gdf_zona_proj.geometry.buffer(buffer_km * 1000)
         gdf_zona = gdf_zona_proj.to_crs(gdf_zona.crs)
         
 # --- 2. PARÁMETROS ECO-HIDROLÓGICOS ---
-st.sidebar.divider()
 
 st.sidebar.header("🎛️ Parámetros del Modelo")
 
@@ -382,7 +423,6 @@ c1, c2 = st.sidebar.columns(2)
 c1.metric("Infiltración Est.", f"{(ki_final*100):.0f}%")
 c2.metric("Recarga Potencial", f"{(kg_factor*100):.0f}%")
 
-st.sidebar.divider()
 meses_futuros = st.sidebar.slider("Horizonte Pronóstico", 12, 60, 24)
 ruido = st.sidebar.slider("Factor Incertidumbre", 0.0, 1.0, 0.1)
 
@@ -456,8 +496,11 @@ if gdf_zona is not None:
         
         if not df_hist.empty:
             # --- 🗺️ A. CÁLCULO DE ÁREA EXACTA (GEOMETRÍA VIVA) ---
-            # Calculamos el área directamente del mapa seleccionado.
-            if gdf_zona is not None and not gdf_zona.empty:
+            # Calculamos el área del límite político ESTRICTO (sin el buffer de estaciones)
+            if 'gdf_limite_original' in locals() and gdf_limite_original is not None and not gdf_limite_original.empty:
+                area_km2 = gdf_limite_original.to_crs(epsg=3116).area.sum() / 1_000_000.0
+            elif gdf_zona is not None and not gdf_zona.empty:
+                # Respaldo por si gdf_limite_original no existe en este contexto
                 area_km2 = gdf_zona.to_crs(epsg=3116).area.sum() / 1_000_000.0
             else:
                 area_km2 = 10.0

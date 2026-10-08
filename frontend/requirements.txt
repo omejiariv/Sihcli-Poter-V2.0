@@ -44,7 +44,7 @@ python-docx
 fiona
 xlrd>=2.0.1
 xgboost
-python-dotenv 1.2.2
+python-dotenv==1.2.2
 xarray
 rioxarray
 netCDF4
@@ -53,4 +53,3 @@ pystac-client
 planetary-computer
 zarr
 earthengine-api
-tempfile

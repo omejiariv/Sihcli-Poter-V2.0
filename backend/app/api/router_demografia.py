@@ -202,12 +202,16 @@ def calcular_piramide(consulta: ConsultaDemografica):
 def obtener_mapa_territorio(consulta: ConsultaDemografica):
     import re
     import unicodedata
+    import json
     
     def limpiar_fuerte(texto):
         if not texto: return ""
         t = str(texto).upper()
+        # 🚀 FIX QUIRÚRGICO: Borramos cualquier código entre paréntesis que envíe el Aleph
+        t = re.sub(r'\(.*?\)', '', t)
         t = t.replace("Ñ", "N")
         t = ''.join(c for c in unicodedata.normalize('NFD', t) if unicodedata.category(c) != 'Mn')
+        # Borramos guiones, puntos y espacios para hacer un match perfecto
         return re.sub(r'[^A-Z0-9]', '', t) 
 
     terr_crudo = str(consulta.territorio).upper()
@@ -228,24 +232,21 @@ def obtener_mapa_territorio(consulta: ConsultaDemografica):
         gdf_mpios['match_id'] = gdf_mpios[col_nom].apply(limpiar_fuerte)
         
         if nivel == "MUNICIPAL":
-            # 🚀 RESCATES MUNICIPALES (TRADUCTOR MAESTRO)
             if "CARMENDEVIBORAL" in terr_limpio: terr_limpio = "ELCARMENDEVIBORAL"
             if "SANVICENTE" in terr_limpio: terr_limpio = "SANVICENTEFERRER"
             if "SANANDRES" in terr_limpio and "CUERQUIA" in terr_limpio: terr_limpio = "SANANDRESDECUERQUIA"
             if "SANTAFE" in terr_limpio: terr_limpio = "SANTAFEDEANTIOQUIA"
             if "SANJOSE" in terr_limpio and "MONTANA" in terr_limpio: terr_limpio = "SANJOSEDELAMONTANA"
             
-            # Tapan los huecos recientes
             if "CAROLINADELPRINCIPE" in terr_limpio: terr_limpio = "CAROLINA"
             if "PUEBLORICO" in terr_limpio: terr_limpio = "PUEBLORRICO"
             if "ELPENOL" in terr_limpio: terr_limpio = "PENOL"
 
             gdf_filtro = gdf_mpios[gdf_mpios['match_id'] == terr_limpio]
             
-            # Si el DANE lo tiene de otra forma, fallback al nombre crudo
             if gdf_filtro.empty:
                 gdf_filtro = gdf_mpios[gdf_mpios['MPIO_CNMBR'].str.upper().str.contains(terr_crudo[:5], na=False)]
-                            
+                        
         elif nivel == "DEPARTAMENTAL":
             col_dpto = 'DPTO_CNMBR' if 'DPTO_CNMBR' in gdf_mpios.columns else 'dpto_norm'
             gdf_mpios['match_dpto'] = gdf_mpios[col_dpto].apply(limpiar_fuerte)
@@ -276,41 +277,30 @@ def obtener_mapa_territorio(consulta: ConsultaDemografica):
                     todos = [m for sublist in M_SUB.values() for m in sublist]
                     mpios_validos = list(set(todos) - excluir)
                 else: mpios_validos = M_CAR.get(terr_limpio, [])
-                    
+                
             gdf_filtro = gdf_mpios[gdf_mpios['match_id'].isin(mpios_validos)]
-            
+        
         if gdf_filtro.empty: raise HTTPException(status_code=404, detail=f"No se encontraron polígonos.")
 
         try:
-            # 🚀 FIX QUIRÚRGICO: Calculamos el área matemática exacta antes de exportar
             gdf_filtro['Area_Calc'] = gdf_filtro.geometry.area
-            
             gdf_filtro['geometry'] = gdf_filtro['geometry'].simplify(0.005, preserve_topology=True)
             geojson_dict = json.loads(gdf_filtro.to_json())
             
-            import math
-
-            # Bucle blindado sobre las propiedades del GeoJSON (V3.1 - Topología Total MGN)
             for feature in geojson_dict.get('features', []):
                 props = feature.get('properties', {})
                 
-                # Extracción robusta de los padres administrativos
                 dpto = str(props.get('dpto_cnmbr') or props.get('DPTO_CNMBR') or 'Antioquia')
                 mpio = str(props.get('mpio_cnmbr') or props.get('MPIO_CNMBR') or props.get('MPIO_CNAM') or 'Sin Municipio')
-                
-                # Lectura de la anidación del Marco Geoestadístico Nacional (MGN)
                 clase_suelo = str(props.get('clase_suel') or props.get('CLASE_SUEL') or '').strip().title()
                 tipo_pol = str(props.get('tipo') or props.get('TIPO') or '').strip().title()
                 nombre_bar_ver = str(props.get('bar_ccnmbr') or props.get('BAR_CCNMBR') or '').strip().title()
                 comuna = str(props.get('comu_nmbre') or props.get('COMU_NMBRE') or '').strip().title()
-                
-                # 🚀 INYECCIÓN DE NUEVOS CAMPOS CLAVE
                 region = str(props.get('region') or props.get('REGION') or 'N/A').title()
                 subregion = str(props.get('subreg_nm') or props.get('subregion') or props.get('SUBREGION') or 'N/A').title()
-                car = str(props.get('car') or props.get('CAR') or 'N/A').upper() # CAR en Mayúsculas
+                car = str(props.get('car') or props.get('CAR') or 'N/A').upper()
                 territorial = str(props.get('territoria') or props.get('TERRITORIA') or 'N/A').title()
 
-                # Lógica de asignación inteligente de nombres
                 if not nombre_bar_ver or nombre_bar_ver.lower() in ['null', 'nan', 'none']:
                     nombre_final = f"Sector de {mpio.title()}"
                 else:
@@ -324,69 +314,101 @@ def obtener_mapa_territorio(consulta: ConsultaDemografica):
                 
                 area_real = float(props.get('Area_Calc', 1.0))
                 
-                # Inyección de metadatos enriquecidos para el Frontend
                 feature['properties'] = {
-                    'Región': region,
-                    'Subregión': subregion,
-                    'Autoridad Ambiental (CAR)': car,
-                    'Dir. Territorial': territorial,
+                    'Región': region, 'Subregión': subregion, 'Autoridad Ambiental (CAR)': car, 'Dir. Territorial': territorial,
                     'Tipo de Asentamiento': tipo_pol if tipo_pol and tipo_pol.lower() not in ['null', 'nan'] else 'No Aplica',
                     'Comuna': comuna if comuna and comuna.lower() not in ['null', 'nan', 'none', ''] else 'No Aplica',
-                    'Departamento': dpto.title(),
-                    'Municipio': mpio.title(),
-                    'Sector / Vereda': nombre_final,
-                    'Habitantes': 0, 
-                    'Area_Calc': area_real 
+                    'Departamento': dpto.title(), 'Municipio': mpio.title(), 'Sector / Vereda': nombre_final,
+                    'Habitantes': 0, 'Area_Calc': area_real 
                 }
         except Exception: raise HTTPException(status_code=500, detail="Error procesando polígono.")
 
-        # 🚀 INYECCIÓN QUIRÚRGICA 1: El retorno de la Ruta A
         return {
-            "centro": {
-                "lat": float(gdf_filtro.geometry.centroid.y.mean()), 
-                "lon": float(gdf_filtro.geometry.centroid.x.mean())
-            },
+            "centro": {"lat": float(gdf_filtro.geometry.centroid.y.mean()), "lon": float(gdf_filtro.geometry.centroid.x.mean())},
             "geojson": geojson_dict
         }
 
     # -------------------------------------------------------------
-    # RUTA B: Cuencas (PostGIS) - BÚSQUEDA TOPOLÓGICA EXACTA
+    # RUTA B: Cuencas (PostGIS) - BÚSQUEDA TOPOLÓGICA FLEXIBLE
     # -------------------------------------------------------------
     elif nivel == "CUENCA":
         from backend.app.database import get_engine
         import geopandas as gpd
         engine = get_engine()
         
-        # El nombre ya viene aplanado desde el inicio de la función en 'terr_limpio'
-        # Ej: "R. Grande - Chico" -> "RGRANDECHICO"
-        
         try:
-            # 🚀 CIRUGÍA SQL: Traer los nombres jerárquicos, no solo la geometría
-            q_geom = text("""
+            # 🚀 CIRUGÍA: Extracción de palabras clave robusta
+            # Si el usuario busca "Alto Río Negro - (1234)", sacamos ["ALTO", "RIO", "NEGRO"]
+            import unicodedata
+            import re
+            
+            # Limpiamos el texto original (quitando códigos entre paréntesis)
+            texto_base = str(consulta.territorio).upper()
+            texto_base = re.sub(r'\(.*?\)', '', texto_base)
+            
+            # Quitamos tildes
+            texto_limpio = ''.join(c for c in unicodedata.normalize('NFD', texto_base) if unicodedata.category(c) != 'Mn')
+            
+            # Extraemos solo las palabras clave largas (ignorando conectores como "DE", "LA", "EL")
+            palabras_clave = [p for p in re.findall(r'[A-Z0-9Ñ]+', texto_limpio) if len(p) > 2]
+            
+            if not palabras_clave:
+                raise HTTPException(status_code=400, detail="Nombre de cuenca inválido para búsqueda.")
+
+            # Construimos cláusulas ILIKE dinámicas para cada palabra clave
+            # Buscamos que TODAS las palabras clave estén presentes en alguno de los campos de nombre
+            condiciones_sql = []
+            params_sql = {}
+            
+            for i, palabra in enumerate(palabras_clave):
+                cond_palabra = f"""(
+                    UNACCENT(nomah) ILIKE :p{i} OR 
+                    UNACCENT(nomzh) ILIKE :p{i} OR 
+                    UNACCENT(nom_szh) ILIKE :p{i} OR 
+                    UNACCENT(nom_nss1) ILIKE :p{i} OR 
+                    UNACCENT(nom_nss2) ILIKE :p{i} OR 
+                    UNACCENT(nom_nss3) ILIKE :p{i}
+                )"""
+                condiciones_sql.append(cond_palabra)
+                params_sql[f"p{i}"] = f"%{palabra}%"
+            
+            # Unimos todas las condiciones con AND (debe contener todas las palabras clave)
+            where_clause = " AND ".join(condiciones_sql)
+
+            q_geom = text(f"""
                 SELECT geometry, nomah, nomzh, nom_szh, nom_nss1, nom_nss2, nom_nss3 
                 FROM cuencas 
-                WHERE 
-                REGEXP_REPLACE(TRANSLATE(UPPER(nomah), 'ÁÉÍÓÚÑ', 'AEIOUN'), '[^A-Z0-9]', '', 'g') = :t OR 
-                REGEXP_REPLACE(TRANSLATE(UPPER(nomzh), 'ÁÉÍÓÚÑ', 'AEIOUN'), '[^A-Z0-9]', '', 'g') = :t OR 
-                REGEXP_REPLACE(TRANSLATE(UPPER(nom_szh), 'ÁÉÍÓÚÑ', 'AEIOUN'), '[^A-Z0-9]', '', 'g') = :t OR 
-                REGEXP_REPLACE(TRANSLATE(UPPER(nom_nss1), 'ÁÉÍÓÚÑ', 'AEIOUN'), '[^A-Z0-9]', '', 'g') = :t OR 
-                REGEXP_REPLACE(TRANSLATE(UPPER(nom_nss2), 'ÁÉÍÓÚÑ', 'AEIOUN'), '[^A-Z0-9]', '', 'g') = :t OR 
-                REGEXP_REPLACE(TRANSLATE(UPPER(nom_nss3), 'ÁÉÍÓÚÑ', 'AEIOUN'), '[^A-Z0-9]', '', 'g') = :t
+                WHERE {where_clause}
             """)
             
-            with engine.connect() as conn:
-                gdf_filtro = gpd.read_postgis(q_geom, conn, params={"t": terr_limpio}, geom_col="geometry")
+            try:
+                # 🚀 INTENTO 1: Con extensión UNACCENT activada
+                with engine.connect() as conn:
+                    gdf_filtro = gpd.read_postgis(q_geom, conn, params=params_sql, geom_col="geometry")
+            except Exception as db_err:
+                error_str = str(db_err).lower()
+                # Si falla (transacción abortada, sin extensión, error de sintaxis...)
+                if "unaccent" in error_str or "syntax" in error_str or "aborted" in error_str or "transaction" in error_str:
+                    # 🚀 FIX MAGISTRAL: Abrimos una CONEXIÓN NUEVA Y LIMPIA para evitar el bloqueo de PostgreSQL
+                    with engine.connect() as conn_fallback:
+                        where_clause_fallback = " AND ".join([c.replace("UNACCENT(", "").replace(") ILIKE", " ILIKE") for c in condiciones_sql])
+                        q_geom_fallback = text(f"SELECT geometry, nomah, nomzh, nom_szh, nom_nss1, nom_nss2, nom_nss3 FROM cuencas WHERE {where_clause_fallback}")
+                        gdf_filtro = gpd.read_postgis(q_geom_fallback, conn_fallback, params=params_sql, geom_col="geometry")
+                else:
+                    raise db_err
             
-            if gdf_filtro.empty: raise HTTPException(status_code=404, detail="Cuenca no encontrada en la BD espacial.")
+            if gdf_filtro.empty: 
+                raise HTTPException(status_code=404, detail=f"El polígono de la cuenca '{texto_base.strip()}' no se encuentra en la base de datos espacial.")
             
+            # Si encuentra varios fragmentos, los une
             if len(gdf_filtro) > 1:
-                # Disolvemos manteniendo el primer registro de metadata (el más relevante)
-                gdf_filtro = gdf_filtro.dissolve(by='nom_nss1', as_index=False)
+                # Usamos el primer campo no nulo como índice de disolución
+                col_dissolve = 'nom_nss1' if 'nom_nss1' in gdf_filtro.columns else gdf_filtro.columns[1]
+                gdf_filtro = gdf_filtro.dissolve(by=col_dissolve, as_index=False)
 
             gdf_filtro['geometry'] = gdf_filtro['geometry'].simplify(0.005, preserve_topology=True)
             geojson_dict = json.loads(gdf_filtro.to_json())
             
-            # RUTA B: Inyección de Metadatos Hidrológicos
             for feature in geojson_dict.get('features', []):
                 props = feature.get('properties', {})
                 feature['properties'] = {
@@ -394,15 +416,23 @@ def obtener_mapa_territorio(consulta: ConsultaDemografica):
                     'Zona Hidrográfica': str(props.get('nomzh') or 'N/A').title(),
                     'Subzona': str(props.get('nom_szh') or 'N/A').title(),
                     'Río Tributario': str(props.get('nom_nss1') or 'N/A').title(),
-                    'Microcuenca': str(props.get('nom_nss2') or 'N/A').title()
+                    'Microcuenca': str(props.get('nom_nss2') or 'N/A').title(),
+                    'Area_Calc': 1.0,
+                    'Municipio': 'N/A'
                 }
                 
             return {
                 "centro": {"lat": float(gdf_filtro.geometry.centroid.y.mean()), "lon": float(gdf_filtro.geometry.centroid.x.mean())},
                 "geojson": geojson_dict
             }
-        except Exception as e: raise HTTPException(status_code=500, detail=f"Fallo PostGIS: {str(e)}")
-    else: raise HTTPException(status_code=400, detail="Escala no soportada.")
+            
+        except HTTPException:
+            raise
+        except Exception as e: 
+            raise HTTPException(status_code=500, detail=f"Fallo PostGIS interno: {str(e)}")
+            
+    else: 
+        raise HTTPException(status_code=400, detail="Escala no soportada.")
     
 # =================================================================
 # 🗂️ RUTA: Catálogo Universal de Territorios (V2.1 - Con Cuencas)

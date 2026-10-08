@@ -1,6 +1,8 @@
 # pages/05_🏔️_Geomorfologia.py
 
 import os
+os.environ["PROJ_LIB"] = "/home/omejiariv/Sihcli-Poter-V2.0/venv/lib/python3.10/site-packages/pyproj/proj_dir/share/proj"
+
 import sys
 import numpy as np
 import pandas as pd
@@ -65,6 +67,16 @@ engine = get_engine()
 selectors.renderizar_menu_navegacion("Geomorfología")
 encender_gemelo_digital()
 
+# --- INICIALIZACIÓN ESTRUCTURAL DE ESCALAS ---
+nivel_norm = str(st.session_state.get('aleph_escala', '')).upper().strip()
+es_nacional = "NACION" in nivel_norm
+es_departamento = "DEPARTAMENTO" in nivel_norm or "DEPARTAMENTAL" in nivel_norm
+es_municipio = "MUNICIPAL" in nivel_norm or "MUNICIPIO" in nivel_norm
+es_region = "REGION" in nivel_norm or "SUBREGION" in nivel_norm
+es_car = "CAR" in nivel_norm or "AUTORIDAD" in nivel_norm
+es_cuenca = "CUENCA" in nivel_norm or "NSS" in nivel_norm or "SZH" in nivel_norm
+# ---------------------------------------------
+
 # --- INICIALIZACIÓN DE VARIABLES DE ESTADO ---
 for key in ['gdf_contours', 'catchment_raster', 'gdf_rios', 'df_indices']:
     if key not in st.session_state:
@@ -125,7 +137,7 @@ def descargar_dem_ee_como_tif(gdf_zona):
 
 # --- 2. CARGA DEL DEM (CONECTADO A LA NUBE Y EARTH ENGINE) ---
 
-@st.cache_data(show_spinner="Descargando y procesando terreno...")
+@st.cache_data(show_spinner="Descargando y procesando terreno...", max_entries=1)
 def cargar_y_cortar_dem(ruta_dem, _gdf_corte, zona_id):
     if _gdf_corte is None or _gdf_corte.empty: 
         return None, None, None
@@ -525,8 +537,19 @@ if gdf_zona_seleccionada is not None:
                             if geoms_2d: st.session_state['gdf_contours'] = gpd.GeoDataFrame(geoms_2d, crs=meta['crs'])
                         except: pass
 
-                    fig.update_layout(title="Terreno 3D (Curvas Nativas)", autosize=True, height=900, scene=dict(aspectmode='manual', aspectratio=dict(x=1, y=1, z=0.2*exag), camera=dict(eye=dict(x=1.5, y=1.5, z=1.5))), margin=dict(l=0, r=0, b=0, t=40))
-                    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
+                    fig.update_layout(
+                        title="Terreno 3D (Curvas Nativas)", 
+                        autosize=True, 
+                        height=900, 
+                        scene=dict(
+                            aspectmode='manual', 
+                            aspectratio=dict(x=1, y=1, z=0.2*exag), 
+                            camera=dict(eye=dict(x=1.5, y=1.5, z=1.5)),
+                            xaxis=dict(autorange='reversed')
+                        ), 
+                        margin=dict(l=0, r=0, b=0, t=40)
+                    )
+                    st.plotly_chart(fig, width="stretch", config={'scrollZoom': True})
                     
                     del fig
                     del arr_3d
@@ -765,7 +788,7 @@ if gdf_zona_seleccionada is not None:
                                 
                                 fig = px.imshow(np.log1p(acc_viz[::factor, ::factor]), color_continuous_scale='Blues', title=f"Acumulación de Flujo: {nombre_zona}")
                                 fig.update_layout(height=600)
-                                st.plotly_chart(fig, use_container_width=True)
+                                st.plotly_chart(fig, width="stretch")
 
                         else:
                             fig = go.Figure()
@@ -826,7 +849,7 @@ if gdf_zona_seleccionada is not None:
                                 margin=dict(l=0,r=0,t=0,b=0)
                             )
                             st.session_state['fig_mapa_hidro'] = fig 
-                            st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
+                            st.plotly_chart(fig, width="stretch", config={'scrollZoom': True})
                     else: st.warning("Procesando...")
                         
             # --- TAB 6: ÍNDICES Y MODELACIÓN ---
@@ -863,10 +886,8 @@ if gdf_zona_seleccionada is not None:
                             "Valor": [area_km2, perimetro_km, longitud_axial_km, longitud_rios_km, desnivel_m, slope_mean, pendiente_cauce_m_m * 100],
                             "Unidad": ["km²", "km", "km", "km", "m", "Grados", "%"]
                         })
-                        st.dataframe(df_morfo.style.format({"Valor": "{:.2f}"}), use_container_width=True)
+                        st.dataframe(df_morfo.style.format({"Valor": "{:.2f}"}), width="stretch")
                         st.session_state['df_indices'] = df_morfo 
-                    
-                    st.markdown("---")
                     
                     if st.session_state.get('geomorfo_strahler_df') is not None:
                         st.markdown("##### 🌊 Red de Drenaje y Potencial Ripario (Strahler)")
@@ -874,7 +895,7 @@ if gdf_zona_seleccionada is not None:
                         
                         c_str1, c_str2 = st.columns([1, 1.5])
                         with c_str1:
-                            st.dataframe(df_str.style.format({'Longitud_Km': '{:.2f}'}), use_container_width=True, hide_index=True)
+                            st.dataframe(df_str.style.format({'Longitud_Km': '{:.2f}'}), width="stretch", hide_index=True)
                             rb_list = [df_str['Num_Segmentos'].iloc[i] / df_str['Num_Segmentos'].iloc[i+1] for i in range(len(df_str)-1) if df_str['Num_Segmentos'].iloc[i+1] > 0]
                             rb_mean = sum(rb_list)/len(rb_list) if rb_list else 0
                             st.metric("Relación de Bifurcación ($R_b$)", f"{rb_mean:.2f}", help="Si Rb está entre 3 y 5, la cuenca es geológicamente estable. Valores altos indican riesgo de crecientes súbitas.")
@@ -882,7 +903,7 @@ if gdf_zona_seleccionada is not None:
                         with c_str2:
                             fig_str = px.bar(df_str, x='Orden_Strahler', y='Longitud_Km', title="Longitud de Ríos por Orden de Strahler", labels={'Orden_Strahler': 'Orden', 'Longitud_Km': 'Longitud (Km)'}, color='Orden_Strahler', color_continuous_scale='Blues')
                             fig_str.update_layout(height=250, margin=dict(t=30, b=0, l=0, r=0), xaxis=dict(tickmode='linear', dtick=1))
-                            st.plotly_chart(fig_str, use_container_width=True)
+                            st.plotly_chart(fig_str, width="stretch")
                     
                     st.markdown("##### ⏱️ Tiempo de Concentración (Tc) y Caudales")
                     col_tc, col_q = st.columns(2)
@@ -907,7 +928,7 @@ if gdf_zona_seleccionada is not None:
                         detalle_cob = "No hay datos de cobertura."
                         
                         # 🚀 NUBE: CÁLCULO AUTOMÁTICO DE C (COBERTURAS EN LA NUBE)
-                        PATH_COB = Config.LAND_COVER_RASTER_PATH
+                        PATH_COB = Config.LAND_COVER_FILE_PATH
                         if land_cover and PATH_COB:
                             try:
                                 stats_cob = land_cover.calcular_estadisticas_zona(gdf_zona_seleccionada, PATH_COB)
@@ -1008,7 +1029,7 @@ if gdf_zona_seleccionada is not None:
                     else: st.info("✅ Sin amenazas detectadas.")
 
                     fig.update_layout(title=titulo, mapbox_style="carto-positron", mapbox_zoom=12, mapbox_center={"lat": c_lat, "lon": c_lon}, height=600, margin=dict(l=0,r=0,t=30,b=0))
-                    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
+                    st.plotly_chart(fig, width="stretch", config={'scrollZoom': True})
 
                 def caja_analisis_ai(mask_riesgo, tipo):
                     pct = (np.sum(mask_riesgo) / mask_riesgo.size) * 100
@@ -1124,15 +1145,15 @@ if gdf_zona_seleccionada is not None:
                     ).add_to(m_pour)
 
                     # 📂 CAPA DEL PROYECTO (Activable/Desactivable)
-                    # El sistema intentará cargar la variable gdf_mask (tu zona de estudio) si existe en la app
                     try:
-                        if 'gdf_mask' in locals() and gdf_mask is not None and not gdf_mask.empty:
-                            gdf_proyecto = gdf_mask.to_crs("EPSG:4326")
+                        if 'gdf_zona_seleccionada' in locals() and gdf_zona_seleccionada is not None and not gdf_zona_seleccionada.empty:
+                            # Simplificamos la geometría para no colapsar la memoria del navegador
+                            gdf_proyecto = gdf_zona_seleccionada.to_crs("EPSG:4326").simplify(0.005)
                             folium.GeoJson(
                                 gdf_proyecto,
                                 name="Límite General del Proyecto",
                                 style_function=lambda x: {'color': '#2c3e50', 'fillColor': 'none', 'weight': 2.5, 'dashArray': '5, 5'},
-                                show=False  # <--- Esto hace que inicie apagada y se pueda activar en el LayerControl
+                                show=False  
                             ).add_to(m_pour)
                     except:
                         pass
@@ -1157,7 +1178,7 @@ if gdf_zona_seleccionada is not None:
                     folium.LayerControl().add_to(m_pour)
                     
                     # 🚀 FIX 2: Bloquea el tráfico de red inútil. Solo avisa al servidor cuando hay un clic efectivo.
-                    mapa_clic = st_folium(m_pour, height=650, use_container_width=True, key="mapa_pour_point", returned_objects=["last_clicked"])
+                    mapa_clic = st_folium(m_pour, height=650, width="stretch", key="mapa_pour_point", returned_objects=["last_clicked"])
                     
                 with c_controles_pour:
                     st.markdown("#### 📍 Controlador Hidrológico")
@@ -1169,7 +1190,7 @@ if gdf_zona_seleccionada is not None:
                         st.info(f"**Cierre:** LAT `{lat_cierre:.5f}` | LON `{lon_cierre:.5f}`")
                         umbral_acc = st.slider("Sensibilidad de encaje (Celdas):", 100, 2000, 500, step=100)
                         
-                        if st.button("🚀 Extraer Microcuenca", type="primary", use_container_width=True):
+                        if st.button("🚀 Extraer Microcuenca", type="primary", width="stretch"):
                             try:
                                 with st.spinner("⚙️ Encajando coordenadas y extrayendo polígono..."):
                                     from shapely.geometry import shape
@@ -1276,7 +1297,7 @@ if gdf_zona_seleccionada is not None:
                         c6.metric("💧 Factor de Forma", stats["Factor de Forma"], help="Fórmula de Horton (A/L²). Un valor cercano a 1 (redonda) indica alta susceptibilidad a crecientes súbitas. Un valor bajo (alargada) indica mejor regulación natural.")
                         
                         st.markdown("---")
-                        if st.button("🗑️ Descartar y Limpiar Mapa", use_container_width=True):
+                        if st.button("🗑️ Descartar y Limpiar Mapa", width="stretch"):
                             st.session_state['cuenca_delimitada'] = None
                             st.session_state['cuenca_stats'] = None
                             st.session_state.pop('pour_point_coords', None)
@@ -1337,12 +1358,12 @@ if gdf_zona_seleccionada is not None:
                 
                 with col_d1:
                     if 'fig_mapa_hidro' in st.session_state and st.session_state['fig_mapa_hidro'] is not None:
-                        st.download_button("📥 Mapa Interactivo (HTML)", st.session_state['fig_mapa_hidro'].to_html(include_plotlyjs='cdn'), f"Mapa_Hidrologia_{nombre_zona}.html", "text/html", use_container_width=True)
+                        st.download_button("📥 Mapa Interactivo (HTML)", st.session_state['fig_mapa_hidro'].to_html(include_plotlyjs='cdn'), f"Mapa_Hidrologia_{nombre_zona}.html", "text/html", width="stretch")
                     else: st.info("⚠️ Genera el mapa en Tab Hidrología primero.")
                 
                 with col_d2:
                     if st.session_state.get('gdf_rios') is not None:
-                        st.download_button("📥 Red de Drenaje (GeoJSON)", st.session_state['gdf_rios'].to_crs("EPSG:4326").to_json(), f"Red_Drenaje_Strahler_{nombre_zona}.geojson", "application/json", use_container_width=True)
+                        st.download_button("📥 Red de Drenaje (GeoJSON)", st.session_state['gdf_rios'].to_crs("EPSG:4326").to_json(), f"Red_Drenaje_Strahler_{nombre_zona}.geojson", "application/json", width="stretch")
                     else: st.info("⚠️ Calcula los ríos en Tab Hidrología primero.")
                         
                 with col_d3:
@@ -1364,127 +1385,176 @@ if gdf_zona_seleccionada is not None:
                                     for file in files: zip_file.write(os.path.join(root, file), arcname=file)
                             return zip_buffer.getvalue()
                             
-                        st.download_button("📥 Red de Drenaje (Shapefile .zip)", create_shp_zip(), f"Shapefile_Drenaje_{nombre_zona}.zip", "application/zip", use_container_width=True)
+                        st.download_button("📥 Red de Drenaje (Shapefile .zip)", create_shp_zip(), f"Shapefile_Drenaje_{nombre_zona}.zip", "application/zip", width="stretch")
                     else: st.info("⚠️ Calcula los ríos en Tab Hidrología primero.")
 
 else:
     st.info("👈 Selecciona una zona.")
 
 # ==============================================================================
-# 🚀 ⚙️ FORJA MASIVA: MATRIZ HIDRO-GEOMORFOLÓGICA MAESTRA
+# 🚀 ⚙️ FORJA MASIVA: MATRIZ HIDRO-GEOMORFOLÓGICA MAESTRA (VERSIÓN MULTIESCALAR)
 # ==============================================================================
 st.markdown("---")
 with st.expander("⚙️ PANEL DE ADMINISTRADOR: Forja Masiva de Matriz Hidro-Geomorfológica", expanded=False):
-    st.warning("⚠️ **Atención:** Este proceso iterará sobre TODAS las cuencas de la base de datos, recortará el Modelo Digital de Elevación (DEM), calculará las curvas hipsométricas y forjará las ecuaciones de caudal por altitud. Puede tardar varios minutos.")
+    st.warning("⚠️ **Atención:** Este proceso iterará sobre TODAS las cuencas, municipios, regiones y CARs. Puede tardar varias horas.")
     
-    if st.button("⚡ Iniciar Forja Masiva Global (Turbo)", type="primary", use_container_width=True):
-        from sqlalchemy import text
-        from modules.utils import normalizar_texto
-        from modules.db_manager import get_engine
-        import concurrent.futures
-        
-        engine_sql = get_engine()
-        
-        try:
-            gdf_todas_cuencas = cargar_capa_espacial_cache("SELECT * FROM cuencas", engine_sql, geom_col="geometry")
-        except Exception as e:
-            st.error(f"Error cargando mapa de cuencas: {e}")
-            st.stop()
+    pwd = st.text_input("Clave de Administrador:", type="password")
+    if pwd == "AdminPoter": 
+        if st.button("⚡ Iniciar Forja Masiva Global (Turbo)", type="primary", width="stretch"):
+            from sqlalchemy import text
+            from modules.utils import normalizar_texto
+            from modules.db_manager import get_engine
+            import concurrent.futures
+            import geopandas as gpd
+            import requests, io
+            import gc
             
-        columnas_niveles = {"AH": "nomah", "ZH": "nomzh", "SZH": "nom_szh", "NSS1": "nom_nss1", "NSS2": "nom_nss2", "NSS3": "nom_nss3"}
-        
-        entidades_a_procesar = []
-        for nivel, col in columnas_niveles.items():
-            if col in gdf_todas_cuencas.columns:
-                nombres_unicos = gdf_todas_cuencas[col].dropna().unique()
-                for nombre in nombres_unicos:
-                    entidades_a_procesar.append((nivel, col, nombre))
+            engine_sql = get_engine()
+            entidades_a_procesar = [] # Aquí guardaremos (Nivel, Columna, Nombre, Geometría)
+            
+            with st.spinner("🌍 1. Descargando y ensamblando cartografía maestra (Cuencas y Territorio)..."):
+                try:
+                    # A. Cargar Cuencas desde SQL
+                    gdf_cuencas = cargar_capa_espacial_cache("SELECT * FROM cuencas", engine_sql, geom_col="geometry")
+                    columnas_niveles = {"AH": "nomah", "ZH": "nomzh", "SZH": "nom_szh", "NSS1": "nom_nss1", "NSS2": "nom_nss2", "NSS3": "nom_nss3"}
                     
-        total_entidades = len(entidades_a_procesar)
-        st.info(f"🔍 Detectadas {total_entidades} entidades hidrográficas. Encendiendo 4 hilos de procesamiento...")
+                    for nivel, col in columnas_niveles.items():
+                        if col in gdf_cuencas.columns:
+                            nombres_unicos = gdf_cuencas[col].dropna().unique()
+                            for nombre in nombres_unicos:
+                                gdf_poly = gdf_cuencas[gdf_cuencas[col] == nombre].copy()
+                                if not gdf_poly.empty:
+                                    entidades_a_procesar.append((nivel, col, nombre, gdf_poly))
+                                    
+                    # B. Cargar TerritorioMaestro (Municipios, Regiones, CAR, Depto)
+                    url_tm = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
+                    res = requests.get(url_tm, timeout=60)
+                    if res.status_code == 200:
+                        gdf_tm = gpd.read_file(io.BytesIO(res.content))
+                        gdf_tm.columns = [c.lower().strip() for c in gdf_tm.columns]
+                        
+                        # B1. Municipios
+                        col_mpio = 'mpio_cnmbr' if 'mpio_cnmbr' in gdf_tm.columns else 'municipio'
+                        if col_mpio in gdf_tm.columns:
+                            for mpio in gdf_tm[col_mpio].dropna().unique():
+                                gdf_poly = gdf_tm[gdf_tm[col_mpio] == mpio].copy()
+                                entidades_a_procesar.append(("MUNICIPAL", col_mpio, mpio, gdf_poly))
+                                
+                        # B2. Subregiones
+                        if 'subregion' in gdf_tm.columns:
+                            for subr in gdf_tm['subregion'].dropna().unique():
+                                gdf_poly = gdf_tm[gdf_tm['subregion'] == subr].copy()
+                                entidades_a_procesar.append(("REGIONAL", "subregion", subr, gdf_poly))
+                                
+                        # B3. CARs
+                        if 'car' in gdf_tm.columns:
+                            for car_nom in gdf_tm['car'].dropna().unique():
+                                gdf_poly = gdf_tm[gdf_tm['car'] == car_nom].copy()
+                                entidades_a_procesar.append(("CAR", "car", car_nom, gdf_poly))
+                                
+                        # B4. Departamento (Fusión total)
+                        gdf_depto = gpd.GeoDataFrame(geometry=[gdf_tm.unary_union], crs=gdf_tm.crs)
+                        entidades_a_procesar.append(("DEPARTAMENTAL", "depto", "ANTIOQUIA", gdf_depto))
+                        
+                except Exception as e:
+                    st.error(f"🚨 Error crítico ensamblando cartografía: {e}")
+                    st.stop()
+                    
+            total_entidades = len(entidades_a_procesar)
+            st.info(f"🔍 Cartografía lista: {total_entidades} unidades territoriales en cola. Iniciando motor de forja...")
 
-        barra_progreso = st.progress(0)
-        texto_progreso = st.empty()
-        resultados_forja = []
+            barra_progreso = st.progress(0)
+            texto_progreso = st.empty()
+            resultados_forja = []
 
-        # 🧠 FUNCION TRABAJADORA AISLADA (Para evitar colisiones de memoria)
-        def forjador_worker(pack):
-            i, nivel, col, nombre = pack
-            try:
-                gdf_poligono = gdf_todas_cuencas[gdf_todas_cuencas[col] == nombre].copy()
-                if gdf_poligono.empty: return None
-                
-                if len(gdf_poligono) > 1:
+            # 🧠 FUNCION TRABAJADORA AISLADA (Para evitar colisiones de memoria)
+            def forjador_worker(pack):
+                i, nivel, col, nombre, gdf_poligono = pack
+                try:
                     import shapely.validation
-                    geometrias_validas = gdf_poligono.geometry.apply(lambda geom: shapely.validation.make_valid(geom) if not geom.is_valid else geom)
-                    gdf_poligono = gpd.GeoDataFrame({'geometry': [geometrias_validas.unary_union]}, crs=gdf_todas_cuencas.crs)
-                
-                # 🚀 FIX APLICADO: Solo 2 parámetros
-                arr_dem, meta_dem, _ = cargar_y_cortar_dem(gdf_poligono, nombre)
-                
-                if arr_dem is not None and not np.isnan(arr_dem).all():
-                    elevs_valid = arr_dem[~np.isnan(arr_dem)].flatten()
-                    if len(elevs_valid) < 10: return None
+                    import numpy as np
                     
-                    elevs_sorted = np.sort(elevs_valid)[::-1]
-                    total_pixels = len(elevs_sorted)
-                    x_pct = np.linspace(0, 100, total_pixels)
-                    idx = np.linspace(0, total_pixels-1, min(400, total_pixels), dtype=int)
+                    # Limpieza geométrica
+                    if len(gdf_poligono) > 1:
+                        geometrias_validas = gdf_poligono.geometry.apply(lambda geom: shapely.validation.make_valid(geom) if not geom.is_valid else geom)
+                        gdf_poligono = gpd.GeoDataFrame({'geometry': [geometrias_validas.unary_union]}, crs=gdf_poligono.crs)
                     
-                    z_poly = np.polyfit(elevs_sorted[idx], x_pct[idx], 3)
-                    p_func = np.poly1d(z_poly)
-                    r2 = 1 - (np.sum((x_pct[idx] - p_func(elevs_sorted[idx])) ** 2) / (np.sum((x_pct[idx] - np.mean(x_pct[idx])) ** 2) + 1e-9))
+                    # Corte Raster (DEM_PATH debe estar definido en tu código global)
+                    arr_dem, meta_dem, _ = cargar_y_cortar_dem(DEM_PATH, gdf_poligono, nombre)
                     
-                    t_norm = normalizar_texto(nombre).upper().replace(" ", "_")
-                    
-                    return {
-                        "LLAVE_UNIVERSAL": f"{nivel.upper()}_{t_norm}_TOTAL",
-                        "Territorio": nombre, "Nivel": nivel,
-                        "Coef_C3": float(z_poly[0]), "Coef_C2": float(z_poly[1]),
-                        "Coef_C1": float(z_poly[2]), "Coef_C0": float(z_poly[3]),
-                        "R2_Ajuste": float(r2), "H_Minima": float(np.min(elevs_valid)),
-                        "H_Maxima": float(np.max(elevs_valid)), "H_Media": float(np.mean(elevs_valid))
-                    }
-            except Exception: return None
+                    if arr_dem is not None and not np.isnan(arr_dem).all():
+                        elevs_valid = arr_dem[~np.isnan(arr_dem)].flatten()
+                        if len(elevs_valid) < 10: return None
+                        
+                        elevs_sorted = np.sort(elevs_valid)[::-1]
+                        total_pixels = len(elevs_sorted)
+                        x_pct = np.linspace(0, 100, total_pixels)
+                        idx = np.linspace(0, total_pixels-1, min(400, total_pixels), dtype=int)
+                        
+                        z_poly = np.polyfit(elevs_sorted[idx], x_pct[idx], 3)
+                        p_func = np.poly1d(z_poly)
+                        r2 = 1 - (np.sum((x_pct[idx] - p_func(elevs_sorted[idx])) ** 2) / (np.sum((x_pct[idx] - np.mean(x_pct[idx])) ** 2) + 1e-9))
+                        
+                        # 🚀 LLAVE UNIVERSAL ESTRUCTURADA
+                        t_norm = normalizar_texto(nombre).upper()
+                        # Parches para coincidencias exactas
+                        t_norm = t_norm.replace("VALLE DE ABURRA", "AMVA").replace(" ", "_")
+                        
+                        # Si es cuenca, el nivel ya viene como AH, ZH, etc. Si es admin, es MUNICIPAL, REGIONAL, etc.
+                        return {
+                            "LLAVE_UNIVERSAL": f"{nivel.upper()}_{t_norm}_TOTAL",
+                            "Territorio": str(nombre).title(), 
+                            "Nivel": nivel.upper(),
+                            "Coef_C3": float(z_poly[0]), "Coef_C2": float(z_poly[1]),
+                            "Coef_C1": float(z_poly[2]), "Coef_C0": float(z_poly[3]),
+                            "R2_Ajuste": float(r2), "H_Minima": float(np.min(elevs_valid)),
+                            "H_Maxima": float(np.max(elevs_valid)), "H_Media": float(np.mean(elevs_valid))
+                        }
+                except Exception: return None
 
-        # 🌪️ EJECUCIÓN MULTIHILO
-        paquetes = [(i, niv, c, nom) for i, (niv, c, nom) in enumerate(entidades_a_procesar)]
-        procesados = 0
-        
-        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-            futuros = {executor.submit(forjador_worker, pack): pack for pack in paquetes}
+            # 🌪️ EJECUCIÓN (Procesamiento Secuencial seguro para RAM)
+            paquetes = [(i, niv, c, nom, poly) for i, (niv, c, nom, poly) in enumerate(entidades_a_procesar)]
+            procesados = 0
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                futuros = {executor.submit(forjador_worker, pack): pack for pack in paquetes}
+                
+                for futuro in concurrent.futures.as_completed(futuros):
+                    procesados += 1
+                    try:
+                        res = futuro.result()
+                        if res: resultados_forja.append(res)
+                    except Exception: pass 
+                    
+                    gc.collect()
+                    st.cache_data.clear() 
+                    
+                    if procesados % 5 == 0 or procesados == total_entidades:
+                        barra_progreso.progress(procesados / total_entidades)
+                        texto_progreso.text(f"🚀 Forjando ecosistema multiescalar: [{procesados}/{total_entidades}] procesados...")
+
+            texto_progreso.text("📦 Empaquetando Matriz Maestra y enviando a SQL...")
             
-            for futuro in concurrent.futures.as_completed(futuros):
-                procesados += 1
-                res = futuro.result()
-                if res: resultados_forja.append(res)
-                
-                # Actualizamos la UI cada 10 cuencas para no asfixiar el navegador
-                if procesados % 10 == 0 or procesados == total_entidades:
-                    barra_progreso.progress(procesados / total_entidades)
-                    texto_progreso.text(f"🚀 Forjando ecosistema: [{procesados}/{total_entidades}] procesados...")
-
-        texto_progreso.text("📦 Empaquetando Matriz Maestra y enviando a SQL...")
-        
-        if resultados_forja:
-            df_matriz_geomorfo = pd.DataFrame(resultados_forja)
-            try:
-                with engine_sql.connect() as conn:
-                    conn.execute(text('''
-                        CREATE TABLE IF NOT EXISTS matriz_hidrogeomorfologica_maestra (
-                            "LLAVE_UNIVERSAL" TEXT PRIMARY KEY,
-                            "Territorio" TEXT, "Nivel" TEXT,
-                            "Coef_C3" FLOAT, "Coef_C2" FLOAT, "Coef_C1" FLOAT, "Coef_C0" FLOAT,
-                            "R2_Ajuste" FLOAT, "H_Minima" FLOAT, "H_Maxima" FLOAT, "H_Media" FLOAT
-                        );
-                    '''))
-                    conn.execute(text("DELETE FROM matriz_hidrogeomorfologica_maestra;"))
+            if resultados_forja:
+                import pandas as pd
+                df_matriz_geomorfo = pd.DataFrame(resultados_forja)
+                try:
+                    with engine_sql.connect() as conn:
+                        conn.execute(text('''
+                            CREATE TABLE IF NOT EXISTS matriz_hidrogeomorfologica_maestra (
+                                "LLAVE_UNIVERSAL" TEXT PRIMARY KEY,
+                                "Territorio" TEXT, "Nivel" TEXT,
+                                "Coef_C3" FLOAT, "Coef_C2" FLOAT, "Coef_C1" FLOAT, "Coef_C0" FLOAT,
+                                "R2_Ajuste" FLOAT, "H_Minima" FLOAT, "H_Maxima" FLOAT, "H_Media" FLOAT
+                            );
+                        '''))
+                        conn.execute(text("DELETE FROM matriz_hidrogeomorfologica_maestra;"))
                     
-                df_matriz_geomorfo.to_sql('matriz_hidrogeomorfologica_maestra', engine_sql, if_exists='append', index=False)
-                
-                barra_progreso.progress(1.0)
-                st.success(f"✅ **¡FORJA MASIVA COMPLETADA!** {len(df_matriz_geomorfo)} ecuaciones guardadas exitosamente.")
-            except Exception as e:
-                st.error(f"🚨 Error inyectando a SQL: {e}")
-        else:
-            st.warning("No se generó ningún resultado válido.")
+                    df_matriz_geomorfo.to_sql('matriz_hidrogeomorfologica_maestra', engine_sql, if_exists='append', index=False)
+                    
+                    barra_progreso.progress(1.0)
+                    st.success(f"✅ **¡FORJA MASIVA COMPLETADA!** {len(df_matriz_geomorfo)} territorios procesados (Cuencas + Municipios + Regiones + CARs + Depto).")
+                except Exception as e:
+                    st.error(f"🚨 Error inyectando a SQL: {e}")
+            else:
+                st.warning("No se generó ningún resultado válido.")

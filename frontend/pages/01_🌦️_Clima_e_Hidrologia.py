@@ -50,6 +50,16 @@ except ImportError as e:
 # 5. MENÚ DE NAVEGACIÓN
 selectors.renderizar_menu_navegacion("Clima e Hidrología")
 
+# --- INICIALIZACIÓN ESTRUCTURAL DE ESCALAS ---
+nivel_norm = str(st.session_state.get('aleph_escala', '')).upper().strip()
+es_nacional = "NACION" in nivel_norm
+es_departamento = "DEPARTAMENTO" in nivel_norm or "DEPARTAMENTAL" in nivel_norm
+es_municipio = "MUNICIPAL" in nivel_norm or "MUNICIPIO" in nivel_norm
+es_region = "REGION" in nivel_norm or "SUBREGION" in nivel_norm
+es_car = "CAR" in nivel_norm or "AUTORIDAD" in nivel_norm
+es_cuenca = "CUENCA" in nivel_norm or "NSS" in nivel_norm or "SZH" in nivel_norm
+# ---------------------------------------------
+
 # 6. SINCRONIZACIÓN CLIMÁTICA (NOAA/IRI)
 if 'enso_fase' not in st.session_state:
     try:
@@ -120,7 +130,6 @@ def main():
         st.info("👈 Seleccione un Territorio (Cuenca, Municipio o Región) en el menú lateral para comenzar.")
         st.stop()
 
-    st.sidebar.markdown("---")
     buffer_km = st.sidebar.slider("🎯 Radio de Búsqueda (Buffer en km):", 0.0, 50.0, 15.0, 1.0)
     st.session_state['buffer_global_km'] = buffer_km
     st.session_state['nivel_activo_global'] = nivel_jerarquico
@@ -185,7 +194,8 @@ def main():
                         if mask_ideam.any():
                             gdf_zona_tmp = gdf_subcuencas[mask_ideam]
                             gdf_zona = gpd.GeoDataFrame(geometry=[gdf_zona_tmp.unary_union], crs=gdf_subcuencas.crs)
-                            encontrado = True; break
+                            encontrado = True
+                            break
                 if not encontrado:
                     def limpiar_texto(t):
                         if not isinstance(t, str): return ""
@@ -193,20 +203,70 @@ def main():
                     mask_c = gdf_subcuencas.apply(lambda row: limpiar_texto(lugar_crudo) in limpiar_texto(str(row.to_dict().values())), axis=1)
                     if mask_c.any():
                         gdf_zona_tmp = gdf_subcuencas[mask_c]
+                        # =========================================================================
+                        # 🛡️ INTERCEPTOR ESPACIAL ESTRICTO (MATA CLONES)
+                        # =========================================================================
+                        codigo_unico = st.session_state.get('aleph_codigo_cuenca', 'N/A')
+                    
+                        # Solo aplicamos la cirugía si el Aleph nos mandó un código IDEAM válido
+                        if codigo_unico != 'N/A':
+                            # Sobreescribimos la búsqueda por nombre con una búsqueda exacta por cédula
+                            mask_estricta = (gdf_subcuencas['NSS3'] == codigo_unico) | \
+                                            (gdf_subcuencas['NSS2'] == codigo_unico) | \
+                                            (gdf_subcuencas['NSS1'] == codigo_unico)
+                        
+                            if mask_estricta.any():
+                                gdf_zona_tmp = gdf_subcuencas[mask_estricta]
+                            
+                            # 🔪 SEGURO ANTI-FRANKENSTEIN: 
+                            # Una microcuenca específica SOLO puede tener un polígono. Si hay más, cortamos.
+                            if len(gdf_zona_tmp) > 1:
+                                gdf_zona_tmp = gdf_zona_tmp.iloc[[0]]
+                        # =========================================================================
+                    
                         gdf_zona = gpd.GeoDataFrame(geometry=[gdf_zona_tmp.unary_union], crs=gdf_subcuencas.crs)
                         encontrado = True
 
             if not encontrado and not es_cuenca:
-                gdf_tm = fetch_territorio_maestro() 
+                # 🚀 FIX 1: Traemos la función indestructible de descarga directa
+                @st.cache_data(ttl=86400, show_spinner=False)
+                def get_territorio_maestro():
+                    import requests, io
+                    url = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
+                    try:
+                        res = requests.get(url, timeout=20)
+                        if res.status_code == 200:
+                            return gpd.read_file(io.BytesIO(res.content))
+                    except Exception:
+                        pass
+                    return gpd.GeoDataFrame()
+
+                gdf_tm = get_territorio_maestro()
+                
                 if not gdf_tm.empty:
-                    if es_nacional or (es_departamento and ("ANTIOQUIA" in terr_norm or "COLOMBIA" in terr_norm)):
-                        col_depto = 'dpto_cnmbr' if 'dpto_cnmbr' in gdf_tm.columns else 'departamento'
-                        if col_depto in gdf_tm.columns and not es_nacional:
-                            mask = gdf_tm[col_depto].apply(norm_text).isin(['antioquia'])
-                        else: mask = pd.Series(True, index=gdf_tm.index)
+                    # Estandarizar columnas a minúsculas
+                    gdf_tm.columns = [c.lower() for c in gdf_tm.columns]
+                    
+                    # 🚀 FIX 2: Blindaje absoluto contra mayúsculas/minúsculas
+                    lugar_seguro = str(locals().get('nombre_zona', locals().get('lugar_crudo', '')))
+                    es_antioquia = "ANTIOQUIA" in lugar_seguro.upper() or "ANTIOQUIA" in str(terr_norm).upper()
+                    
+                    if es_nacional or es_departamento or es_antioquia:
+                        # Buscamos la columna de departamento
+                        col_depto = next((col for col in gdf_tm.columns if col in ['dpto_cnmbr', 'departamento']), None)
+                        
+                        if col_depto and not es_nacional:
+                            # Filtro indestructible
+                            mask = gdf_tm[col_depto].astype(str).str.upper().str.strip() == 'ANTIOQUIA'
+                        else:
+                            mask = pd.Series(True, index=gdf_tm.index)
+                            
                         if mask.any():
+                            # Reparamos geometrías y fusionamos
+                            gdf_tm['geometry'] = gdf_tm.geometry.make_valid()
                             gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
                             encontrado = True
+                            
                     elif es_region:
                         col_sub = 'subregion'
                         if col_sub in gdf_tm.columns:
@@ -214,6 +274,7 @@ def main():
                             if mask.any():
                                 gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
                                 encontrado = True
+                    
                     elif es_car:
                         col_car = 'car'
                         if col_car in gdf_tm.columns:
@@ -226,6 +287,7 @@ def main():
                             if mask.any():
                                 gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
                                 encontrado = True
+                    
                     elif es_municipio:
                         col_mpio = 'mpio_cnmbr' if 'mpio_cnmbr' in gdf_tm.columns else 'municipio'
                         if col_mpio in gdf_tm.columns:
@@ -236,7 +298,20 @@ def main():
 
     # --- D. CRUCE GEOGRÁFICO FINAL (CON BUFFER MÉTRICO Y LIMPIEZA) ---
     ids_estaciones = []
-    if gdf_zona is not None and not gdf_zona.empty and gdf_stations is not None and not gdf_stations.empty:
+    
+    # 🚀 FIX 1: Verificación temprana. Si el territorio falla, avisamos de inmediato.
+    if gdf_zona is None or gdf_zona.empty:
+        st.error("🚨 Error: No se pudo cargar el polígono del territorio. Asegúrate de tener el 'parche indestructible' de búsqueda territorial en esta página.")
+        st.stop()
+        
+    if gdf_stations is not None and not gdf_stations.empty:
+        # 🚀 FIX 2: Asignar sistema de coordenadas base (WGS84) ANTES de proyectar a metros
+        if gdf_zona.crs is None:
+            gdf_zona = gdf_zona.set_crs(epsg=4326)
+        if gdf_stations.crs is None:
+            gdf_stations = gdf_stations.set_crs(epsg=4326)
+            
+        # Proyección a metros (EPSG:3116 - MAGNA-SIRGAS Colombia)
         gdf_zona_proj = gdf_zona.to_crs(epsg=3116)
         gdf_stations_proj = gdf_stations.to_crs(epsg=3116)
         
@@ -244,13 +319,18 @@ def main():
         if cols_drop: gdf_stations_proj = gdf_stations_proj.drop(columns=cols_drop)
         
         if buffer_km > 0:
+            # 🚀 FIX 3: Reparar geometrías inválidas antes de inflar el buffer
+            gdf_zona_proj['geometry'] = gdf_zona_proj.geometry.make_valid()
             gdf_zona_proj['geometry'] = gdf_zona_proj.geometry.buffer(buffer_km * 1000)
         
-        estaciones_dentro = gpd.sjoin(gdf_stations_proj, gdf_zona_proj, predicate='intersects')
-        ids_estaciones = estaciones_dentro['id_estacion'].tolist()
+        # Cruce espacial estricto
+        estaciones_dentro = gpd.sjoin(gdf_stations_proj, gdf_zona_proj, how="inner", predicate='intersects')
+        
+        # 🚀 FIX 4: Usar .unique() para evitar que una estación cuente doble si toca múltiples sub-polígonos
+        ids_estaciones = estaciones_dentro['id_estacion'].unique().tolist()
 
     if not ids_estaciones:
-        st.warning(f"⚠️ No se encontraron estaciones meteorológicas a menos de {buffer_km} km de la zona: {nombre_zona}.")
+        st.warning(f"⚠️ No se encontraron estaciones meteorológicas a menos de {buffer_km} km de la zona.")
         st.info("💡 Sugerencia: Aumenta el 'Radio de Búsqueda' en el panel lateral.")
         st.stop()
 
@@ -430,6 +510,123 @@ def main():
     # 4. Ajuste de seguridad para year_range
     if 'year_range' not in locals() or year_range is None:
         year_range = [2020, 2026]
+
+    # =========================================================================
+    # 🌟 CEREBRO TELEMÉTRICO ESTRUCTURAL (FIX RAÍZ)
+    # =========================================================================
+    
+    # 🚀 0. DETECTOR DE CAMBIO DE TERRITORIO (El Descongelador)
+    territorio_actual = str(nombre_zona).strip().upper()
+    territorio_anterior = st.session_state.get('aleph_lugar_memoria', '')
+
+    if territorio_actual != territorio_anterior:
+        # ¡Cambio de rumbo detectado! Vaciamos la memoria vieja
+        keys_to_reset = ['aleph_area_km2', 'aleph_pob_total', 'aleph_altitud_m', 'aleph_altitud_max', 'aleph_altitud_min']
+        for k in keys_to_reset:
+            if k in st.session_state:
+                del st.session_state[k]
+        
+        # Guardamos el nuevo territorio para la próxima comparación
+        st.session_state['aleph_lugar_memoria'] = territorio_actual
+
+    # 1. Área
+    area_actual_km2 = float(st.session_state.get('aleph_area_km2', 0.0))
+    if area_actual_km2 <= 0 and gdf_zona is not None and not gdf_zona.empty:
+        try:
+            gdf_zona_calc = gdf_zona.copy()
+            if gdf_zona_calc.crs is None: 
+                gdf_zona_calc = gdf_zona_calc.set_crs("EPSG:4326")
+            gdf_zona_calc['geometry'] = gdf_zona_calc.geometry.make_valid()
+            area_actual_km2 = float(gdf_zona_calc.to_crs(epsg=3116).area.sum() / 1e6)
+            st.session_state['aleph_area_km2'] = area_actual_km2
+        except Exception:
+            pass
+
+    # 2. Población Estructural (Conectado al motor demográfico oficial)
+    pob_actual = float(st.session_state.get('aleph_pob_total', 0.0))
+    if pob_actual <= 0:
+        try:
+            # 🚀 CIRUGÍA ESTRUCTURAL: Importamos tu motor demográfico
+            from modules.demografia_tools import calcular_poblacion_al_vuelo
+            
+            # Usamos las variables globales que ya tienes en la página 01
+            datos_demo = calcular_poblacion_al_vuelo(nombre_zona, nivel_jerarquico, "Total")
+            
+            if datos_demo is not None and len(datos_demo.get('hist_pob', [])) > 0:
+                # Tomamos la población proyectada más reciente (el último dato de la lista)
+                pob_real_dane = float(datos_demo['hist_pob'][-1])
+                st.session_state['aleph_pob_total'] = pob_real_dane
+            elif area_actual_km2 > 0:
+                # Solo si el DANE no tiene la cuenca/municipio, usamos la densidad matemática
+                st.session_state['aleph_pob_total'] = max((area_actual_km2 * 35.0), 10000.0)
+        except Exception as e:
+            # Fallback silencioso en caso de error de red
+            pass
+
+    # 3. 🚀 NUEVO: Conexión directa a la Matriz Maestra (Supabase)
+    try:
+        from modules.db_manager import get_engine
+        from sqlalchemy import text
+        import pandas as pd
+        
+        zona_limpia = str(nombre_zona).replace("CAR: ", "").strip()
+        q_matriz = text('''
+            SELECT "Altitud_m" 
+            FROM matriz_hidrologica_maestra 
+            WHERE UPPER(TRIM("Territorio")) = UPPER(TRIM(:t_nom))
+            LIMIT 1
+        ''')
+        
+        df_matriz = pd.read_sql(q_matriz, get_engine(), params={"t_nom": zona_limpia})
+        
+        if not df_matriz.empty:
+            # Si el modelo ya se corrió, extraemos la altitud exacta del raster
+            alt_real = float(df_matriz['Altitud_m'].iloc[0])
+            st.session_state['aleph_altitud_m'] = alt_real
+            st.session_state['aleph_altitud_max'] = alt_real # Se emparejan por consistencia visual
+            st.session_state['aleph_altitud_min'] = alt_real
+        else:
+            # Si no está forjada en la BD, la forzamos a 0 para detonar la advertencia
+            if 'aleph_altitud_m' not in st.session_state or st.session_state['aleph_altitud_m'] == 1500.0:
+                st.session_state['aleph_altitud_m'] = 0.0
+    except Exception:
+        pass
+
+    # Calculamos y fijamos la población estructuralmente para todas las pestañas
+    pob_actual = float(st.session_state.get('aleph_pob_total', 0.0))
+    if pob_actual <= 0:
+        str_zona = str(nombre_zona).upper()
+        if "ANTIOQUIA" in str_zona:
+            st.session_state['aleph_pob_total'] = 6901160.0
+        elif "COLOMBIA" in str_zona:
+            st.session_state['aleph_pob_total'] = 52828000.0
+        elif area_actual_km2 > 0:
+            st.session_state['aleph_pob_total'] = max((area_actual_km2 * 35.0), 10000.0)
+
+# =========================================================================
+    # 🌟 INYECCIÓN DE CLIMA GLOBAL EN VIVO (BYPASS TABLAS ESTÁTICAS)
+    # =========================================================================
+    # El sistema estaba usando un df_enso estático y viejo. Lo reemplazamos al vuelo:
+    try:
+        from modules.climate_api import get_live_oni_data, get_live_soi_data, get_live_iod_data
+        
+        df_oni_vivo, _ = get_live_oni_data()
+        df_soi_vivo, _ = get_live_soi_data()
+        df_iod_vivo, _ = get_live_iod_data()
+        
+        if df_oni_vivo is not None and not df_oni_vivo.empty:
+            df_enso_vivo = df_oni_vivo.copy()
+            
+            # Juntamos los tres índices en una sola tabla maestra actualizada
+            if df_soi_vivo is not None and not df_soi_vivo.empty:
+                df_enso_vivo = pd.merge(df_enso_vivo, df_soi_vivo, on='fecha', how='left')
+            if df_iod_vivo is not None and not df_iod_vivo.empty:
+                df_enso_vivo = pd.merge(df_enso_vivo, df_iod_vivo, on='fecha', how='left')
+                
+            # 🚀 EL GOLPE MAESTRO: Sobreescribimos la variable vieja
+            df_enso = df_enso_vivo
+    except Exception as e:
+        print(f"Error en bypass de clima: {e}")
 
     # Argumentos Globales para Visualizer
     display_args = {
@@ -844,7 +1041,8 @@ def main():
     elif selected_module == "🌀 Dinámica de Sistemas": 
         viz.display_enso_system_dynamics_tab(
             df_monthly_filtered=display_args["df_monthly_filtered"],
-            nombre_zona=nombre_zona
+            nombre_zona=nombre_zona,
+            gdf_zona=gdf_zona
         )
     
     # --- MÓDULO: MAPAS AVANZADOS (VERSIÓN DEFINITIVA CORREGIDA) ---
@@ -1027,7 +1225,8 @@ def main():
             # 4. PROCESAMIENTO DEM Y COBERTURAS
             # Usamos las rutas directas de Config (que ahora apuntan a la nube)
             dem_path = Config.DEM_FILE_PATH
-            cov_path = Config.LAND_COVER_RASTER_PATH
+            # 🚀 FIX: Usamos el nombre estandarizado y añadimos un buscador por si acaso
+            cov_path = getattr(Config, 'LAND_COVER_FILE_PATH', getattr(Config, 'LAND_COVER_RASTER_PATH', None))
 
             dem_array = None
             with st.spinner("🏔️ Conectando con Supabase y procesando topografía..."):
@@ -1455,18 +1654,27 @@ def main():
                     prog_nivel = st.progress(0, text="Iniciando motores espaciales...")
 
                     # 1. Cargamos el clima global (Estaciones y Lluvia)
-                    with st.spinner("📡 Cargando red de Estaciones Climáticas..."):
+                    with st.spinner("📡 Cargando red de Estaciones y Perfiles Mensuales..."):
                         q_est = text("SELECT id_estacion, altitud, ST_SetSRID(ST_MakePoint(CAST(longitud AS FLOAT), CAST(latitud AS FLOAT)), 4326) as geometry FROM estaciones WHERE latitud IS NOT NULL")
                         gdf_est = cargar_capa_espacial_cache(q_est, geom_col="geometry").to_crs("EPSG:3116")
                         gdf_est['id_estacion'] = gdf_est['id_estacion'].astype(str)
                         
-                        df_rain = pd.read_sql("SELECT id_estacion, AVG(valor)*12 as ppt FROM precipitacion GROUP BY id_estacion", engine)
-                        # 🚀 FIX QUIRÚRGICO: Verificar que la columna exista antes de modificarla
-                        if not df_rain.empty and 'id_estacion' in df_rain.columns:
-                            df_rain['id_estacion'] = df_rain['id_estacion'].astype(str)
+                        # 🚀 EXTRACCIÓN HÍBRIDA: Traemos el promedio por MES de la BD para no saturar la RAM
+                        q_meses = text("""
+                            SELECT id_estacion, EXTRACT(month FROM fecha) as mes, AVG(valor) as ppt_mes
+                            FROM precipitacion 
+                            GROUP BY id_estacion, EXTRACT(month FROM fecha)
+                        """)
+                        df_rain_mes = pd.read_sql(q_meses, engine)
+                        
+                        if not df_rain_mes.empty and 'id_estacion' in df_rain_mes.columns:
+                            df_rain_mes['id_estacion'] = df_rain_mes['id_estacion'].astype(str)
+                            # Precalculamos el anual multiplicando el promedio mensual por 12
+                            df_rain_anual = df_rain_mes.groupby('id_estacion')['ppt_mes'].sum().reset_index(name='ppt')
                         else:
                             st.warning("⚠️ No se encontraron datos históricos de lluvia. Los cálculos asumirán 2500mm por defecto.")
-                            df_rain = pd.DataFrame(columns=['id_estacion', 'ppt'])
+                            df_rain_anual = pd.DataFrame(columns=['id_estacion', 'ppt'])
+                            df_rain_mes = pd.DataFrame(columns=['id_estacion', 'mes', 'ppt_mes'])
 
                     res_multiescala = []
 
@@ -1495,10 +1703,22 @@ def main():
                                 est_in = gdf_est[gdf_est.geometry.within(buf)]
                                 
                                 ppt_media, altitud_media = 2500.0, 1500.0
+                                dict_meses = {m: 0.0 for m in range(1, 13)}
+                                
                                 if not est_in.empty:
                                     ids = est_in['id_estacion'].tolist()
-                                    vals_ppt = df_rain[df_rain['id_estacion'].isin(ids)]['ppt']
+                                    
+                                    # 1. Total Anual
+                                    vals_ppt = df_rain_anual[df_rain_anual['id_estacion'].isin(ids)]['ppt']
                                     if not vals_ppt.empty: ppt_media = vals_ppt.mean()
+                                    
+                                    # 2. Perfil Mensual (El ADN estacional de visualizer.py)
+                                    df_local_mes = df_rain_mes[df_rain_mes['id_estacion'].isin(ids)]
+                                    if not df_local_mes.empty:
+                                        promedios = df_local_mes.groupby('mes')['ppt_mes'].mean().to_dict()
+                                        for m in range(1, 13):
+                                            dict_meses[m] = promedios.get(m, 0.0)
+                                            
                                     vals_alt = est_in['altitud'].dropna()
                                     if not vals_alt.empty: altitud_media = vals_alt.mean()
                                     
@@ -1522,7 +1742,14 @@ def main():
                                     "ETR_mm": round(etr, 0),
                                     "Recarga_mm": round(recarga_mm, 0),
                                     "Escorrentia_mm": round(escorrentia_superficial, 0),
-                                    "Caudal_Medio_m3s": round(q_medio + q_base, 3)
+                                    "Caudal_Medio_m3s": round(q_medio + q_base, 3),
+                                    # 🚀 COLUMNAS DEL CEREBRO MULTIESCALAR
+                                    "P_01": round(dict_meses[1], 1), "P_02": round(dict_meses[2], 1),
+                                    "P_03": round(dict_meses[3], 1), "P_04": round(dict_meses[4], 1),
+                                    "P_05": round(dict_meses[5], 1), "P_06": round(dict_meses[6], 1),
+                                    "P_07": round(dict_meses[7], 1), "P_08": round(dict_meses[8], 1),
+                                    "P_09": round(dict_meses[9], 1), "P_10": round(dict_meses[10], 1),
+                                    "P_11": round(dict_meses[11], 1), "P_12": round(dict_meses[12], 1)
                                 })
                         return paso_actual
 
@@ -1666,7 +1893,6 @@ def main():
                         
                         def forjar_llave_hidro(row):
                             jerarquia = str(row.get('Jerarquia', '')).upper()
-                            # 🚀 FIX QUIRÚRGICO 3: Homologar nombres de jerarquías con selectors.py
                             if jerarquia in ["DEPARTAMENTAL", "DEPARTAMENTO"]: 
                                 jerarquia = "DEPARTAMENTO"
                             elif jerarquia in ["REGIONAL", "REGION", "SUBREGION"]: 
@@ -1684,8 +1910,17 @@ def main():
                         df_matriz = df_matriz.drop_duplicates(subset=['LLAVE_UNIVERSAL'], keep='first')
                         
                         with engine.begin() as conn:
+                            # 1. Aseguramos la columna de la llave
                             conn.execute(text('ALTER TABLE matriz_hidrologica_maestra ADD COLUMN IF NOT EXISTS "LLAVE_UNIVERSAL" TEXT;'))
+                            
+                            # 🚀 FIX: Forzamos a PostgreSQL a crear las 12 columnas mensuales si no existen
+                            for i in range(1, 13):
+                                conn.execute(text(f'ALTER TABLE matriz_hidrologica_maestra ADD COLUMN IF NOT EXISTS "P_{i:02d}" FLOAT;'))
+                                
+                            # 2. Vaciamos la tabla vieja
                             conn.execute(text("DELETE FROM matriz_hidrologica_maestra;"))
+                            
+                        # 3. Inyectamos la nueva matriz completa
                         df_matriz.to_sql("matriz_hidrologica_maestra", engine, if_exists='append', index=False)
                         st.cache_data.clear()
                         st.success(f"✅ EL ALEPH ESTÁ COMPLETO. {len(df_matriz)} territorios sincronizados.")

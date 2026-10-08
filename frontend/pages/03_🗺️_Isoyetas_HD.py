@@ -35,6 +35,16 @@ st.title("🗺️ Generador Avanzado de Isoyetas (Escenarios & Pronósticos)")
 # Llama al menú expandible y resalta la página actual
 selectors.renderizar_menu_navegacion("Isoyetas HD")
 
+# --- INICIALIZACIÓN ESTRUCTURAL DE ESCALAS ---
+nivel_norm = str(st.session_state.get('aleph_escala', '')).upper().strip()
+es_nacional = "NACION" in nivel_norm
+es_departamento = "DEPARTAMENTO" in nivel_norm or "DEPARTAMENTAL" in nivel_norm
+es_municipio = "MUNICIPAL" in nivel_norm or "MUNICIPIO" in nivel_norm
+es_region = "REGION" in nivel_norm or "SUBREGION" in nivel_norm
+es_car = "CAR" in nivel_norm or "AUTORIDAD" in nivel_norm
+es_cuenca = "CUENCA" in nivel_norm or "NSS" in nivel_norm or "SZH" in nivel_norm
+# ---------------------------------------------
+
 # ==========================================
 # SECCIÓN DE UI: SELECTORES DE INTERPOLACIÓN
 # ==========================================
@@ -48,12 +58,15 @@ opciones_metodo = {
     "Tendencia Lineal": "trend"
 }
 
-metodo_seleccionado = st.sidebar.selectbox("Método de Interpolación:", options=list(opciones_metodo.keys()), index=0)
+# 🚀 FIX: index=1 pone "Kriging con Deriva Externa (KED)" por defecto
+metodo_seleccionado = st.sidebar.selectbox("Método de Interpolación:", options=list(opciones_metodo.keys()), index=1)
 metodo_codigo = opciones_metodo[metodo_seleccionado]
 
-modelo_var_codigo = 'spherical'
+# Ajustamos también el valor base de respaldo
+modelo_var_codigo = 'exponential'
 if "Kriging" in metodo_seleccionado:
-    modelo_var_seleccionado = st.sidebar.selectbox("Modelo de Variograma:", options=["Esférico", "Exponencial", "Gaussiano"], index=0)
+    # 🚀 FIX: index=1 pone "Exponencial" por defecto
+    modelo_var_seleccionado = st.sidebar.selectbox("Modelo de Variograma:", options=["Esférico", "Exponencial", "Gaussiano"], index=1)
     mapa_variogramas = {"Esférico": "spherical", "Exponencial": "exponential", "Gaussiano": "gaussian"}
     modelo_var_codigo = mapa_variogramas[modelo_var_seleccionado]
 
@@ -176,26 +189,54 @@ if gdf_zona is None or gdf_zona.empty:
                         def limpiar_texto(t):
                             if not isinstance(t, str): return ""
                             return re.sub(r'[^A-Z0-9]', '', ''.join(c for c in unicodedata.normalize('NFD', t.upper()) if unicodedata.category(c) != 'Mn'))
+                        
                         terr_limpio = limpiar_texto(lugar_crudo)
                         mask_c = gdf_subcuencas.apply(lambda row: terr_limpio in limpiar_texto(str(row.to_dict().values())), axis=1)
+                        
                         if mask_c.any():
                             gdf_zona_tmp = gdf_subcuencas[mask_c]
+                            
+                            # =========================================================================
+                            # 🛡️ INTERCEPTOR ESPACIAL ESTRICTO (MATA CLONES)
+                            # =========================================================================
+                            codigo_unico = st.session_state.get('aleph_codigo_cuenca', 'N/A')
+                            
+                            if codigo_unico != 'N/A':
+                                mask_estricta = (gdf_subcuencas['NSS3'] == codigo_unico) | \
+                                                (gdf_subcuencas['NSS2'] == codigo_unico) | \
+                                                (gdf_subcuencas['NSS1'] == codigo_unico)
+                                
+                                if mask_estricta.any():
+                                    gdf_zona_tmp = gdf_subcuencas[mask_estricta]
+                                    
+                            # 🔪 SEGURO ANTI-FRANKENSTEIN
+                            if len(gdf_zona_tmp) > 1:
+                                gdf_zona_tmp = gdf_zona_tmp.iloc[[0]]
+                            # =========================================================================
+                            
                             gdf_zona = gpd.GeoDataFrame(geometry=[gdf_zona_tmp.unary_union], crs=gdf_subcuencas.crs)
                             encontrado = True
 
             # --- 2. BÚSQUEDA TERRITORIAL ESTRUCTURAL ---
             if not encontrado and not es_cuenca:
-                gdf_tm = fetch_territorio_maestro() # Llamada segura a la caché global
+                gdf_tm = fetch_territorio_maestro() 
                 
                 if not gdf_tm.empty:
-                    if es_nacional or (es_departamento and ("ANTIOQUIA" in terr_norm or "COLOMBIA" in terr_norm)):
-                        col_depto = 'dpto_cnmbr' if 'dpto_cnmbr' in gdf_tm.columns else 'departamento'
-                        if col_depto in gdf_tm.columns and not es_nacional:
-                            mask = gdf_tm[col_depto].apply(norm_text).isin(['antioquia'])
+                    # 🚀 FIX: Blindaje absoluto contra mayúsculas/minúsculas
+                    es_antioquia = "ANTIOQUIA" in str(nombre_zona).upper() or "ANTIOQUIA" in str(terr_norm).upper()
+                    
+                    if es_nacional or es_departamento or es_antioquia:
+                        # Búsqueda dinámica de la columna
+                        col_depto = next((col for col in gdf_tm.columns if col.lower() in ['dpto_cnmbr', 'departamento']), None)
+                        
+                        if col_depto and not es_nacional:
+                            mask = gdf_tm[col_depto].astype(str).str.upper().str.strip() == 'ANTIOQUIA'
                         else:
                             mask = pd.Series(True, index=gdf_tm.index)
                             
                         if mask.any():
+                            # Reparación de geometrías por si vienen defectuosas del GeoJSON
+                            gdf_tm['geometry'] = gdf_tm.geometry.make_valid()
                             gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
                             encontrado = True
                                 
@@ -402,7 +443,6 @@ elif tipo_analisis == "Pronóstico Futuro":
 
 paleta_colores = st.sidebar.selectbox("🎨 Escala de Color:", options=["YlGnBu", "Jet", "Portland", "Viridis", "RdBu"], index=0)
 
-st.sidebar.markdown("---")
 st.sidebar.subheader("🗺️ Capas Vectoriales")
 ver_cuencas = st.sidebar.checkbox("✅ Ver Capa de Cuencas", value=True)
 ver_municipios = st.sidebar.checkbox("🏙️ Ver Capa de Municipios", value=False)
@@ -418,7 +458,6 @@ if complete_series: do_interp_temp = st.sidebar.checkbox("🔄 Interpolación Te
 ver_error = st.sidebar.checkbox("📉 Ver Incertidumbre (Varianza)", value=False, help="Muestra las zonas de mayor error predictivo (solo disponible para Kriging).")
 
 # --- NUEVAS HERRAMIENTAS V3.0 (Resolución, Suavizado e Info) ---
-st.sidebar.markdown("---")
 st.sidebar.subheader("🛠️ Herramientas de Renderizado")
 grid_res = st.sidebar.slider("Resolución Espacial (Píxeles):", min_value=50, max_value=500, value=200, step=50, help="Mayor resolución = isoyetas más definidas pero carga más lenta.")
 smooth_val = st.sidebar.slider("Suavizado de Curvas (Smooth):", min_value=0.0, max_value=1.3, value=1.0, step=0.1, help="0 = Cuadrículas crudas. 1.3 = Curvas muy fluidas.")
@@ -442,7 +481,6 @@ col_muni = detectar_columna(gdf_meta, ['municipio', 'mpio'])
 col_alt = detectar_columna(gdf_meta, ['altitud' , 'alt_est'])
 col_cuenca = 'CUENCA_GIS' if 'CUENCA_GIS' in gdf_meta.columns else None
 
-st.sidebar.markdown("---")
 st.sidebar.subheader("🎯 Área de Influencia (Buffer)")
 buffer_km = st.sidebar.slider("Radio de Expansión (km):", min_value=0, max_value=50, value=15, step=5, 
                               help="Si el territorio está vacío, aumenta este radio para atrapar estaciones vecinas.")
@@ -605,22 +643,49 @@ with tab_mapa:
                             grid_z = np.zeros_like(gx_raw)
                             grid_z_var = None
 
+                        # ✂️ FIX: RECORTE ESPACIAL (CLIPPING A LA SILUETA DEL TERRITORIO)
+                        if gdf_zona is not None and not gdf_zona.empty:
+                            with st.spinner("Aplicando tijera espacial (recortando al límite territorial)..."):
+                                # 1. Unimos el polígono y le damos un micro-margen (buffer) para no morder los bordes
+                                poly_mask = gdf_zona.unary_union.buffer(0.005)
+                                # 2. Convertimos los puntos de la malla virtual en coordenadas geoespaciales
+                                puntos_malla = gpd.GeoSeries(gpd.points_from_xy(gx_raw.flatten(), gy_raw.flatten()), crs=gdf_zona.crs)
+                                # 3. Preguntamos cuáles puntos cayeron adentro de la silueta
+                                mask_adentro = puntos_malla.within(poly_mask).values
+                                # 4. A los que quedaron afuera, les asignamos NaN (transparencia total)
+                                grid_z.flat[~mask_adentro] = np.nan
+                                if grid_z_var is not None:
+                                    grid_z_var.flat[~mask_adentro] = np.nan
+
                         # --- SWITCH BLINDADO: ISOYETAS VS MAPA DE INCERTIDUMBRE ---
                         if ver_error and grid_z_var is not None and np.any(grid_z_var):
                             matriz_pintar = grid_z_var.T
                             titulo_color = "Error Prom."
                             escala_color = "Reds"
                             tit = f"Mapa de Incertidumbre (Varianza) | {metodo_seleccionado} | {nombre_zona}"
-                            z_min_map, z_max_map = np.min(grid_z_var), np.max(grid_z_var)
+                            if not np.isnan(matriz_pintar).all():
+                                z_min_map = np.nanpercentile(matriz_pintar, 5)
+                                z_max_map = np.nanpercentile(matriz_pintar, 95)
+                            else:
+                                z_min_map, z_max_map = 0, 100
                         else:
                             if ver_error:
-                                st.warning("⚠️ El modelo matemático tuvo que usar algoritmos de respaldo por falta de densidad de puntos en la zona. No hay matriz de varianza disponible.")
+                                st.warning("⚠️ El modelo matemático tuvo que usar algoritmos de respaldo. No hay matriz de varianza.")
                             matriz_pintar = grid_z.T
                             titulo_color = "mm/año"
                             escala_color = paleta_colores
                             tit = f"Isoyetas ({metodo_seleccionado}): {tipo_analisis} | {nombre_zona}"
-                            z_min_map, z_max_map = df_final['valor'].min(), df_final['valor'].max()
-                            if z_max_map == z_min_map: z_max_map += 0.1
+                            
+                            if not np.isnan(matriz_pintar).all():
+                                z_min_map = np.nanpercentile(matriz_pintar, 2)
+                                z_max_map = np.nanpercentile(matriz_pintar, 98)
+                            else:
+                                z_min_map, z_max_map = df_final['valor'].min(), df_final['valor'].max()
+                                
+                            # 🚀 FIX: Si Kriging colapsa y devuelve una planicie, forzamos la escala real
+                            if abs(z_max_map - z_min_map) < 1.0:
+                                z_min_map = df_final['valor'].min()
+                                z_max_map = df_final['valor'].max()
 
                         fig = go.Figure()
                         
@@ -652,7 +717,9 @@ with tab_mapa:
                             z=matriz_pintar, x=np.linspace(q_minx, q_maxx, grid_res), y=np.linspace(q_miny, q_maxy, grid_res),
                             colorscale=escala_color, zmin=z_min_map, zmax=z_max_map, colorbar=dict(title=titulo_color),
                             contours=dict(coloring='heatmap', showlabels=True, labelfont=dict(size=10, color='white')),
-                            opacity=0.8, connectgaps=True, line_smoothing=smooth_val
+                            opacity=0.8, 
+                            connectgaps=False, # ✂️ FIX MAGISTRAL: Falso para que Plotly respete las tijeras
+                            line_smoothing=smooth_val
                         ))
                         
                         # Inyección de las capas espaciales

@@ -37,9 +37,18 @@ st.set_page_config(page_title="Monitor de Biodiversidad", page_icon="🍃", layo
 # ==========================================
 # Llama al menú expandible y resalta la página actual
 selectors.renderizar_menu_navegacion("Biodiversidad y Servicios Ecosistémicos")
-
 # Encendido automático del Gemelo Digital (Lectura de matrices maestras)
 encender_gemelo_digital()
+
+# --- INICIALIZACIÓN ESTRUCTURAL DE ESCALAS ---
+nivel_norm = str(st.session_state.get('aleph_escala', '')).upper().strip()
+es_nacional = "NACION" in nivel_norm
+es_departamento = "DEPARTAMENTO" in nivel_norm or "DEPARTAMENTAL" in nivel_norm
+es_municipio = "MUNICIPAL" in nivel_norm or "MUNICIPIO" in nivel_norm
+es_region = "REGION" in nivel_norm or "SUBREGION" in nivel_norm
+es_car = "CAR" in nivel_norm or "AUTORIDAD" in nivel_norm
+es_cuenca = "CUENCA" in nivel_norm or "NSS" in nivel_norm or "SZH" in nivel_norm
+# ---------------------------------------------
 
 st.title("🍃 Biodiversidad y Servicios de la Naturaleza")
 st.markdown("""
@@ -152,11 +161,35 @@ if gdf_zona is None or gdf_zona.empty:
                         def limpiar_texto(t):
                             if not isinstance(t, str): return ""
                             return re.sub(r'[^A-Z0-9]', '', ''.join(c for c in unicodedata.normalize('NFD', t.upper()) if unicodedata.category(c) != 'Mn'))
+                        
                         terr_limpio = limpiar_texto(str(nombre_seleccion).replace("CAR: ", ""))
                         mask_c = gdf_subcuencas.apply(lambda row: terr_limpio in limpiar_texto(str(row.to_dict().values())), axis=1)
+                        
                         if mask_c.any():
                             gdf_zona_tmp = gdf_subcuencas[mask_c]
-                            gdf_zona = gpd.GeoDataFrame(geometry=[gdf_zona_tmp.unary_union], crs=gdf_zona_tmp.crs)
+                            
+                            # =========================================================================
+                            # 🛡️ INTERCEPTOR ESPACIAL ESTRICTO (MATA CLONES)
+                            # =========================================================================
+                            codigo_unico = st.session_state.get('aleph_codigo_cuenca', 'N/A')
+                            
+                            # Solo aplicamos la cirugía si el Aleph nos mandó un código IDEAM válido
+                            if codigo_unico != 'N/A':
+                                # Sobreescribimos la búsqueda por nombre con una búsqueda exacta por cédula
+                                mask_estricta = (gdf_subcuencas['NSS3'] == codigo_unico) | \
+                                                (gdf_subcuencas['NSS2'] == codigo_unico) | \
+                                                (gdf_subcuencas['NSS1'] == codigo_unico)
+                                
+                                if mask_estricta.any():
+                                    gdf_zona_tmp = gdf_subcuencas[mask_estricta]
+                                    
+                                # 🔪 SEGURO ANTI-FRANKENSTEIN: 
+                                # Una microcuenca específica SOLO puede tener un polígono. Si hay más, cortamos.
+                                if len(gdf_zona_tmp) > 1:
+                                    gdf_zona_tmp = gdf_zona_tmp.iloc[[0]]
+                            # =========================================================================
+                            
+                            gdf_zona = gpd.GeoDataFrame(geometry=[gdf_zona_tmp.unary_union], crs=gdf_subcuencas.crs)
                             encontrado = True
 
             # --- 2. BÚSQUEDA TERRITORIAL ESTRUCTURAL (TerritorioMaestro.geojson) ---
@@ -179,18 +212,26 @@ if gdf_zona is None or gdf_zona.empty:
                     # Estandarizar columnas a minúsculas
                     gdf_tm.columns = [c.lower() for c in gdf_tm.columns]
                     
-                    if es_nacional:
-                        gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm.unary_union], crs=gdf_tm.crs)
-                        encontrado = True
+                    # 🚀 FIX: Rescate seguro de la variable sin importar cómo se llame en este archivo
+                    lugar_seguro = str(locals().get('nombre_zona', locals().get('lugar_crudo', '')))
+                    es_antioquia = "ANTIOQUIA" in lugar_seguro.upper() or "ANTIOQUIA" in str(terr_norm).upper()
+                    
+                    if es_nacional or es_departamento or es_antioquia:
+                        # Buscamos la columna de departamento
+                        col_depto = next((col for col in gdf_tm.columns if col in ['dpto_cnmbr', 'departamento']), None)
                         
-                    elif es_departamento:
-                        col_depto = 'dpto_cnmbr' if 'dpto_cnmbr' in gdf_tm.columns else 'departamento'
-                        if col_depto in gdf_tm.columns:
-                            mask = gdf_tm[col_depto].apply(norm_text) == terr_norm
-                            if mask.any():
-                                gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
-                                encontrado = True
-                                
+                        if col_depto and not es_nacional:
+                            # Filtro indestructible
+                            mask = gdf_tm[col_depto].astype(str).str.upper().str.strip() == 'ANTIOQUIA'
+                        else:
+                            mask = pd.Series(True, index=gdf_tm.index)
+                            
+                        if mask.any():
+                            # Reparamos geometrías y fusionamos
+                            gdf_tm['geometry'] = gdf_tm.geometry.make_valid()
+                            gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
+                            encontrado = True
+                            
                     elif es_region:
                         col_sub = 'subregion'
                         if col_sub in gdf_tm.columns:
@@ -262,7 +303,6 @@ st.sidebar.success(f"🔗 Conexión Aleph Activa: {nombre_seleccion}")
 import numpy as np
 
 # 🚀 RESTAURACIÓN DEL CONTROL TEMPORAL
-st.sidebar.markdown("---")
 anio_analisis = st.sidebar.slider("⏳ Año de Análisis Demográfico/Pecuario:", min_value=2020, max_value=2050, value=2026, step=1)
 
 pob_urbana_calc, pob_rural_calc, pob_total_base = 0, 0, 0
@@ -270,16 +310,45 @@ bovinos_reales, porcinos_reales, aves_reales = 0, 0, 0
 origen_humano = "No Identificado"
 origen_animal = "Sin Datos"
 
-# 1. ENRUTADOR MAESTRO (Misma lógica que el Dashboard 09)
-nivel_req = st.session_state.get('nivel_activo_global', 'NINGUNO')
+# ==============================================================================
+# 🔥 ENRUTADOR MAESTRO UNIVERSAL (Híbrido Blindado)
+# ==============================================================================
+# 1. Busca la llave moderna (aleph_escala) o hace fallback a la antigua (nivel_activo_global)
+nivel_req_raw = st.session_state.get('aleph_escala', st.session_state.get('nivel_activo_global', 'NINGUNO'))
+escala_upper = str(nivel_req_raw).upper().strip()
 
-if nivel_req in ["AH", "ZH", "SZH", "NSS1", "NSS2", "NSS3"]:
+# 2. Nivel Hidrográfico (Mantiene tu lista exacta intacta)
+if escala_upper in ["AH", "ZH", "SZH", "NSS1", "NSS2", "NSS3"] or "CUENCA" in escala_upper:
     nivel_demo = "Cuenca"
-elif "CORPOAMB" in nivel_req.upper() or "CAR" in nivel_req.upper():
+    nivel_req = "CUENCA"  # <- Crucial: En la Forja Pecuaria agrupamos todas bajo "CUENCA"
+
+# 3. Nivel Autoridad Ambiental
+elif "CORPOAMB" in escala_upper or "CAR" in escala_upper or "AUTORIDAD" in escala_upper:
     nivel_demo = "CAR"
     nivel_req = "CAR"
+
+# 4. Resto de Niveles Políticos
+elif "MUNICIP" in escala_upper:
+    nivel_demo = "MUNICIPAL"
+    nivel_req = "MUNICIPAL"
+elif "REGION" in escala_upper or "SUBREGION" in escala_upper:
+    nivel_demo = "REGIONAL"
+    nivel_req = "REGIONAL"
+elif "DEPARTAMENTO" in escala_upper or "DEPARTAMENTAL" in escala_upper:
+    nivel_demo = "DEPARTAMENTAL"
+    nivel_req = "DEPARTAMENTAL"
+elif "NACION" in escala_upper:
+    nivel_demo = "NACIONAL"
+    nivel_req = "NACIONAL"
+
+# 5. Fallback por defecto
 else:
-    nivel_demo = nivel_req
+    nivel_demo = nivel_req_raw
+    nivel_req = nivel_req_raw
+    
+# Alias de compatibilidad visual
+nivel_sel_interno = nivel_demo 
+nivel_sel_visual = nivel_demo
 
 @st.cache_data(ttl=3600)
 def consultar_matriz_sql_bio(tabla, territorio, nivel, col_nivel="Nivel"):
@@ -336,14 +405,34 @@ else:
     origen_humano = "Error SQL (Sin Datos)"
 
 # --- 3. CONEXIÓN AL MOTOR PECUARIO (Con Bypass AMVA) ---
-df_pec = consultar_matriz_sql_bio("matriz_maestra_pecuaria", nombre_seleccion, nivel_demo, "Nivel")
+import re
+
+# 🚀 FIX: Limpiamos el nombre del Aleph para que coincida exactamente con la pureza de Supabase
+nombre_pec_limpio = str(nombre_seleccion).split(" - (")[0].strip()
+nombre_pec_limpio = re.sub(r'\s*-?\s*NSS\b', '', nombre_pec_limpio, flags=re.IGNORECASE).strip()
+
+# Usamos la variable limpia y nivel_req para buscar en la base de datos
+df_pec = consultar_matriz_sql_bio("matriz_maestra_pecuaria", nombre_pec_limpio, nivel_req, "Nivel")
+
+# 🚑 RESCATE: Si no encuentra como AH/ZH, intenta con el nivel genérico "Cuenca"
+if df_pec.empty and nivel_demo == "Cuenca":
+    df_pec = consultar_matriz_sql_bio("matriz_maestra_pecuaria", nombre_pec_limpio, "Cuenca", "Nivel")
 
 if not df_pec.empty:
     for _, f in df_pec.iterrows():
-        if f['Especie'] == 'Bovinos': bovinos_reales = max(0.0, proyectar_modelo_bio(f, anio_analisis))
-        if f['Especie'] == 'Porcinos': porcinos_reales = max(0.0, proyectar_modelo_bio(f, anio_analisis))
-        if f['Especie'] == 'Aves': aves_reales = max(0.0, proyectar_modelo_bio(f, anio_analisis))
-    origen_animal = f"Matriz SQL Exacta ({nivel_demo})"
+        if f['Especie'] == 'Bovinos': 
+            bovinos_reales = max(0.0, proyectar_modelo_bio(f, anio_analisis))
+            if bovinos_reales == 0.0: bovinos_reales = max(0.0, f.get('Poblacion_Base', 0.0))
+            
+        if f['Especie'] == 'Porcinos': 
+            porcinos_reales = max(0.0, proyectar_modelo_bio(f, anio_analisis))
+            if porcinos_reales == 0.0: porcinos_reales = max(0.0, f.get('Poblacion_Base', 0.0))
+            
+        if f['Especie'] == 'Aves': 
+            aves_reales = max(0.0, proyectar_modelo_bio(f, anio_analisis))
+            if aves_reales == 0.0: aves_reales = max(0.0, f.get('Poblacion_Base', 0.0))
+            
+    origen_animal = f"Matriz SQL Exacta ({nivel_req})"
 else:
     if nombre_seleccion == "AMVA":
         origen_animal = "Bypass Jurisdicción (Corantioquia asume Rural)"
@@ -1162,22 +1251,52 @@ with tab_ecologia:
                 st.info(f"🌊 Ancho de seguridad calculado por la física extrema del río: **{buffer_calculado:.1f} metros** por margen.")
                 buffer_m = buffer_calculado
             
-            with st.spinner("Calculando red riparia (Álgebra Lineal Rápida)..."):
-                # 🚀 FIX 1: Calculamos área SOLO con las líneas reales
+            with st.spinner("Calculando red riparia y cruzando coberturas (Geometría Exacta)..."):
+                # 1. Filtramos líneas y proyectamos al Origen Nacional (9377)
                 rios_solo_lineas = gdf_rios_actual[gdf_rios_actual.geometry.type.isin(['LineString', 'MultiLineString'])]
-                rios_3116 = rios_solo_lineas.to_crs(epsg=3116)
-                longitud_total_m = rios_3116.length.sum()
-                area_total_ha = (longitud_total_m * (buffer_m * 2) * 0.85) / 10000.0
+                rios_9377 = rios_solo_lineas.to_crs(epsg=9377)
+                
+                # 2. Creamos el polígono REAL del corredor (Buffer en metros)
+                if not rios_9377.empty:
+                    corredor_poly_9377 = rios_9377.buffer(buffer_m).unary_union
+                    area_total_ha = corredor_poly_9377.area / 10000.0
+                else:
+                    corredor_poly_9377 = None
+                    area_total_ha = 0.0
+                
                 st.metric("Área Total del Corredor", f"{area_total_ha:,.1f} ha")
                 
-                ha_bosque_aleph = st.session_state.get('aleph_ha_bosque', 0.0)
-                area_cuenca_aleph = st.session_state.get('area_total_cuenca_val', 0.0)
-                
-                if area_cuenca_aleph > 0: pct_bosque_existente = (ha_bosque_aleph / area_cuenca_aleph) * 100
-                else: pct_bosque_existente = 35.0 
+                # 3. CRUCE ESPACIAL (Análisis de Brechas exacto desde el Raster)
+                ha_bosque = 0.0
+                try:
+                    from modules.land_cover import calcular_estadisticas_zona
+                    from modules.config import Config
                     
-                ha_bosque = area_total_ha * (pct_bosque_existente / 100.0)
-                ha_deficit = area_total_ha - ha_bosque
+                    # 🚀 CONEXIÓN EXACTA A LA CONFIGURACIÓN ESTANDARIZADA
+                    ruta_raster_cobertura = Config.LAND_COVER_FILE_PATH
+                    
+                    if ruta_raster_cobertura:
+                        # Usamos el polígono exacto del buffer ripario en EPSG:9377
+                        corredor_gdf = gpd.GeoDataFrame(geometry=[corredor_poly_9377], crs="EPSG:9377")
+                        
+                        # Extraemos las estadísticas directamente del Raster
+                        stats_corredor = calcular_estadisticas_zona(corredor_gdf, ruta_raster_cobertura)
+                        
+                        if stats_corredor:
+                            # Sumamos el porcentaje de todo lo que sea bosque o vegetación
+                            pct_bosque = sum(pct for cov, pct in stats_corredor.items() if any(k in cov.lower() for k in ['bosque', 'vegetaci', 'arbust', 'natural']))
+                            
+                            # Convertimos el porcentaje en hectáreas reales
+                            ha_bosque = (pct_bosque / 100.0) * area_total_ha
+                        else:
+                            st.warning("⚠️ El corredor ripario cayó fuera del mapa de coberturas o el área es muy pequeña.")
+                    else:
+                        st.error("⚠️ La ruta del mapa de coberturas está vacía.")
+                        
+                except Exception as e:
+                    st.error(f"⚠️ Error matemático en el análisis raster: {e}")
+                
+                ha_deficit = max(0.0, area_total_ha - ha_bosque)
                 
             st.markdown("---")
             st.markdown("#### 📊 Análisis de Brechas (Gap)")
@@ -1190,16 +1309,16 @@ with tab_ecologia:
         with c_gap2:
             import pydeck as pdk
             import numpy as np
-            import json # 🚀 IMPORTANTE: Necesario para traducirle a PyDeck
+            import json 
             
             st.markdown("##### 🗺️ Red de Conectividad Ecológica (Aceleración GPU)")
             
             rios_4326 = gdf_rios_actual.to_crs(epsg=4326).copy()
-            
-            # Filtramos solo líneas verdaderas
             rios_4326 = rios_4326[rios_4326.geometry.type.isin(['LineString', 'MultiLineString'])].copy()
             
             if not rios_4326.empty:
+                # 🚀 FIX VISUAL 1: Explotamos geometrías complejas para evitar el bug de puntos azules
+                rios_4326 = rios_4326.explode(index_parts=False)
                 rios_4326['ID_Tramo'] = ["Segmento Hídrico " + str(i+1) for i in range(len(rios_4326))]
                 if 'longitud_km' in rios_4326.columns: rios_4326['longitud_km'] = rios_4326['longitud_km'].round(2)
                 
@@ -1211,32 +1330,34 @@ with tab_ecologia:
                     
                 capas_mapa = []
                 
-                # 🚀 FIX: Convertimos la cuenca a JSON puro para que PyDeck no se confunda
                 if gdf_zona is not None:
                     zona_4326 = gdf_zona.to_crs("EPSG:4326")
                     zona_json = json.loads(zona_4326.to_json())
                     capas_mapa.append(pdk.Layer("GeoJsonLayer", data=zona_json, opacity=1, stroked=True, get_line_color=[0, 200, 0, 255], get_line_width=3, filled=False))
                 
-                # 🚀 FIX: Convertimos los ríos a JSON puro. Adiós a las líneas fragmentadas o punteadas.
-                rios_json = json.loads(rios_4326.to_json())
-                
-                # Capa 2: Buffer Ripario (Dinámico)
-                capas_mapa.append(pdk.Layer(
-                    "GeoJsonLayer", data=rios_json, opacity=0.6, stroked=True,
-                    get_line_color=[39, 174, 96, 255], 
-                    get_line_width=buffer_m * 2, 
-                    lineWidthUnits='"meters"', lineWidthMinPixels=2, pickable=True, autoHighlight=True 
-                ))
+                # 🚀 FIX VISUAL 2: Renderizamos el polígono REAL del buffer, en lugar de una línea engrosada
+                if 'corredor_poly' in locals() and corredor_poly is not None:
+                    gdf_buffer = gpd.GeoDataFrame(geometry=[corredor_poly], crs="EPSG:3116").to_crs(epsg=4326)
+                    buffer_json = json.loads(gdf_buffer.to_json())
+                    
+                    capas_mapa.append(pdk.Layer(
+                        "GeoJsonLayer", data=buffer_json, opacity=0.4,
+                        get_fill_color=[39, 174, 96, 255], # Verde translúcido para el corredor a restaurar
+                        get_line_color=[39, 174, 96, 255], 
+                        stroked=True, filled=True, get_line_width=1,
+                        pickable=True, autoHighlight=True 
+                    ))
                 
                 # Capa 3: Línea central del río
+                rios_json = json.loads(rios_4326.to_json())
                 capas_mapa.append(pdk.Layer(
                     "GeoJsonLayer", data=rios_json, opacity=1, 
                     get_line_color=[52, 152, 219, 255], 
                     get_line_width=2, lineWidthUnits='"pixels"'
                 ))
                 
-                view_state = pdk.ViewState(latitude=c_lat, longitude=c_lon, zoom=11)
-                tooltip = {"html": "<b>{ID_Tramo}</b><br/>Orden de Strahler: <b>{Orden_Strahler}</b><br/>Longitud: {longitud_km} km", "style": {"backgroundColor": "steelblue", "color": "white"}}
+                view_state = pdk.ViewState(latitude=c_lat, longitude=c_lon, zoom=12)
+                tooltip = {"html": "<b>{ID_Tramo}</b><br/>Longitud: {longitud_km} km", "style": {"backgroundColor": "steelblue", "color": "white"}}
                 
                 st.pydeck_chart(pdk.Deck(layers=capas_mapa, initial_view_state=view_state, map_style="light", tooltip=tooltip))
             else:
@@ -1256,11 +1377,21 @@ with tab_ecologia:
             except Exception: pass 
             
             if gdf_zona is not None and not gdf_zona.empty:
+                # =========================================================================
+                # 🚀 FIX CRS DEFINITIVO: Vacunamos la geometría antes de enviarla
+                # =========================================================================
+                # Aplastamos cualquier CRS corrupto y lo forzamos al estándar mundial (WGS84)
+                gdf_zona_segura = gdf_zona.copy()
+                gdf_zona_segura = gdf_zona_segura.set_crs("EPSG:4326", allow_override=True)
+                
                 try:
                     from modules.geomorfologia_tools import render_motor_hidrologico
-                    render_motor_hidrologico(gdf_zona)
-                except Exception:
-                    st.error("Error calculando la red hídrica.")
+                    render_motor_hidrologico(gdf_zona_segura)
+                except Exception as e:
+                    import traceback
+                    st.error(f"Error crítico: {e}")
+                    with st.expander("🛠️ Ver detalles del error técnico (Para el ingeniero)"):
+                        st.code(traceback.format_exc())
             else:
                 st.warning("❌ Se requiere el polígono cartográfico para generar la red hídrica.")
 

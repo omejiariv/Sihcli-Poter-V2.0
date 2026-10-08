@@ -19,14 +19,11 @@ def inicializar_torrente_sanguineo():
     tengan un valor base (Fallback) para evitar colapsos por saltos de página.
     """
     diccionario_maestro = {
-        # 1. Biofísica y Geomorfología
         'aleph_q_max_m3s': 0.0,
         'geomorfo_q_pico_racional': 0.0,
         'aleph_twi_umbral': 0.0,
         'ultima_zona_procesada': "",
         'gdf_rios': None, 'grid_obj': None, 'acc_obj': None, 'fdir_obj': None,
-        
-        # 2. Ecohidrología y Tormentas
         'eco_lodo_total_m3': 0.0,
         'eco_lodo_colas_m3': 0.0,
         'eco_lodo_fondo_m3': 0.0,
@@ -34,21 +31,15 @@ def inicializar_torrente_sanguineo():
         'eco_fosforo_kg': 0.0,
         'eco_sobrecosto_usd': 0.0,
         'activar_tormenta_sankey': False,
-        
-        # 3. Metabolismo y Calidad (Valores de supervivencia sincronizados)
         'carga_dbo_total_ton': 0.0,
         'carga_dbo_mitigada_ton': 0.0,
         'ica_bovinos_calc_met': 0.0,
         'ica_porcinos_calc_met': 0.0,
         'pob_hum_calc_met': 0.0,
-        
-        # 4. Contexto Territorial (Sincronización con Aleph)
         'aleph_lugar': "Antioquia",
         'aleph_escala': "Departamental",
         'aleph_anio': 2024,
         'aleph_pob_total': 0.0,
-        
-        # 5. Estado de Aplicación
         'ejecutar_aleph': False,
         'beta_unlocked': False
     }
@@ -57,9 +48,8 @@ def inicializar_torrente_sanguineo():
         if llave not in st.session_state:
             st.session_state[llave] = valor_seguro
 
-
 # ==============================================================================
-# 🧽 FUNCIONES MAESTRAS DE LIMPIEZA (CENTRALIZADAS Y BLINDADAS V2)
+# 🧽 FUNCIONES MAESTRAS DE LIMPIEZA (ORIGINALES INTACTAS)
 # ==============================================================================
 
 @st.cache_data(ttl=3600)
@@ -71,25 +61,18 @@ def cargar_diccionario_veredas():
     except:
         return pd.DataFrame()
 
-import re # Aseguramos la importación de expresiones regulares
-
 def normalizar_texto_maestro(t, municipio_padre=""):
     """
     La aplanadora de texto definitiva para el SIHCLI-POTER.
     Maneja el 99% de las inconsistencias geográficas y ortográficas.
     """
     if not t or pd.isna(t): return ""
-    
-    # 1. Base minúscula y limpieza de bordes
     t = str(t).lower().strip()
 
-    # -------------------------------------------------------------
-    # 💉 VACUNA VEREDAL: LECTURA DEL DICCIONARIO EXTERNO (NUBE)
-    # -------------------------------------------------------------
+    # 💉 VACUNA VEREDAL
     if municipio_padre:
         id_busqueda = t.upper() + "_" + str(municipio_padre).upper().strip()
         id_busqueda = re.sub(r'[^A-Z0-9_]', '', id_busqueda)
-        
         try:
             df_homologacion = cargar_diccionario_veredas()
             if not df_homologacion.empty and 'ID_TABLA' in df_homologacion.columns:
@@ -97,20 +80,13 @@ def normalizar_texto_maestro(t, municipio_padre=""):
                 if not match.empty:
                     id_curado = str(match.iloc[0]['ID_MAPA'])
                     return id_curado.split("_")[0].lower()
-        except:
-            pass
-    # ------------------------------------------------------------- 
+        except: pass
 
-    # 🚀 FIX QUIRÚRGICO 1: Quitar paréntesis y su contenido oculto (Ej: "Caldas (Antioquia)" -> "caldas")
+    # Limpiezas estructurales
     t = re.sub(r'\(.*?\)', '', t)
-
-    # 2. Quitar sufijos técnicos de la UI si vienen pegados (NSS, SZH, etc.)
     t = re.sub(r'\s*-\s*nss.*|\s*-\s*szh.*|\s*-\s*zh.*|\s*-\s*ah.*', '', t)
-
-    # 3. Quitar tildes y caracteres especiales (Esto ya convierte "Itagüí" en "itagui" y "Aburrá" en "aburra")
     t = ''.join(c for c in unicodedata.normalize('NFD', t) if unicodedata.category(c) != 'Mn')
 
-    # 4. DICCIONARIO GENÉRICO HIDROLÓGICO Y ESPACIAL
     reemplazos_hidro = {
         r'\brio\b': 'r', r'\br\.\s*': 'r ',
         r'\bquebrada\b': 'q', r'\bqda\.?\s*': 'q ', r'\bq\.\s*': 'q ',
@@ -121,12 +97,10 @@ def normalizar_texto_maestro(t, municipio_padre=""):
     for patron, reemplazo in reemplazos_hidro.items():
         t = re.sub(patron, reemplazo, t)
 
-    # 5. Stop words (Veredas, sectores)
     stop_words = [r'\bvereda\b', r'\bvda\.?\b', r'\bsector\b', r'\bcaserio\b', r'\bcentro poblado\b', r'\bcp\b', r'\bcorregimiento\b', r'\bcorreg\b', r'\bcge\b']
     for word in stop_words: 
         t = re.sub(word, '', t)
 
-    # 6. Rebeldes Municipales y Regionales (Antioquia)
     rebeldes_mpio = {
         r'\bel carmen de viboral\b': 'carmen de viboral',
         r'\bsan vicente ferrer\b': 'san vicente',
@@ -135,17 +109,14 @@ def normalizar_texto_maestro(t, municipio_padre=""):
         r'\bsantafe de antioquia\b': 'santa fe de antioquia',
         r'\bel santuario\b': 'santuario',
         r'\bel penol\b': 'penol',
-        # 🚀 FIX QUIRÚRGICO 2: Homologación forzada de Valle de Aburrá
         r'\barea metropolitana( del valle de aburra)?\b': 'valle de aburra' 
     }
     for regex, reemplazo in rebeldes_mpio.items(): 
         t = re.sub(regex, reemplazo, t)
 
-    # 7. Destruir puntuación restante y colapsar espacios
     t = re.sub(r'[^a-z0-9\s]', ' ', t)
     t = re.sub(r'\s+', ' ', t).strip()
 
-    # 8. Diccionario final estricto
     diccionario_final = {
         "bogotadc": "bogota", "sanjosedecucuta": "cucuta", 
         "laguajira": "guajira", "valle": "valledelcauca",
@@ -158,103 +129,161 @@ def normalizar_texto_maestro(t, municipio_padre=""):
 
     return t
 
-# 🔥 ALIAS DE ORO: Evita que se rompan las otras páginas que importan 'normalizar_texto'
-normalizar_texto = normalizar_texto_maestro
+normalizar_texto = normalizar_texto_maestro # Alias
 
 @st.cache_data
 def standardize_numeric_column(series):
-    """Convierte series a números manejando separadores de miles y decimales latinos."""
     if series.dtype == object:
         series = series.str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
     return pd.to_numeric(series, errors="coerce")
 
 # ==============================================================================
-# 🧠 CEREBRO CENTRAL: MATRICES Y GEMELO DIGITAL
+# 🗝️ NUEVAS FUNCIONES MAESTRAS (LLAVES Y BÚSQUEDAS)
 # ==============================================================================
+import re
+import unicodedata
+import pandas as pd
+import streamlit as st
 
-def encender_gemelo_digital():
+# 🔥 LA FUNCIÓN QUE FALTABA PARA QUE EL BUSCADOR NO COLAPSE EN SILENCIO
+def limpiar_texto_maestro(texto):
+    """Limpia tildes, caracteres especiales y convierte a mayúsculas puras."""
+    if pd.isna(texto): return ""
+    t = str(texto).upper()
+    t = ''.join(c for c in unicodedata.normalize('NFD', t) if unicodedata.category(c) != 'Mn')
+    return re.sub(r'[^A-Z0-9]', '', t).strip()
+
+def generar_llave_universal(nivel, territorio, area="TOTAL"):
     """
-    Secuencia de ignición: Inyecta memoria base y descarga matrices de producción.
+    Generador único de llaves de titanio. Sincronizado con Excel y a prueba de guiones de la UI.
     """
-    inicializar_torrente_sanguineo()
+    def purificar_acentos(texto):
+        if pd.isna(texto): return ""
+        t = str(texto).upper()
+        return ''.join(c for c in unicodedata.normalize('NFD', t) if unicodedata.category(c) != 'Mn').strip()
+
+    n_crudo = purificar_acentos(nivel)
     
-    if 'df_matriz_demografica' not in st.session_state:
-        try:
-            url_base = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/sihcli_maestros/"
-            st.session_state['df_matriz_demografica'] = pd.read_csv(f"{url_base}Matriz_Maestra_Demografica.csv")
-            st.session_state['df_matriz_pecuaria'] = pd.read_csv(f"{url_base}Matriz_Maestra_Pecuaria.csv")
-        except Exception as e:
-            st.error(f"⚠️ Error al conectar con el cerebro digital (Supabase): {e}")
+    # 🔥 FIX: Limpiamos los selectores ruidosos de las Cuencas antes de forjar la llave
+    t_crudo = str(territorio).split(" - (")[0]
+    t_crudo = t_crudo.replace(" - NSS", "").replace("- NSS", "").replace(" NSS", "")
+    t_crudo = t_crudo.replace(" - SZH", "").replace("- SZH", "").replace(" SZH", "")
+    t_crudo = t_crudo.replace("R. Grande - Chico", "R Grande Chico") # Arreglo específico para R. Grande
+    t_crudo = purificar_acentos(t_crudo.strip())
 
-def obtener_metabolismo_exacto(nombre_seleccion, anio_destino=None):
-    """
-    Buscador de alta precisión: Cruza el territorio con las matrices SQL 
-    y proyecta la población/ganado al año deseado.
-    """
-    from modules.db_manager import get_engine
-    engine = get_engine()
+ 
+    if "DEPARTAMENTO" in n_crudo or "DEPARTAMENTAL" in n_crudo: n_base = "DEPARTAMENTAL"
+    elif "MUNICIPIO" in n_crudo or "MUNICIPAL" in n_crudo: n_base = "MUNICIPIO"
+    elif "REGION" in n_crudo or "SUBREGION" in n_crudo: n_base = "REGION"
+    elif "CAR" in n_crudo or "AUTORIDA" in n_crudo: n_base = "CAR"
+    elif "NSS3" in n_crudo: n_base = "NSS3"
+    elif "NSS2" in n_crudo: n_base = "NSS2"
+    elif "NSS1" in n_crudo: n_base = "NSS1"
+    elif "SZH" in n_crudo: n_base = "SZH"
+    elif "ZH" in n_crudo: n_base = "ZH"
+    elif "AH" in n_crudo: n_base = "AH"
+    else: n_base = "CUENCA" 
+
+    if t_crudo == "VALLE DE ABURRA" and n_base == "CAR": t_crudo = "AMVA"
     
-    res = {
-        'pob_urbana': 0.0, 'pob_rural': 0.0, 'pob_total': 0.0,
-        'bovinos': 0.0, 'porcinos': 0.0, 'aves': 0.0,
-        'status': "Sin Datos"
-    }
-
-    if not engine: return res
+    t_base = re.sub(r'[^A-Z0-9]', '_', t_crudo)
+    t_base = re.sub(r'_+', '_', t_base).strip('_') 
+    a_base = purificar_acentos(area)
     
-    # 🔥 NORMALIZACIÓN AGRESIVA
-    nombre_q = normalizar_texto(nombre_seleccion)
+    return f"{n_base}_{t_base}_{a_base}"
 
-    def proyectar_valor(fila, anio):
-        if not anio: return float(fila['Pob_Base'] if 'Pob_Base' in fila else fila['Poblacion_Base'])
-        t = anio - fila['Año_Base']
-        mod = fila.get('Modelo_Recomendado', 'Polinomial_3')
-        try:
-            if mod == 'Logístico': return fila['Log_K'] / (1 + fila['Log_a'] * np.exp(-fila['Log_r'] * t))
-            if mod == 'Exponencial': return fila['Exp_a'] * np.exp(fila['Exp_b'] * t)
-            return fila['Poly_A']*(t**3) + fila['Poly_B']*(t**2) + fila['Poly_C']*t + fila['Poly_D']
+@st.cache_data(ttl=3600)
+def extraer_datos_matriz_sql(nombre_tabla, territorio_busqueda, nivel="", es_llave=False):
+    """
+    Lector inteligente centralizado. Prioriza la LLAVE_UNIVERSAL y exige coincidencia EXACTA del nombre.
+    """
+    try:
+        from modules.db_manager import get_engine
+        engine = get_engine()
+        df = pd.read_sql(f"SELECT * FROM {nombre_tabla}", engine)
+        if df.empty: return pd.DataFrame()
+
+        # 1. Búsqueda por LLAVE UNIVERSAL (Prioridad Máxima)
+        if es_llave or 'LLAVE_UNIVERSAL' in df.columns:
+            llave_limpia = str(territorio_busqueda).upper().strip()
+            df_filtrado = df[df['LLAVE_UNIVERSAL'] == llave_limpia]
+            if not df_filtrado.empty: return df_filtrado
+
+        # 2. Búsqueda Semántica ESTRICTA (Sin colisiones)
+        t_crudo = str(territorio_busqueda)
+        t_puro = t_crudo.split(" - (")[0].strip() 
+        t_clean = limpiar_texto_maestro(t_puro)
+
+        if 'Territorio' in df.columns:
+            df['t_match'] = df['Territorio'].apply(limpiar_texto_maestro)
+            
+            # Escudo de Alias
+            if t_clean == "AMVA": t_clean = "VALLEDEABURRA"
+            elif t_clean == "VALLEDEABURRA": t_clean = "AMVA"
+            
+            # MATCH EXACTO (Evita que 'MEDELLIN' se cruce con 'DIRECTOS ABURRA ZU MEDELLIN')
+            df_exact = df[df['t_match'] == t_clean]
+            if not df_exact.empty:
+                # Si hay varios, priorizar el nivel correcto si se envió
+                if nivel and 'Nivel' in df_exact.columns:
+                    n_clean = limpiar_texto_maestro(str(nivel))
+                    mask = df_exact['Nivel'].apply(limpiar_texto_maestro).str.contains(n_clean[:4], na=False)
+                    if mask.any(): 
+                        return df_exact[mask]  # 🔥 FIX: Quitamos el .head(1) para traer todas las especies
+                return df_exact
+
+        return pd.DataFrame()
+    except Exception as e:
+        print(f"Error extrayendo de {nombre_tabla}: {e}")
+        return pd.DataFrame()
+
+def proyectar_modelo_sql(f, anio_obj):
+    def limpiar_num(val):
+        if pd.isna(val): return 0.0
+        if isinstance(val, (int, float)): return float(val)
+        s = str(val).strip().replace(',', '')
+        if s.count('.') > 1: s = s.rsplit('.', 1)[0].replace('.', '') + '.' + s.rsplit('.', 1)[1]
+        try: return float(s)
         except: return 0.0
 
+    x_norm = anio_obj - limpiar_num(f.get('Año_Base', 2018))
+    mod = str(f.get('Modelo_Recomendado', 'Logístico'))
     try:
-        # 1. Consulta Demográfica (Búsqueda por MATCH_ID normalizado agresivamente)
-        with engine.connect() as conn:
-            q_demo = text('SELECT * FROM matriz_maestra_demografica')
-            df_all = pd.read_sql(q_demo, conn)
-            # Aplicamos la aplanadora a toda la base de datos en memoria para garantizar el cruce
-            df_all['MATCH'] = df_all['Territorio'].apply(normalizar_texto)
-            
-            # Buscamos coincidencias exactas primero
-            df_res = df_all[df_all['MATCH'] == nombre_q]
-            
-            # Si no hay coincidencia exacta, aplicamos Fuzzy Matching como salvavidas
-            if df_res.empty:
-                import difflib
-                territorios_db = df_all['MATCH'].unique().tolist()
-                matches = difflib.get_close_matches(nombre_q, territorios_db, n=1, cutoff=0.7)
-                if matches:
-                    df_res = df_all[df_all['MATCH'] == matches[0]]
-            
-            if not df_res.empty:
-                for area in ['Urbana', 'Rural', 'Total']:
-                    # Hacemos case-insensitive el match del Área
-                    row = df_res[df_res['Area'].str.capitalize() == area]
-                    if not row.empty:
-                        val = proyectar_valor(row.iloc[0], anio_destino)
-                        if area == 'Urbana': res['pob_urbana'] = val
-                        if area == 'Rural': res['pob_rural'] = val
-                        if area == 'Total': res['pob_total'] = val
-                res['status'] = "Sincronizado (DANE)"
-    except Exception as e:
-        res['status'] = f"Error: {e}"
+        if 'Logistico' in mod or 'Logístico' in mod: return limpiar_num(f.get('Log_K',0)) / (1 + limpiar_num(f.get('Log_a',0)) * np.exp(-limpiar_num(f.get('Log_r',0)) * x_norm))
+        elif 'Exponencial' in mod: return limpiar_num(f.get('Exp_a',0)) * np.exp(limpiar_num(f.get('Exp_b',0)) * x_norm)
+        elif 'Lineal' in mod: return limpiar_num(f.get('Lin_m',0)) * x_norm + limpiar_num(f.get('Lin_b',0))
+        else: return limpiar_num(f.get('Poly_A',0))*(x_norm**3) + limpiar_num(f.get('Poly_B',0))*(x_norm**2) + limpiar_num(f.get('Poly_C',0))*x_norm + limpiar_num(f.get('Poly_D',0))
+    except: return 0.0
 
+# ==============================================================================
+# 🧠 CEREBRO CENTRAL: MEMORIA Y GEOPROCESOS
+# ==============================================================================
+
+@st.cache_data(ttl=3600)
+def descargar_matriz_sql_cache(nombre_tabla):
+    try:
+        from modules.db_manager import get_engine
+        engine = get_engine()
+        return pd.read_sql(f"SELECT * FROM {nombre_tabla}", engine)
+    except Exception as e: return pd.DataFrame()
+
+def encender_gemelo_digital():
+    try: inicializar_torrente_sanguineo()
+    except Exception: pass
+    
+    if 'df_matriz_demografica' not in st.session_state or st.session_state['df_matriz_demografica'].empty:
+        st.session_state['df_matriz_demografica'] = descargar_matriz_sql_cache("matriz_maestra_demografica")
+        
+    if 'df_matriz_pecuaria' not in st.session_state or st.session_state['df_matriz_pecuaria'].empty:
+        st.session_state['df_matriz_pecuaria'] = descargar_matriz_sql_cache("matriz_maestra_pecuaria")
+
+# DEPRECATED: Se mantiene solo por compatibilidad si alguna página antigua lo requiere.
+# Se recomienda usar calcular_poblacion_al_vuelo() de demografia_tools.py
+def obtener_metabolismo_exacto(nombre_seleccion, anio_destino=None):
+    res = {'pob_urbana': 0.0, 'pob_rural': 0.0, 'pob_total': 0.0, 'bovinos': 0.0, 'porcinos': 0.0, 'aves': 0.0, 'status': "Obsoleto (Use demografia_tools)"}
     return res
 
-# ==============================================================================
-# 📥 EXPORTACIÓN Y UI
-# ==============================================================================
-
 def display_plotly_download_buttons(fig, file_prefix):
-    """Muestra botones de descarga para un gráfico Plotly."""
     st.markdown("---")
     col1, col2 = st.columns(2)
     with col1:
@@ -264,38 +293,18 @@ def display_plotly_download_buttons(fig, file_prefix):
         try:
             img_bytes = fig.to_image(format="png")
             st.download_button("Descargar PNG", img_bytes, f"{file_prefix}.png", "image/png")
-        except:
-            st.info("💡 Para descarga PNG instala: `pip install kaleido`")
+        except: st.info("💡 Para descarga PNG instala: `pip install kaleido`")
 
 import geopandas as gpd
-from sqlalchemy import text
-import streamlit as st
 
-# 🚀 ESCUDO FINAL INTELIGENTE: Sabe qué ignorar y qué rescatar
 @st.cache_data(ttl=86400, show_spinner=False, hash_funcs={"sqlalchemy.sql.elements.TextClause": str})
 def cargar_capa_espacial_cache(query_sql, _arg2=None, geom_col="geometry", **kwargs):
-    """Descarga capas de PostGIS y gestiona su propia conexión."""
-    
-    # Si en la posición 2 nos enviaron texto ('geom'), rescatamos el nombre de la columna.
-    # Si nos enviaron un Engine, lo ignoramos y usamos el geom_col por defecto.
-    if isinstance(_arg2, str):
-        geom_col = _arg2
-        
+    if isinstance(_arg2, str): geom_col = _arg2
     try:
         from modules.db_manager import get_engine
-        engine_geo = get_engine() # Lo obtiene directamente de la fuente
-        
+        engine_geo = get_engine() 
         with engine_geo.connect() as conn:
             conn.execute(text("SET statement_timeout = '600000';")) 
-            
-            if isinstance(query_sql, str):
-                sql_a_ejecutar = text(query_sql)
-            else:
-                sql_a_ejecutar = query_sql
-                
-            gdf = gpd.read_postgis(sql_a_ejecutar, conn, geom_col=geom_col)
-            return gdf
-    except Exception as e:
-        import logging
-        logging.error(f"Error cargando mapa desde caché: {e}")
-        return None
+            sql_a_ejecutar = text(query_sql) if isinstance(query_sql, str) else query_sql
+            return gpd.read_postgis(sql_a_ejecutar, conn, geom_col=geom_col)
+    except Exception as e: return None

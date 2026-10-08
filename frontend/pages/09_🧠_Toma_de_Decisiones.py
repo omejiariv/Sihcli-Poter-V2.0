@@ -28,9 +28,9 @@ st.set_page_config(page_title="Sihcli-Poter: Toma de Decisiones", page_icon="�
 # --- 📂 IMPORTACIÓN ROBUSTA DE MÓDULOS INTERNOS ---
 try:
     from modules import selectors
-    from modules.utils import encender_gemelo_digital, obtener_metabolismo_exacto
-    # 🔥 FIX: Añadimos obtener_poblacion_matriz al import
-    from modules.demografia_tools import render_motor_demografico, obtener_poblacion_matriz
+    from modules.utils import encender_gemelo_digital, extraer_datos_matriz_sql, proyectar_modelo_sql, generar_llave_universal
+
+    from modules.demografia_tools import render_motor_demografico, obtener_poblacion_matriz, calcular_poblacion_al_vuelo
     from modules.biodiversidad_tools import render_motor_ripario
     from modules.geomorfologia_tools import render_motor_hidrologico
     from modules.impacto_serv_ecosist import render_sigacal_analysis
@@ -206,6 +206,23 @@ if 'aleph_poligono' in st.session_state and st.session_state['aleph_poligono'] i
     gdf_zona = st.session_state['aleph_poligono']
 
 if gdf_zona is None or gdf_zona.empty:
+    
+    # === PUENTE CARTOGRÁFICO DE EMERGENCIA PARA ANTIOQUIA ===
+    escala_actual = st.session_state.get('aleph_escala', '')
+    lugar_actual = st.session_state.get('aleph_lugar', '')
+    
+    if str(escala_actual).strip().lower() == "departamental" and "antioquia" in str(lugar_actual).lower():
+        import geopandas as gpd
+        try:
+            # Forzar la descarga del polígono unificado que acabas de subir
+            url_antioquia = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/Antioquia.geojson"
+            gdf_zona = gpd.read_file(url_antioquia)
+            # Le asignamos un nombre para que el resto del código no falle
+            gdf_zona['nombre_homologado'] = 'ANTIOQUIA' 
+        except Exception as e:
+            pass 
+    # ==========================================================
+
     with st.spinner("🪂 Sincronizando topología estricta para Toma de Decisiones..."):
         try:
             import geopandas as gpd
@@ -248,12 +265,17 @@ if gdf_zona is None or gdf_zona.empty:
             
             encontrado = False
 
+            # --- 1. BÚSQUEDA DE CUENCAS ---
             if es_cuenca:
                 from modules.data_processor import load_and_process_all_data
                 _, _, _, _, gdf_subcuencas, _ = load_and_process_all_data()
+                
                 if gdf_subcuencas is not None and not gdf_subcuencas.empty:
-                    codigo_match = re.search(r'\((.*?)\)', str(nombre_zona_full))
+                    codigo_match = re.search(r'\((.*?)\)', str(nombre_zona))
                     cod_ideam = codigo_match.group(1).strip() if codigo_match else None
+                    
+                    encontrado = False
+                    
                     if cod_ideam:
                         cols_cod = [c for c in gdf_subcuencas.columns if c.lower() in ['nss1', 'nss2', 'nss3', 'szh', 'zh', 'ah']]
                         for col in cols_cod:
@@ -261,14 +283,38 @@ if gdf_zona is None or gdf_zona.empty:
                             if mask_ideam.any():
                                 gdf_zona_tmp = gdf_subcuencas[mask_ideam]
                                 gdf_zona = gpd.GeoDataFrame(geometry=[gdf_zona_tmp.unary_union], crs=gdf_subcuencas.crs)
-                                encontrado = True; break
+                                encontrado = True
+                                break
+                                
                     if not encontrado:
                         def limpiar_texto(t):
                             if not isinstance(t, str): return ""
                             return re.sub(r'[^A-Z0-9]', '', ''.join(c for c in unicodedata.normalize('NFD', t.upper()) if unicodedata.category(c) != 'Mn'))
-                        mask_c = gdf_subcuencas.apply(lambda row: limpiar_texto(lugar_crudo) in limpiar_texto(str(row.to_dict().values())), axis=1)
+                        
+                        terr_limpio = limpiar_texto(lugar_crudo)
+                        mask_c = gdf_subcuencas.apply(lambda row: terr_limpio in limpiar_texto(str(row.to_dict().values())), axis=1)
+                        
                         if mask_c.any():
                             gdf_zona_tmp = gdf_subcuencas[mask_c]
+                            
+                            # =========================================================================
+                            # 🛡️ INTERCEPTOR ESPACIAL ESTRICTO (MATA CLONES)
+                            # =========================================================================
+                            codigo_unico = st.session_state.get('aleph_codigo_cuenca', 'N/A')
+                            
+                            if codigo_unico != 'N/A':
+                                mask_estricta = (gdf_subcuencas['NSS3'] == codigo_unico) | \
+                                                (gdf_subcuencas['NSS2'] == codigo_unico) | \
+                                                (gdf_subcuencas['NSS1'] == codigo_unico)
+                                
+                                if mask_estricta.any():
+                                    gdf_zona_tmp = gdf_subcuencas[mask_estricta]
+                                    
+                            # 🔪 SEGURO ANTI-FRANKENSTEIN
+                            if len(gdf_zona_tmp) > 1:
+                                gdf_zona_tmp = gdf_zona_tmp.iloc[[0]]
+                            # =========================================================================
+                            
                             gdf_zona = gpd.GeoDataFrame(geometry=[gdf_zona_tmp.unary_union], crs=gdf_subcuencas.crs)
                             encontrado = True
 
@@ -333,232 +379,157 @@ with st.sidebar:
     v_drain = st.checkbox("Red de Drenaje", True)
     v_geo = st.checkbox("Geomorfología", False)
 
-# 3. Lógica de Cálculo de Impactos
+# ==============================================================================
+# 3. Lógica de Cálculo de Impactos y Conexión al Aleph
+# ==============================================================================
 if gdf_zona is not None and not gdf_zona.empty:
-    engine = get_engine()
-    
-    # --- Control Temporal ---
     anio_actual = st.slider("📅 Año de Proyección (Simulación Futura):", min_value=2024, max_value=2050, value=2025, step=1)
     
-    # ==============================================================================
-    # 🧠 NÚCLEO DE CONEXIÓN TOLERANTE (SQL MULTI-MATRIZ CON TRADUCTOR)
-    # ==============================================================================
+    # 📥 RECEPCIÓN DE LLAVES (Directo desde selectors.py)
+    lugar_maestro = st.session_state.get('aleph_lugar_maestro', '')
+    nivel_demo = st.session_state.get('aleph_nivel_demo', '')
+    llave_pecuaria = st.session_state.get('aleph_llave_pecuaria', '')
+    lugar_original = st.session_state.get('aleph_lugar', '')
+    lugar_puro = st.session_state.get('aleph_lugar_puro', '')
+    escala = st.session_state.get('aleph_escala', '')
+
+    # 🔥 DECLARACIÓN INICIAL BLINDADA (ELIMINA EL NAME ERROR DEL SANKEY)
+    pob_total = 0.0
+    bovinos, porcinos, aves = 0.0, 0.0, 0.0
+    area_cuenca_km2, area_km2 = 100.0, 100.0
+    oferta_anual_m3, caudal_base_m3s = 0.0, 10.0
+    lluvia_base_mm, recarga_base_mm = 2000.0, 350.0
+    altitud_m, q_medio_real, q_min_real = 1500.0, 10.0, 2.0
+    origen_demo, origen_pecu, origen_hidro = False, False, False
+
+    if str(escala).strip().lower() == "departamental" and "antioquia" in str(lugar_original).lower():
+        lugar_puro = "ANTIOQUIA"
+        nivel_demo = "Departamental"
+
+    # ---------------------------------------------------------
+    # 1. CONEXIÓN DEMOGRÁFICA (Vía Motor Híbrido Sihcli-Poter)
+    # ---------------------------------------------------------
+    # 🔥 Forzamos la importación aquí para que sea a prueba de balas (Elimina el NameError)
+    from modules.demografia_tools import calcular_poblacion_al_vuelo
+    from modules.utils import generar_llave_universal, extraer_datos_matriz_sql, proyectar_modelo_sql
     
-    # Recuperamos el nivel exacto que el usuario seleccionó en el menú lateral
-    nivel_req = st.session_state.get('nivel_activo_global', 'NINGUNO')
-
-    @st.cache_data(ttl=3600)
-    def consultar_matriz_sql(tabla, territorio_full, nivel_aleph, col_nivel="Nivel"):
-        """Filtro de Titanio: Inmune a Mojibake, sufijos y recupera TODAS las filas (vital para Pecuario)."""
-        try:
-            from sqlalchemy import text
-            from modules.db_manager import get_engine
-            import pandas as pd
-            import re
-            import unicodedata
-            
-            engine = get_engine()
-            df_bd = pd.read_sql(text(f'SELECT * FROM {tabla}'), engine)
-            if df_bd.empty: return pd.DataFrame()
-            
-            # --- 1. TRADUCTOR DE JERARQUÍAS (El puente CUENCA -> NSS/SZH) ---
-            col_jerarquia = col_nivel if col_nivel in df_bd.columns else ('Jerarquia' if 'Jerarquia' in df_bd.columns else None)
-            
-            if col_jerarquia:
-                df_bd[col_jerarquia] = df_bd[col_jerarquia].astype(str).str.upper()
-                if "CUENCA" in str(nivel_aleph).upper():
-                    df_bd = df_bd[df_bd[col_jerarquia].str.contains("NSS|SZH|ZH|AH|CUE", regex=True, na=False)].copy()
-                else:
-                    niv_up = str(nivel_aleph).upper()
-                    if "MUNICIP" in niv_up: nivel_corto = "MUNI"
-                    elif "CAR" in niv_up or "AUTORIDAD" in niv_up: nivel_corto = "CAR"
-                    elif "REGION" in niv_up or "SUBREGION" in niv_up: nivel_corto = "REGIO|SUBREG"
-                    elif "DEPARTAMENT" in niv_up: nivel_corto = "DEP"
-                    elif "NACION" in niv_up: nivel_corto = "NAC"
-                    else: nivel_corto = niv_up[:3]
-                    
-                    df_bd = df_bd[df_bd[col_jerarquia].str.contains(nivel_corto, regex=True, na=False)].copy()
-
-            if df_bd.empty: return pd.DataFrame()
-
-            # --- 2. ALGORITMO DE FIRMA DE CONSONANTES EXTREMA ---
-            def crear_firma(t):
-                if not isinstance(t, str) or pd.isna(t): return ""
-                t_limpio = re.sub(r'[^A-Z0-9]', '', str(t).upper())
-                return re.sub(r'[AEIOU]', '', t_limpio)
-
-            t_puro = str(territorio_full).split(" - (")[0].strip()
-            # Quitamos sufijos que rompen las cuencas (ej: "Alto Nechi - NSS" -> "Alto Nechi")
-            t_puro = t_puro.replace(' - NSS', '').replace('- NSS', '').strip()
-            t_puro = ''.join(c for c in unicodedata.normalize('NFD', t_puro) if unicodedata.category(c) != 'Mn')
-            
-            # Diccionario de rescate para disonancias catastrales
-            excepciones_antioquia = {
-                "PUEBLO RICO": "PUEBLORRICO",
-                "SAN VICENTE": "SAN VICENTE FERRER",
-                "EL PENOL": "PENOL",
-                "EL RETIRO": "RETIRO",
-                "CAROLINA DEL PRINCIPE": "CAROLINA", # Esto asegura que enlace en todas las BD
-                "SAN ANDRES DE CUERQUIA": "SAN ANDRES",
-                "SAN JOSE DE LA MONTANA": "SAN JOSE",
-                "SAN PEDRO DE LOS MILAGROS": "SAN PEDRO"
-            }
-            if t_puro.upper() in excepciones_antioquia:
-                t_puro = excepciones_antioquia[t_puro.upper()]
-
-            firma_buscada = crear_firma(t_puro)
-            
-            # --- 3. BÚSQUEDA INMUNE (Sin 'head(1)' para no mutilar Pecuario) ---
-            def obtener_todas_las_filas(df, col_firma, f_buscada):
-                mask = df[col_firma].str.contains(f_buscada, na=False)
-                if mask.any():
-                    # Capturamos la firma exacta de la primera coincidencia
-                    firma_exacta_bd = df.loc[mask, col_firma].iloc[0]
-                    # Devolvemos TODAS las filas que tengan esa firma exacta (Bovinos, Porcinos, Aves)
-                    return df[df[col_firma] == firma_exacta_bd]
-                return pd.DataFrame()
-
-            # Prioridad 1: LLAVE_UNIVERSAL
-            if 'LLAVE_UNIVERSAL' in df_bd.columns:
-                df_bd['Firma_DB'] = df_bd['LLAVE_UNIVERSAL'].apply(crear_firma)
-                res = obtener_todas_las_filas(df_bd, 'Firma_DB', firma_buscada)
-                if not res.empty: return res
-
-            # Prioridad 2: Columna Territorio
-            col_t = 'Territorio' if 'Territorio' in df_bd.columns else df_bd.columns[1]
-            df_bd['Firma_DB'] = df_bd[col_t].apply(crear_firma)
-            res = obtener_todas_las_filas(df_bd, 'Firma_DB', firma_buscada)
-            if not res.empty: return res
-            
-            # Prioridad 3: Modo Substring
-            if len(firma_buscada) > 3:
-                res = obtener_todas_las_filas(df_bd, 'Firma_DB', firma_buscada[:-1])
-                if not res.empty: return res
-
-            return pd.DataFrame()
-            
-        except Exception as e:
-            return pd.DataFrame()
-            
-    def proyectar_modelo(f, anio_obj):
-        import numpy as np
-        x_norm = anio_obj - f.get('Año_Base', 2018)
-        mod = str(f.get('Modelo_Recomendado', 'Logístico'))
-        try:
-            if 'Logistico' in mod or 'Logístico' in mod: return f.get('Log_K',0) / (1 + f.get('Log_a',0) * np.exp(-f.get('Log_r',0) * x_norm))
-            elif 'Exponencial' in mod: return f.get('Exp_a',0) * np.exp(f.get('Exp_b',0) * x_norm)
-            elif 'Lineal' in mod: return f.get('Lin_m',0) * x_norm + f.get('Lin_b',0)
-            else: return f.get('Poly_A',0)*(x_norm**3) + f.get('Poly_B',0)*(x_norm**2) + f.get('Poly_C',0)*x_norm + f.get('Poly_D',0)
-        except: return 0.0
-
-    # 🔥 ENRUTADOR MAESTRO: Traduce los nombres del menú a los nombres de las matrices
-    if nivel_req in ["AH", "ZH", "SZH", "NSS1", "NSS2", "NSS3"]:
-        nivel_demo = "Cuenca"
-    elif "CORPOAMB" in nivel_req.upper() or "CAR" in nivel_req.upper():
-        nivel_demo = "CAR"
-        nivel_req = "CAR" # Forzamos que la hidrología también lo busque como CAR
-    else:
-        nivel_demo = nivel_req
-
-    # ---------------------------------------------------------
-    # 1. CONEXIÓN DEMOGRÁFICA (Usa Nombre Puro - Lógica DANE)
-    # ---------------------------------------------------------
-    # 🚀 DANE y censos no usan códigos IDEAM, así que enviamos la variable 'nombre_zona_puro'
-    df_demo = consultar_matriz_sql("matriz_maestra_demografica", nombre_zona_puro, nivel_demo, "Nivel")
-    if not df_demo.empty:
-        pob_total = max(0.0, proyectar_modelo(df_demo.iloc[0], anio_actual))
-        st.success(f" 👥  **Cerebro Demográfico Enlazado:** {pob_total:,.0f} habitantes detectados en SQL (Nivel: {nivel_demo}).")
+    # 1. Intentar con el Motor Híbrido Dasimétrico (Cerebro B)
+    # 🔥 Le enviamos 'lugar_maestro' para que AMVA se lea correctamente como VALLE DE ABURRA
+    df_demo_hibrido = calcular_poblacion_al_vuelo(lugar_maestro, nivel_demo, "Total", anio_especifico=anio_actual)
+    
+    if df_demo_hibrido is not None and not df_demo_hibrido.empty:
+        pob_total = float(df_demo_hibrido['Total'].iloc[0])
+        st.success(f" 👥  **Cerebro Demográfico Enlazado:** {pob_total:,.0f} habitantes detectados (Motor Híbrido).")
         origen_demo = True
     else:
-        pob_total = 0.0
-        st.error(f" ❌  '{nombre_zona_puro}' no existe en la Matriz Demográfica para el nivel {nivel_demo}.")
-        origen_demo = False
+        # 2. Fallback a la Matriz SQL Estricta (Cerebro A - Cuencas)
+        llave_demo = generar_llave_universal(nivel_demo, lugar_puro, "Total")
+        df_demo_sql = extraer_datos_matriz_sql("matriz_maestra_demografica", llave_demo, es_llave=True)
+        
+        if not df_demo_sql.empty:
+            pob_calc = proyectar_modelo_sql(df_demo_sql.iloc[0], anio_actual)
+            pob_total = max(0.0, pob_calc)
+            st.success(f" 👥  **Cerebro Demográfico Enlazado:** {pob_total:,.0f} habitantes detectados en SQL.")
+            origen_demo = True
+        else:
+            pob_total = 0.0
+            st.error(f" ❌  El territorio '{lugar_puro}' no pudo ser procesado demográficamente.")
+            origen_demo = False
 
     st.session_state['aleph_pob_total'] = pob_total
     st.session_state['pob_hum_calc_met'] = pob_total
 
     # ---------------------------------------------------------
-    # 2. CONEXIÓN PECUARIA (Usa Nombre Puro - Lógica ICA)
+    # 2. CONEXIÓN PECUARIA
     # ---------------------------------------------------------
-    df_pec = consultar_matriz_sql("matriz_maestra_pecuaria", nombre_zona_puro, nivel_req, "Nivel")
-    
-    if df_pec.empty and nivel_demo == "Cuenca":
-        df_pec = consultar_matriz_sql("matriz_maestra_pecuaria", nombre_zona_puro, "Cuenca", "Nivel")
+    llave_pec = generar_llave_universal(escala, lugar_original, "Total")
+    df_pec = extraer_datos_matriz_sql("matriz_maestra_pecuaria", llave_pec, es_llave=True)
 
-    bovinos, porcinos, aves = 0.0, 0.0, 0.0
+    # 🛡️ Fallback Semántico Pecuario (Si la llave exacta falla)
+    if df_pec.empty:
+        lugar_puro = str(lugar_original).split(" - (")[0].strip()
+        df_pec = extraer_datos_matriz_sql("matriz_maestra_pecuaria", lugar_puro, nivel=escala, es_llave=False)
 
     if not df_pec.empty:
         for _, f in df_pec.iterrows():
-            if f['Especie'] == 'Bovinos': bovinos = max(0.0, proyectar_modelo(f, anio_actual))
-            if f['Especie'] == 'Porcinos': porcinos = max(0.0, proyectar_modelo(f, anio_actual))
-            if f['Especie'] == 'Aves': aves = max(0.0, proyectar_modelo(f, anio_actual))
+            esp = str(f.get('Especie', '')).upper()
+            val_final = max(0.0, proyectar_modelo_sql(f, anio_actual))
+            if 'BOVINO' in esp: bovinos = val_final
+            if 'PORCINO' in esp: porcinos = val_final
+            if 'AVE' in esp: aves = val_final
+            
         st.success(f" 🐄  **Cerebro Pecuario Enlazado:** {bovinos:,.0f} Bov, {porcinos:,.0f} Por, {aves:,.0f} Aves.")
         origen_pecu = True
     else:
-        if nombre_zona_puro == "AMVA":
-            st.success(" 🐄  **Cerebro Pecuario Enlazado:** 0 animales (Ganado gestionado por Corantioquia en zona rural).")
+        # 🔥 FIX NECESARIO: Declarar en 0 para evitar caída del sistema al guardar en session_state
+        bovinos, porcinos, aves = 0, 0, 0 
+        
+        if "VALLE DE ABURRA" in str(lugar_maestro).upper() or "AMVA" in str(lugar_puro).upper():
+            st.success(" 🐄  **Cerebro Pecuario Enlazado:** 0 animales (Ganado rural centralizado en Corantioquia).")
             origen_pecu = True
         else:
-            st.warning(f" ⚠️  '{nombre_zona_puro}' no detectado en Matriz Pecuaria. Asumiendo 0 animales para no detener el sistema.")
+            # 🔥 FIX NECESARIO: El nombre real de la variable es llave_pec
+            st.warning(f" ⚠️  La llave '{llave_pec}' no generó cruce en la Matriz Pecuaria.")
             origen_pecu = False
-        
+            
     st.session_state['ica_bovinos_calc_met'] = bovinos
     st.session_state['ica_porcinos_calc_met'] = porcinos
     st.session_state['ica_aves_calc_met'] = aves
 
     # ---------------------------------------------------------
-    # 3. CONEXIÓN HIDROLÓGICA Y OFERTA BASE (Usa Nombre Full - Lógica IDEAM)
+    # 3. CONEXIÓN HIDROLÓGICA (Conectado a la Matriz SQL Real)
     # ---------------------------------------------------------
-    area_cuenca_km2 = 0.0  
-    area_km2 = 0.0
-    oferta_anual_m3 = 0.0
-    caudal_base_m3s = 0.0
-    lluvia_base_mm = 0.0
-    recarga_base_mm = 0.0
-    altitud_m = 1500.0
-    q_medio_real = 0.0
-    q_min_real = 0.0
+    llave_hidro = generar_llave_universal(escala, lugar_original, "Total")
+    nombre_tabla_hidro = "matriz_hidrologica_maestra"
+    
+    # 1. Búsqueda por Llave Exacta (Titanio)
+    df_hidro = extraer_datos_matriz_sql(nombre_tabla_hidro, llave_hidro, es_llave=True)
 
-    # 🚀 IDEAM exige precisión absoluta. Enviamos 'nombre_zona_full' (Ej: Bzlo. Canime - (2317-03-01-04))
-    df_hidro = consultar_matriz_sql("matriz_hidrologica_maestra", nombre_zona_full, nivel_req, "Jerarquia")
+    # 2. 🛡️ Fallback Semántico (Búsqueda exacta por nombre limpio)
+    if df_hidro.empty:
+        # Pasamos el nombre completo sin recortar. utils.py lo limpiará y hará el match exacto.
+        lugar_puro = str(lugar_original).split(" - (")[0].strip()
+        df_hidro = extraer_datos_matriz_sql(nombre_tabla_hidro, lugar_puro, nivel=escala, es_llave=False)
 
     if not df_hidro.empty:
         row_h = df_hidro.iloc[0]
-        area_km2 = float(row_h.get('Area_km2', 0))
-        area_cuenca_km2 = area_km2 
-        
-        caudal_base_m3s = float(row_h.get('Caudal_Medio_m3s', 0))
+        area_km2 = float(row_h.get('Area_km2', 100.0))
+        area_cuenca_km2 = area_km2
+        caudal_base_m3s = float(row_h.get('Caudal_Medio_m3s', 10.0))
         oferta_anual_m3 = caudal_base_m3s * 31536000
-        lluvia_base_mm = float(row_h.get('Lluvia_mm', 0))
-        recarga_base_mm = float(row_h.get('Recarga_mm', 0))
-        altitud_m = float(row_h.get('Altitud_m', 1500))
-        
+        lluvia_base_mm = float(row_h.get('Lluvia_mm', 2000.0))
+        recarga_base_mm = float(row_h.get('Recarga_mm', 350.0))
+        altitud_m = float(row_h.get('Altitud_m', 1500.0))
         q_medio_real = caudal_base_m3s
-        q_min_real = float(row_h.get('Caudal_Minimo_m3s', caudal_base_m3s * 0.2))
+        q_min_real = float(row_h.get('Caudal_Minimo_m3s', caudal_base_m3s * 0.2)) 
         
         st.success(f" 💧  **Cerebro Hidrológico Enlazado:** Área {area_cuenca_km2:,.1f} km², Caudal Medio {caudal_base_m3s:,.2f} m³/s.")
         origen_hidro = True
     else:
-        st.error(f" ❌  La cuenca '{nombre_zona_full}' no existe en la Matriz Hidrológica para el nivel {nivel_req}.")
+        # 🛡️ ESCUDO DE SUPERVIVENCIA
+        area_km2, area_cuenca_km2 = 100.0, 100.0
+        caudal_base_m3s = 10.0
+        oferta_anual_m3 = caudal_base_m3s * 31536000
+        lluvia_base_mm, recarga_base_mm = 2000.0, 350.0
+        altitud_m = 1500.0
+        q_medio_real, q_min_real = 10.0, 2.0
         origen_hidro = False
 
     st.session_state['aleph_area_km2'] = area_cuenca_km2
     st.session_state['aleph_recarga_mm'] = recarga_base_mm
 
     # ---------------------------------------------------------
-    # 🛑 GUARDIA DE SEGURIDAD (Hard Stop) - ESCUDO INTELIGENTE
-    # ===================================================================
+    # 🛑 ESTADO DE SINCRONIZACIÓN Y ESCUDO ELEGANTE
+    # ---------------------------------------------------------
     if not (origen_demo and origen_pecu and origen_hidro):
-        with st.expander("⚠️ Estado de Sincronización de Matrices", expanded=True):
-            if not origen_demo: st.error(f"❌ Datos Demográficos no encontrados para {nombre_zona_puro} ({nivel_req}).")
-            if not origen_pecu: st.warning(f"⚠️ Datos Pecuarios no encontrados. Se asume carga cero.")
-            if not origen_hidro: st.error(f"❌ Datos Hidrológicos no encontrados para {nombre_zona_full} ({nivel_req}).")
-            
-            st.info("💡 Puedes continuar explorando el tablero con los datos disponibles.")
-    
-    # (A partir de aquí, el código sabe que las 3 matrices existen y son perfectas)
+        with st.expander("⚠️ Sincronización Parcial (Modo Supervivencia Activado)", expanded=True):
+            st.info("💡 **El Simulador sigue corriendo sin interrupciones:** Faltan algunos datos nativos en la Base de Datos para este territorio, pero el Aleph ha inyectado **Valores Refugio** para garantizar que los modelos matemáticos y el análisis de inversión sigan operando de forma elegante.")
+            if not origen_demo: st.error(f"❌ Datos Demográficos no encontrados en la Matriz para '{lugar_maestro}'.")
+            if not origen_pecu: st.warning(f"⚠ Datos Pecuarios no encontrados. Se asume carga ganadera cero.")
+            if not origen_hidro: st.error(f"❌ Datos Hidrológicos no encontrados. Valores Refugio activados (10 m³/s).")
+
     tipo_oferta = st.radio("Escenario Hidrológico de Simulación:", 
-                           ["🌊 Caudal Medio (Condiciones Normales)", "🏜️ Caudal Mínimo / Estiaje (Q95)"], horizontal=True)
+                            ["🌊 Caudal Medio (Condiciones Normales)", "🏜️ Caudal Mínimo / Estiaje (Q95)"], horizontal=True)
     oferta_dinamica = q_min_real if "Mínimo" in tipo_oferta else q_medio_real
 
     with st.expander("⚙️ Calibración de Oferta Hídrica Base", expanded=False):
@@ -576,122 +547,153 @@ if gdf_zona is not None and not gdf_zona.empty:
 
     st.session_state['aleph_oferta_m3s'] = oferta_nominal
 
-    # ---------------------------------------------------------
-    # 4. METABOLISMO Y DEMANDA (SÍNTESIS FINAL)
-    # ---------------------------------------------------------
-    # 🚀 FIX 1: INTEGRACIÓN DEL RURH AL METABOLISMO
-    demanda_domestica_L_dia = (pob_total * 150) + (bovinos * 40) + (porcinos * 15) + (aves * 0.3)
-    demanda_domestica_m3s = (demanda_domestica_L_dia / 1000) / 86400
-    
-    # Llamamos a las concesiones de la industria y el agro (RURH)
-    dem_rurh_m3s = st.session_state.get('aleph_concesiones_m3s', 0.0)
-    
-    # La verdadera Demanda Total
-    demanda_m3s = demanda_domestica_m3s + dem_rurh_m3s
-    
-    st.session_state['demanda_total_m3s'] = demanda_m3s
-    st.session_state['poblacion_servida'] = pob_total
-    st.session_state['zona_activa_global'] = nombre_zona 
-    
-    # Evaluar si tenemos sincronización perfecta
-    if origen_demo and origen_pecu and origen_hidro:
-        st.success(f"✅ **Sincronización Perfecta:** Las matrices maestras y el RURH están alimentando a '{nombre_zona}' en tiempo real.")
-        origen_carga = "Modelación SQL Exacta"
-    else:
-        st.warning(f"⚠️ **Sincronización Parcial:** Faltan datos en uno de los motores para '{nombre_zona}'. Se han activado valores refugio.")
-        origen_carga = "Datos de Emergencia"
+# 4. METABOLISMO Y DEMANDA (SÍNTESIS FINAL)
+# ---------------------------------------------------------
+# 🚀 FIX 1: INTEGRACIÓN DEL RURH AL METABOLISMO
+pob_total = st.session_state.get('aleph_pob_total', 0.0)
+bovinos = st.session_state.get('ica_bovinos_calc_met', 0.0)
+porcinos = st.session_state.get('ica_porcinos_calc_met', 0.0)
+aves = st.session_state.get('ica_aves_calc_met', 0.0)
 
-    with st.expander("🎛️ Simulación de Escenarios (Variables de Decisión)", expanded=False):
-        c_sim1, c_sim2 = st.columns(2)
-        impacto_cc = c_sim1.slider("📉 Reducción Oferta por Cambio Climático (%):", 0, 80, 0, step=5)
-        mitigacion_dbo = c_sim2.slider("🌿 Mitigación de Cargas (SbN + PTAR) %:", 0, 100, 0, step=5)
+demanda_domestica_L_dia = (pob_total * 150) + (bovinos * 40) + (porcinos * 15) + (aves * 0.3)
+demanda_domestica_m3s = (demanda_domestica_L_dia / 1000) / 86400
 
-    # 🚀 FIX 2: CÁLCULO REALISTA DE OFERTA (CAUDAL ECOLÓGICO + ENSO)
-    enso_actual = st.session_state.get('enso_estado', 'Neutral')
-    castigo_enso = 0.40 if enso_actual == 'El Niño' else 0.0
-    
-    # Restamos el 25% de la oferta porque es intocable (Caudal Ecológico de la cuenca)
-    oferta_utilizable = oferta_nominal * 0.75 
+# Llamamos a las concesiones de la industria y el agro (RURH)
+dem_rurh_m3s = st.session_state.get('aleph_concesiones_m3s', 0.0)
 
-    # Cálculos de Oferta y Demanda Finales
-    oferta_anual_m3 = (oferta_utilizable * 31536000) * (1 - (impacto_cc / 100)) * (1 - castigo_enso)
-    recarga_anual_m3 = recarga_base_mm * area_cuenca_km2 * 1000
-    consumo_anual_m3 = demanda_m3s * 31536000
-    
-    # Modelación de Calidad (DBO5)
-    proxy_carga = ((pob_total * 0.050) + (bovinos * 0.4) + (porcinos * 0.15)) * 365 / 1000
-    carga_total_ton = float(st.session_state.get('carga_dbo_total_ton', proxy_carga if proxy_carga > 0 else 1500.0))
-    carga_final_rio_ton = carga_total_ton * (1 - (mitigacion_dbo / 100))
-    
-    # 🚀 INYECCIÓN AL ALEPH: Guardamos el cálculo para que la Telemetría lo lea
-    st.session_state['carga_dbo_total_ton'] = carga_total_ton
-    
-    # Física de Concentración
-    caudal_critico_L_s = (oferta_anual_m3 / 31536000) * 1000 * 0.25
-    carga_mg_s = (carga_final_rio_ton * 1_000_000_000) / 31536000
-    concentracion_dbo_mg_l = carga_mg_s / caudal_critico_L_s if caudal_critico_L_s > 0.1 else 999.0
+# La verdadera Demanda Total
+demanda_m3s = demanda_domestica_m3s + dem_rurh_m3s
 
-    # 🎯 KPIs (Velocímetros)
-    wei_ratio = consumo_anual_m3 / oferta_anual_m3 if oferta_anual_m3 > 0 else 1.0
-    ind_estres = max(0.0, min(100.0, 100.0 - (wei_ratio / 0.40) * 60))
-    
-    bfi_ratio = recarga_anual_m3 / oferta_anual_m3 if oferta_anual_m3 > 0 else 0.0
-    factor_supervivencia = min(1.0, recarga_anual_m3 / consumo_anual_m3) if consumo_anual_m3 > 0 else 1.0
-    ind_resiliencia = max(0.0, min(100.0, (bfi_ratio / 0.70) * 100 * factor_supervivencia))
-    
-    ind_calidad = max(0.0, min(100.0, 100 * math.exp(-0.07 * concentracion_dbo_mg_l)))
-    ind_neutralidad = 0.0 
+st.session_state['demanda_total_m3s'] = demanda_m3s
+st.session_state['poblacion_servida'] = pob_total
+st.session_state['zona_activa_global'] = nombre_zona 
 
-    estres_hidrico_porcentaje = (wei_ratio) * 100
-    st.session_state['estres_hidrico_global'] = estres_hidrico_porcentaje
-    
-    # ==============================================================================
-    # 🗺️ EL LIENZO TERRITORIAL (CONTEXTO GEOGRÁFICO Y SATELITAL)
-    # ==============================================================================
-    st.markdown("---")
-    st.markdown(f"## 📍 CONTEXTO GEOGRÁFICO: El Lienzo Territorial de {nombre_zona}")
-    st.info("Antes de analizar las métricas, observemos la realidad física del territorio: coberturas de suelo, relieve y presión antrópica monitoreada por satélite.")
-    
-    # 📥 1. DESCARGA PREDIAL (Se mueve arriba para que el mapa lo use)
-    capas = {}
+# Evaluar si tenemos sincronización perfecta
+# 🚀 FIX: Rescate seguro de variables de estado
+origen_demo = locals().get('origen_demo', False)
+origen_pecu = locals().get('origen_pecu', False)
+origen_hidro = locals().get('origen_hidro', False)
+
+if origen_demo and origen_pecu and origen_hidro:
+    st.success(f"✅ **Sincronización Perfecta:** Las matrices maestras y el RURH están en línea.")
+    origen_carga = "Modelación SQL Exacta"
+else:
+    st.warning(f"⚠️ **Sincronización Parcial:** Faltan datos en uno de los motores para '{nombre_zona}'. Se han activado valores refugio.")
+    origen_carga = "Datos de Emergencia"
+
+with st.expander("🎛️ Simulación de Escenarios (Variables de Decisión)", expanded=False):
+    c_sim1, c_sim2 = st.columns(2)
+    impacto_cc = c_sim1.slider("📉 Reducción Oferta por Cambio Climático (%):", 0, 80, 0, step=5)
+    mitigacion_dbo = c_sim2.slider("🌿 Mitigación de Cargas (SbN + PTAR) %:", 0, 100, 0, step=5)
+
+# 🚀 FIX 2: CÁLCULO REALISTA DE OFERTA (CAUDAL ECOLÓGICO + ENSO)
+enso_actual = st.session_state.get('enso_estado', 'Neutral')
+castigo_enso = 0.40 if enso_actual == 'El Niño' else 0.0
+
+# Restamos el 25% de la oferta porque es intocable (Caudal Ecológico de la cuenca)
+# 🚀 FIX: Rescate de oferta_nominal desde el estado global (o asume 0 si falla)
+oferta_nominal = st.session_state.get('aleph_oferta_m3s', 0.0)
+oferta_utilizable = oferta_nominal * 0.75
+
+# Cálculos de Oferta y Demanda Finales
+# 🚀 FIX: Rescate de variables hidrológicas base desde el estado global
+recarga_base_mm = st.session_state.get('aleph_recarga_mm', 0.0)
+area_cuenca_km2 = st.session_state.get('aleph_area_km2', 0.0)
+
+# 🚀 FIX: Rescate seguro de variables de impacto climático y demanda
+impacto_cc = locals().get('impacto_cc', 0.0)
+impacto_enso = locals().get('impacto_enso', 0.0)
+demanda_m3s = locals().get('demanda_m3s', 0.0)
+
+oferta_anual_m3 = (oferta_utilizable * 31536000) * (1 - (impacto_cc / 100)) * (1 - (impacto_enso / 100))
+recarga_anual_m3 = recarga_base_mm * area_cuenca_km2 * 1000
+consumo_anual_m3 = demanda_m3s * 31536000
+
+# Modelación de Calidad (DBO5)
+# 🚀 FIX: Rescate poblacional para evitar NameErrors en proxy_carga
+pob_total = st.session_state.get('aleph_pob_total', 0.0)
+bovinos = st.session_state.get('ica_bovinos_calc_met', 0.0)
+porcinos = st.session_state.get('ica_porcinos_calc_met', 0.0)
+
+proxy_carga = ((pob_total * 0.050) + (bovinos * 0.4) + (porcinos * 0.15)) * 365 / 1000
+carga_total_ton = float(st.session_state.get('carga_dbo_total_ton', proxy_carga if proxy_carga > 0 else 1500.0))
+
+# 🚀 FIX: Rescate de mitigación
+mitigacion_dbo = locals().get('mitigacion_dbo', 0.0)
+carga_final_rio_ton = carga_total_ton * (1 - (mitigacion_dbo / 100))
+
+# 🚀 INYECCIÓN AL ALEPH: Guardamos el cálculo para que la Telemetría lo lea
+st.session_state['carga_dbo_total_ton'] = carga_total_ton
+
+# Física de Concentración
+caudal_critico_L_s = (oferta_anual_m3 / 31536000) * 1000 * 0.25
+carga_mg_s = (carga_final_rio_ton * 1_000_000_000) / 31536000
+concentracion_dbo_mg_l = carga_mg_s / caudal_critico_L_s if caudal_critico_L_s > 0.1 else 999.0
+
+# 🎯 KPIs (Velocímetros)
+import math
+wei_ratio = consumo_anual_m3 / oferta_anual_m3 if oferta_anual_m3 > 0 else 1.0
+ind_estres = max(0.0, min(100.0, 100.0 - (wei_ratio / 0.40) * 60))
+
+bfi_ratio = recarga_anual_m3 / oferta_anual_m3 if oferta_anual_m3 > 0 else 0.0
+factor_supervivencia = min(1.0, recarga_anual_m3 / consumo_anual_m3) if consumo_anual_m3 > 0 else 1.0
+ind_resiliencia = max(0.0, min(100.0, (bfi_ratio / 0.70) * 100 * factor_supervivencia))
+
+ind_calidad = max(0.0, min(100.0, 100 * math.exp(-0.07 * concentracion_dbo_mg_l)))
+ind_neutralidad = 0.0 
+
+estres_hidrico_porcentaje = (wei_ratio) * 100
+st.session_state['estres_hidrico_global'] = estres_hidrico_porcentaje
+
+# ==============================================================================
+# 🗺️️ EL LIENZO TERRITORIAL (CONTEXTO GEOGRÁFICO Y SATELITAL)
+# ==============================================================================
+st.markdown("---")
+st.markdown(f"## 📍 CONTEXTO GEOGRÁFICO: El Lienzo Territorial de {nombre_zona}")
+st.info("Antes de analizar las métricas, observemos la realidad física del territorio: coberturas de suelo, relieve y presión antrópica monitoreada por satélite.")
+
+# 📥 1. DESCARGA PREDIAL (Se mueve arriba para que el mapa lo use)
+capas = {}
+try:
+    if gdf_zona is not None and not gdf_zona.empty:
+        capas = load_context_layers(tuple(gdf_zona.total_bounds))
+except Exception as e:
+    pass
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def obtener_predios_y_hectareas(_gdf_zona, nombre_zona_txt):
+    import requests, tempfile
+    import pandas as pd
+    import geopandas as gpd
+    ha_calc, info_debug, gdf_predios_final = 0.0, "Descargando predios...", None 
     try:
-        if gdf_zona is not None and not gdf_zona.empty:
-            capas = load_context_layers(tuple(gdf_zona.total_bounds))
-    except Exception as e:
-        pass
+        url_predios = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PrediosEjecutados.geojson"
+        res = requests.get(url_predios)
+        if res.status_code == 200:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".geojson") as tmp:
+                tmp.write(res.content)
+                tmp_path = tmp.name
+            gdf_p = gpd.read_file(tmp_path)
+            if not gdf_p.empty:
+                gdf_p.set_crs(epsg=4326, allow_override=True, inplace=True)
+                gdf_p_3116, gdf_z_3116 = gdf_p.to_crs(epsg=3116), _gdf_zona.to_crs(epsg=3116)
+                gdf_p_3116['geometry'] = gdf_p_3116.geometry.make_valid().buffer(0)
+                gdf_z_3116['geometry'] = gdf_z_3116.geometry.make_valid().buffer(0)
+                recorte_exacto = gpd.clip(gdf_p_3116, gdf_z_3116)
+                if not recorte_exacto.empty:
+                    ha_calc = recorte_exacto.area.sum() / 10000.0
+                    info_debug = f"✅ CORTE EXACTO: {len(recorte_exacto)} fragmentos de predios operan físicamente en la zona."
+                    gdf_predios_final = recorte_exacto.to_crs(epsg=4326)
+                else: 
+                    info_debug = f"ℹ️ ZONA VIRGEN: Ningún predio cae dentro de {nombre_zona_txt}."
+    except Exception as e: 
+        info_debug = f"❌ ERROR: {e}"
+    return ha_calc, info_debug, gdf_predios_final
 
-    @st.cache_data(ttl=3600, show_spinner=False)
-    def obtener_predios_y_hectareas(_gdf_zona, nombre_zona_txt):
-        import requests, tempfile
-        import pandas as pd
-        import geopandas as gpd
-        ha_calc, info_debug, gdf_predios_final = 0.0, "Descargando predios...", None 
-        try:
-            url_predios = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PrediosEjecutados.geojson"
-            res = requests.get(url_predios)
-            if res.status_code == 200:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".geojson") as tmp:
-                    tmp.write(res.content)
-                    tmp_path = tmp.name
-                gdf_p = gpd.read_file(tmp_path)
-                if not gdf_p.empty:
-                    gdf_p.set_crs(epsg=4326, allow_override=True, inplace=True)
-                    gdf_p_3116, gdf_z_3116 = gdf_p.to_crs(epsg=3116), _gdf_zona.to_crs(epsg=3116)
-                    gdf_p_3116['geometry'] = gdf_p_3116.geometry.make_valid().buffer(0)
-                    gdf_z_3116['geometry'] = gdf_z_3116.geometry.make_valid().buffer(0)
-                    recorte_exacto = gpd.clip(gdf_p_3116, gdf_z_3116)
-                    if not recorte_exacto.empty:
-                        ha_calc = recorte_exacto.area.sum() / 10000.0
-                        info_debug = f"✅ CORTE EXACTO: {len(recorte_exacto)} fragmentos de predios operan físicamente en la zona."
-                        gdf_predios_final = recorte_exacto.to_crs(epsg=4326)
-                    else: info_debug = f"ℹ️ ZONA VIRGEN: Ningún predio cae dentro de {nombre_zona_txt}."
-        except Exception as e: info_debug = f"❌ ERROR: {e}"
-        return ha_calc, info_debug, gdf_predios_final
+with st.spinner("Sincronizando inventario predial de Supabase..."):
+    ha_reales_sig, info_debug, gdf_predios_mapa = obtener_predios_y_hectareas(gdf_zona, nombre_zona)
 
-    with st.spinner("Sincronizando inventario predial de Supabase..."):
-        ha_reales_sig, info_debug, gdf_predios_mapa = obtener_predios_y_hectareas(gdf_zona, nombre_zona)
-
-    # 🗺️ 2. EL MAPA SATELITAL
+# 🗺️ 2. EL MAPA SATELITAL
     with st.expander(f"🛰️ EXPLORADOR ESPACIAL Y COBERTURAS (Google Earth Engine): {nombre_zona}", expanded=True):
         if estres_hidrico_porcentaje > 80: color_alerta, opacidad_alerta = '#8B0000', 0.5
         elif estres_hidrico_porcentaje > 40: color_alerta, opacidad_alerta = '#E74C3C', 0.4
@@ -706,10 +708,14 @@ if gdf_zona is not None and not gdf_zona.empty:
 
         m = folium.Map(location=[centro_y, centro_x], zoom_start=11, tiles="CartoDB positron")
         folium.TileLayer(tiles='https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', attr='Google', name='Google Satellite', overlay=False, control=True).add_to(m)
-        folium.GeoJson(gdf_zona, name=f"Límite {nombre_zona}", style_function=lambda x: {'color': 'blue', 'weight': 3, 'fillOpacity': 0.1}).add_to(m)
+        
+        # 🚀 FIX: Prevenir caída de Folium validando que gdf_zona exista y tenga datos
+        if gdf_zona is not None and not gdf_zona.empty:
+            gdf_zona_limpio = gdf_zona.dropna(subset=['geometry'])
+            if not gdf_zona_limpio.empty:
+                folium.GeoJson(gdf_zona_limpio, name=f"Límite {nombre_zona}", style_function=lambda x: {'color': 'blue', 'weight': 3, 'fillOpacity': 0.1}).add_to(m)
 
         if gdf_predios_mapa is not None and not gdf_predios_mapa.empty:
-            
             # 🚀 FIX: Convertir columnas de Fecha (Timestamp) a texto para que el mapa no colapse
             for col in gdf_predios_mapa.select_dtypes(include=['datetime64', 'datetimetz']).columns:
                 gdf_predios_mapa[col] = gdf_predios_mapa[col].astype(str)
@@ -726,37 +732,44 @@ if gdf_zona is not None and not gdf_zona.empty:
             def add_ee_layer(self, ee_image_object, vis_params, name, show=True):
                 map_id_dict = ee.Image(ee_image_object).getMapId(vis_params)
                 folium.raster_layers.TileLayer(tiles=map_id_dict['tile_fetcher'].url_format, attr='Google Earth Engine', name=name, overlay=True, control=True, show=show).add_to(self)
+            
             folium.Map.add_ee_layer = add_ee_layer
             
             with st.spinner("Optimizando memoria visual satelital..."):
-                from shapely.geometry import box
-                minx, miny, maxx, maxy = gdf_zona.total_bounds
-                roi_ee = ee.Geometry(box(minx, miny, maxx, maxy).__geo_interface__)
-            
-            dw_coleccion = ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1').filterBounds(roi_ee).filterDate('2023-01-01', '2024-01-01')
-            dw_imagen = dw_coleccion.select('label').mode().clip(roi_ee)
-            dw_vis = {'min': 0, 'max': 8, 'palette': ['#419BDF', '#397D49', '#88B053', '#7A87C6', '#E49635', '#DFC35A', '#C4281B', '#A59B8F', '#B39FE1']}
-            
-            m.add_ee_layer(dw_imagen, dw_vis, '🛰️ Uso de Suelo (Satélite IA)')
-            
-            dem = ee.Image("NASA/NASADEM_HGT/001").select('elevation').clip(roi_ee)
-            slope, hillshade = ee.Terrain.slope(dem), ee.Terrain.hillshade(dem, azimuth=315, elevation=45)
-            m.add_ee_layer(hillshade, {'min': 0, 'max': 255}, '⛰️ Relieve (Hillshade)', show=False)
-            m.add_ee_layer(dem, {'min': 1000, 'max': 3000, 'palette': ['#006600', '#002200', '#fff700', '#ab7634', '#c4d0ff', '#ffffff']}, '🆙 Elevación (Hipsometría)', show=False)
-            m.add_ee_layer(slope, {'min': 0, 'max': 45, 'palette': ['white', 'red']}, '⚠️ Mapa de Pendientes', show=False)
+                # 🚀 FIX ESTRUCTURAL GEE: Validación estricta del Polígono antes de invocar total_bounds
+                if gdf_zona is not None and not gdf_zona.empty:
+                    from shapely.geometry import box
+                    minx, miny, maxx, maxy = gdf_zona.total_bounds
+                    roi_ee = ee.Geometry(box(minx, miny, maxx, maxy).__geo_interface__)
+                    
+                    dw_coleccion = ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1').filterBounds(roi_ee).filterDate('2023-01-01', '2024-01-01')
+                    dw_imagen = dw_coleccion.select('label').mode().clip(roi_ee)
+                    dw_vis = {'min': 0, 'max': 8, 'palette': ['#419BDF', '#397D49', '#88B053', '#7A87C6', '#E49635', '#DFC35A', '#C4281B', '#A59B8F', '#B39FE1']}
+                    
+                    m.add_ee_layer(dw_imagen, dw_vis, '🛰️ Uso de Suelo (Satélite IA)')
+                    
+                    dem = ee.Image("NASA/NASADEM_HGT/001").select('elevation').clip(roi_ee)
+                    slope, hillshade = ee.Terrain.slope(dem), ee.Terrain.hillshade(dem, azimuth=315, elevation=45)
+                    m.add_ee_layer(hillshade, {'min': 0, 'max': 255}, '⛰️ Relieve (Hillshade)', show=False)
+                    m.add_ee_layer(dem, {'min': 1000, 'max': 3000, 'palette': ['#006600', '#002200', '#fff700', '#ab7634', '#c4d0ff', '#ffffff']}, '🆙 Elevación (Hipsometría)', show=False)
+                    m.add_ee_layer(slope, {'min': 0, 'max': 45, 'palette': ['white', 'red']}, '⚠️ Mapa de Pendientes', show=False)
+                else:
+                    raise ValueError("Polígono de zona no disponible para inicializar el roi_ee.")
 
             with st.spinner("Calculando superficies satelitales en vivo..."):
-                area_image = ee.Image.pixelArea().addBands(dw_imagen)
-                roi_math = ee.Geometry(gdf_zona.geometry.simplify(0.01).unary_union.__geo_interface__)
-                areas_ee = area_image.reduceRegion(reducer=ee.Reducer.sum().group(groupField=1, groupName='clase'), geometry=roi_math, scale=50, maxPixels=1e10).getInfo()
+                if gdf_zona is not None and not gdf_zona.empty:
+                    area_image = ee.Image.pixelArea().addBands(dw_imagen)
+                    roi_math = ee.Geometry(gdf_zona.geometry.simplify(0.01).unary_union.__geo_interface__)
+                    areas_ee = area_image.reduceRegion(reducer=ee.Reducer.sum().group(groupField=1, groupName='clase'), geometry=roi_math, scale=50, maxPixels=1e10).getInfo()
 
-                nombres_clases = {0: "💧 Agua", 1: "🌳 Bosque", 2: "🌾 Pastos (Ganadería)", 4: "🚜 Cultivos (Agroindustria)", 5: "🌿 Matorrales", 6: "🏙️ Urbano", 7: "🟫 Suelo Desnudo"}
-                if 'groups' in areas_ee:
-                    for grupo in areas_ee['groups']:
-                        if int(grupo['clase']) in nombres_clases:
-                            areas_data.append({"Cobertura": nombres_clases[int(grupo['clase'])], "Área (Ha)": grupo['sum'] / 10000.0})
+                    nombres_clases = {0: "💧 Agua", 1: "🌳 Bosque", 2: "🌾 Pastos (Ganadería)", 4: "🚜 Cultivos (Agroindustria)", 5: "🌿 Matorrales", 6: "🏙️ Urbano", 7: "🟫 Suelo Desnudo"}
+                    if 'groups' in areas_ee:
+                        for grupo in areas_ee['groups']:
+                            if int(grupo['clase']) in nombres_clases:
+                                areas_data.append({"Cobertura": nombres_clases[int(grupo['clase'])], "Área (Ha)": grupo['sum'] / 10000.0})
+
         except Exception as e:
-            st.warning(f"Aviso de Satélite: Modo local activado. ({e})")
+            st.warning(f"Aviso de Satélite: Modo local activado. No se cargaron capas GEE. ({e})")
 
         from branca.element import Template, MacroElement
         leyenda_html = """
@@ -785,32 +798,32 @@ if gdf_zona is not None and not gdf_zona.empty:
         
         # Renderizamos el mapa directamente en el navegador (ADIÓS st_folium)
         components.html(m._repr_html_(), height=550)
-        
-        # ==========================================
-        # 5. MOSTRAR MÉTRICAS: NATURAL VS GESTIONADO
-        # ==========================================
-        st.markdown("### 🌍 Balance de Coberturas: Capital Natural vs. Capital Gestionado")
-        
-        c_met1, c_met2 = st.columns([3, 1])
-        
-        with c_met1:
-            if areas_data:
-                df_areas = pd.DataFrame(areas_data).sort_values(by="Área (Ha)", ascending=False).reset_index(drop=True)
-                cols = st.columns(len(df_areas))
-                for idx, row in df_areas.iterrows(): 
-                    # Limpiamos el texto para que se vea más estético
-                    nombre_limpio = row['Cobertura'].split(' ')[1] if ' ' in row['Cobertura'] else row['Cobertura']
-                    cols[idx].metric(label=f"🛰️ {nombre_limpio}", value=f"{row['Área (Ha)']:,.0f}")
-        
-        with c_met2:
-            # El recuadro distintivo para la inversión SIG
-            ha_historicas = float(ha_reales_sig) if 'ha_reales_sig' in locals() else 0.0
-            st.markdown(f"""
-            <div style="background-color: #e8f8f5; padding: 10px; border-radius: 8px; border: 2px solid #2ecc71; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
-                <div style="font-size: 0.85rem; color: #27ae60; margin-bottom: 5px;">🟢 Inversión Histórica (SIG)</div>
-                <div style="font-size: 1.4rem; font-weight: bold; color: #1e8449;">{ha_historicas:,.1f} ha</div>
-            </div>
-            """, unsafe_allow_html=True)
+    
+    # ==========================================
+    # 5. MOSTRAR MÉTRICAS: NATURAL VS GESTIONADO
+    # ==========================================
+    st.markdown("### 🌍 Balance de Coberturas: Capital Natural vs. Capital Gestionado")
+    
+    c_met1, c_met2 = st.columns([3, 1])
+    
+    with c_met1:
+        if areas_data:
+            df_areas = pd.DataFrame(areas_data).sort_values(by="Área (Ha)", ascending=False).reset_index(drop=True)
+            cols = st.columns(len(df_areas))
+            for idx, row in df_areas.iterrows(): 
+                # Limpiamos el texto para que se vea más estético
+                nombre_limpio = row['Cobertura'].split(' ')[1] if ' ' in row['Cobertura'] else row['Cobertura']
+                cols[idx].metric(label=f"🛰️ {nombre_limpio}", value=f"{row['Área (Ha)']:,.0f}")
+    
+    with c_met2:
+        # El recuadro distintivo para la inversión SIG
+        ha_historicas = float(ha_reales_sig) if 'ha_reales_sig' in locals() else 0.0
+        st.markdown(f"""
+        <div style="background-color: #e8f8f5; padding: 10px; border-radius: 8px; border: 2px solid #2ecc71; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+            <div style="font-size: 0.85rem; color: #27ae60; margin-bottom: 5px;">🟢 Inversión Histórica (SIG)</div>
+            <div style="font-size: 1.4rem; font-weight: bold; color: #1e8449;">{ha_historicas:,.1f} ha</div>
+        </div>
+        """, unsafe_allow_html=True)
 
     # ==============================================================================
     # 📍 PASO 1: LA FOTOGRAFÍA DEL PACIENTE (DIAGNÓSTICO BASE)
@@ -840,6 +853,10 @@ if gdf_zona is not None and not gdf_zona.empty:
         ha_pastos = next((x["Área (Ha)"] for x in areas_data if "Pastos" in x["Cobertura"]), 0.0)
         area_total_ha = sum([x["Área (Ha)"] for x in areas_data])
     else:
+        # 🚀 FIX: Rescate de variables huérfanas
+        bovinos = st.session_state.get('ica_bovinos_calc_met', locals().get('bovinos', 0.0))
+        area_km2 = st.session_state.get('aleph_area_km2', locals().get('area_km2', 0.0))
+        
         ha_pastos = bovinos / 1.5 if bovinos > 0 else 0
         ha_cultivos = (area_km2 * 100) * 0.15 if area_km2 > 0 else 0
         area_total_ha = area_km2 * 100

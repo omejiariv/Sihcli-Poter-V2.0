@@ -154,13 +154,16 @@ with tab_dashboard:
     st.markdown("### 🧠 EJE 3: Síntesis y Estrategia (DSS)")
     st.caption("Sistemas de Soporte de Decisiones para planeación, ordenamiento y priorización de inversiones.")
     
-    c9, c10, _ = st.columns(3)
+    c9, c10, c10b = st.columns(3)
     with c9:
         st.page_link("pages/09_🧠_Toma_de_Decisiones.py", label="**Toma de Decisiones**", icon="🧠")
-        st.markdown("<small>Dashboard Maestro: Estrés hídrico, Portafolio WRI y análisis multicriterio (AHP).</small>", unsafe_allow_html=True)
+        st.markdown("<small>Dashboard Maestro: Portafolio WRI y análisis multicriterio (AHP).</small>", unsafe_allow_html=True)
     with c10:
+        st.page_link("pages/10_⚖️_Simulador_Integral.py", label="**Simulador Integral (Hidro-WEAP)**", icon="⚖️")
+        st.markdown("<small>Motor Maestro: Balance biofísico en vivo, dinámica hidrosocial y proyección ENSO.</small>", unsafe_allow_html=True)
+    with c10b:
         st.page_link("pages/10_👑_Panel_Administracion.py", label="**Panel de Administración**", icon="👑")
-        st.markdown("<small>Aduana SIG, carga de datos maestros a la nube (Supabase) y gestión del sistema.</small>", unsafe_allow_html=True)
+        st.markdown("<small>Aduana SIG y carga de datos maestros a la nube (Supabase).</small>", unsafe_allow_html=True)
 
     st.markdown("<hr style='margin: 10px 0; border-top: 1px dashed #ccc;'>", unsafe_allow_html=True)
 
