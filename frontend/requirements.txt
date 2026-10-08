@@ -56,4 +56,8 @@ earthengine-api
 fastapi
 uvicorn
 pydantic
+<<<<<<< HEAD
 pyeto==0.2
+=======
+pyeto==0.2
+>>>>>>> 9366386 (Reparando dependencias de pyeto, psycopg y CRS de mapas)

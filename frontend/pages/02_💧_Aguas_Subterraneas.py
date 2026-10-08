@@ -306,6 +306,9 @@ gdf_limite_original = None
 if gdf_zona is not None and not gdf_zona.empty:
     gdf_limite_original = gdf_zona.copy()
     
+    # Fijar el sistema de coordenadas base antes de cualquier transformación
+    gdf_zona.set_crs(epsg=4326, inplace=True, allow_override=True)
+
     if buffer_km > 0:
         gdf_zona_proj = gdf_zona.to_crs(epsg=3116)
         gdf_zona_proj['geometry'] = gdf_zona_proj.geometry.buffer(buffer_km * 1000)
