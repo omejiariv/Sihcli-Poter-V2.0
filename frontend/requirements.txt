@@ -53,3 +53,7 @@ pystac-client
 planetary-computer
 zarr
 earthengine-api
+
+fastapi
+uvicorn
+pydantic
