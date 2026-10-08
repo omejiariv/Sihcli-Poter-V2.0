@@ -56,3 +56,4 @@ earthengine-api
 fastapi
 uvicorn
 pydantic
+pyeto==0.2
