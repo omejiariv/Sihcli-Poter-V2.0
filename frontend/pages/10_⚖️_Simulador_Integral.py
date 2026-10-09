@@ -236,7 +236,12 @@ with st.spinner("🌍 Ejecutando radar espacial avanzado y extrayendo datos sate
                             encontrado = True
 
     # ⚔️ CRUCE GEOGRÁFICO FINAL (Limpiando indices residuales)
-    if gdf_zona is not None and not gdf_zona.empty and gdf_stations is not None and not gdf_stations.empty:
+    if gdf_zona is not None and not gdf_zona.empty and gdf_stations is not None:
+        # 1. Asignar explícitamente el sistema base (WGS84) a ambos mapas
+        gdf_zona.set_crs(epsg=4326, inplace=True, allow_override=True)
+        gdf_stations.set_crs(epsg=4326, inplace=True, allow_override=True)
+    
+        # 2. Ahora sí podemos proyectar a MAGNA-SIRGAS origen nacional
         gdf_zona_proj = gdf_zona.to_crs(epsg=3116)
         gdf_stations_proj = gdf_stations.to_crs(epsg=3116)
         

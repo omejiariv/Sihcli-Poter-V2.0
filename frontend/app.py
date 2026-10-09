@@ -185,16 +185,15 @@ with tab_dashboard:
     st.markdown("<hr style='margin: 10px 0; border-top: 1px dashed #ccc;'>", unsafe_allow_html=True)
 
     # ==============================================================================
-    # 🚀 NUEVOS MOTORES: WEAP Y RURH
+    # 🚀 NUEVOS MOTORES: RURH
     # ==============================================================================
-    st.markdown("### 🚀 Nuevos Motores de Análisis Integrados")
-    st.caption("Herramientas avanzadas incorporadas en la última actualización del gemelo digital.")
+    st.markdown("### 🚀 Motor de Análisis Avanzado")
+    st.caption("Herramientas especializadas incorporadas en la última actualización del gemelo digital.")
     
+    # Dejamos dos columnas para mantener el diseño, pero solo ocupamos la primera
     c14, c15 = st.columns(2)
+    
     with c14:
-        st.page_link("pages/15_⚖️_Escenarios_WEAP.py", label="**Escenarios WEAP**", icon="⚖️")
-        st.markdown("<small>Simulador avanzado de balances hídricos. Permite proyectar escenarios de estrés, variabilidad climática (ENSO) y evaluar la resiliencia del sistema.</small>", unsafe_allow_html=True)
-    with c15:
         st.page_link("pages/16_🏭_Inyeccion_RURH.py", label="**Inyección RURH**", icon="🏭")
         st.markdown("<small>Motor ETL (Extracción, Transformación y Carga) geoespacial. Consolida en tiempo real las presiones sobre el recurso hídrico desde la nube.</small>", unsafe_allow_html=True)
 
@@ -208,19 +207,19 @@ with tab_arquitectura:
     ids = ['SIHCLI-POTER', 'Soporte Biofísico', 'Metabolismo Territorial', 'Síntesis Estratégica', 'Herramientas', 
            'Clima e Hidrología', 'Aguas Subterráneas', 'Isoyetas HD', 'Biodiversidad', 'Geomorfología', 'Satélite Terrestre', 'Radar Meteorológico',
            'Modelo Demográfico', 'Modelo Pecuario', 'Calidad y Vertimientos', 'Sistemas Hídricos', 
-           'Toma de Decisiones', 'Panel Administración', 'Escenarios WEAP', 'Inyección RURH',
+           'Toma de Decisiones', 'Panel Administración', 'Inyección RURH',
            'Generador', 'Ayuda y Docs', 'Detective']
             
     parents = ['', 'SIHCLI-POTER', 'SIHCLI-POTER', 'SIHCLI-POTER', 'SIHCLI-POTER',
                'Soporte Biofísico', 'Soporte Biofísico', 'Soporte Biofísico', 'Soporte Biofísico', 'Soporte Biofísico', 'Soporte Biofísico', 'Soporte Biofísico',
                'Metabolismo Territorial', 'Metabolismo Territorial', 'Metabolismo Territorial', 'Metabolismo Territorial',
-               'Síntesis Estratégica', 'Síntesis Estratégica', 'Síntesis Estratégica', 'Herramientas',
+               'Síntesis Estratégica', 'Síntesis Estratégica', 'Herramientas',
                'Herramientas', 'Herramientas', 'Herramientas']
                 
     values = [100, 35, 35, 20, 10, 
               5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 
               8.75, 8.75, 8.75, 8.75, 
-              6, 6, 8, 4,
+              6, 6, 4,
               3.3, 3.3, 3.4]
 
     if len(ids) == len(parents) == len(values):
