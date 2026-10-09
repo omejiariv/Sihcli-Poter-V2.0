@@ -53,8 +53,6 @@ pystac-client
 planetary-computer
 zarr
 earthengine-api
-fastapi
-uvicorn
 pydantic
 git+https://github.com/woodcrafty/PyETo.git
 psycopg
