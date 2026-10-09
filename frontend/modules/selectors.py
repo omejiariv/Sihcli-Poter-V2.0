@@ -172,7 +172,6 @@ def renderizar_menu_navegacion(pagina_actual):
         st.page_link("pages/05_🏔️_Geomorfologia.py", label="Geomorfología", icon="⛰️")
         st.page_link("pages/06_🐄_Modelo_Pecuario.py", label="Modelo Pecuario", icon="🐄")
         st.page_link("pages/06_📈_Modelo_Demografico.py", label="Modelo Demográfico", icon="👥")
-        st.page_link("pages/07_💧_Hidrologia.py", label="Hidrología", icon="💧")
         st.page_link("pages/07_☀️_Evaporacion.py", label="Evaporación", icon="☀️")
         st.page_link("pages/07_💧_Calidad_y_Vertimientos.py", label="Calidad y Vertimientos", icon="🧪")
         st.page_link("pages/08_🔗_Sistemas_Hidricos_Territoriales.py", label="Sistemas Hídricos", icon="🌊")

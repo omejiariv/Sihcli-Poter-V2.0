@@ -252,7 +252,7 @@ with tab_mapas:
         payload_map = {"territorio": territorio_sel, "nivel": nivel_backend, "anio_destino": año_sel}
         try:
             with st.spinner("Bisturí Espacial extrayendo polígonos desde PostGIS..."):
-                resp_map = requests.post("http://127.0.0.1:8000/api/demografia/mapa", json=payload_map, timeout=60)
+                resp_map = requests.post("https://sihcli-poter-v2-0.onrender.com/api/demografia/mapa", json=payload_map, timeout=60)
                 
             if resp_map.status_code == 200:
                 datos_m = resp_map.json()
@@ -390,7 +390,7 @@ with tab_dinamica:
                 import plotly.express as px
                 import pandas as pd
                 
-                resp_map = requests.post("http://127.0.0.1:8000/api/demografia/mapa", json=payload_map)
+                resp_map = requests.post("https://sihcli-poter-v2-0.onrender.com/api/demografia/mapa", json=payload_map, timeout=60)
 
                 if resp_map.status_code == 200:
                     datos_m = resp_map.json()

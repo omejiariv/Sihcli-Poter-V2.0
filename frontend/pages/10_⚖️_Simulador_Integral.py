@@ -267,7 +267,7 @@ else:
     with st.spinner(f"📡 Procesando {len(ids_estaciones)} estaciones vía FastAPI..."):
         payload = {"territorio": territorio_str, "ids_estaciones": ids_estaciones}
         try:
-            response = requests.post("http://127.0.0.1:8000/api/hidrologia/perfil_base", json=payload, timeout=90)
+            response = requests.post("https://sihcli-poter-v2-0.onrender.com/api/hidrologia/perfil_base", json=payload, timeout=90)
             response.raise_for_status()
             datos = response.json()
             
