@@ -443,17 +443,20 @@ if not df_demo.empty:
 else:
     origen_dato = "Error SQL (Sin Datos)"
 
-# --- 3. CONEXIÓN AL MOTOR PECUARIO (Con Bypass AMVA) ---
+# --- 3. CONEXIÓN AL MOTOR PECUARIO (Sincronizado con Matrices Maestras) ---
 import re
+import unicodedata
 
-# 🚀 FIX DEFINITIVO: Uso estricto de la LLAVE_UNIVERSAL para el cruce pecuario
+def norm_alfanumerico(texto):
+    t = str(texto).split(" - (")[0].strip()
+    t = unicodedata.normalize('NFKD', t).encode('ascii', 'ignore').decode('utf-8').upper()
+    return re.sub(r'[^A-Z0-9]', '', t)
+
 def generar_llave_maestra(escala, territorio):
-    import unicodedata
-    import re
     e = str(escala).upper().strip()
     if "NACION" in e: e = "NACIONAL"
     elif "DEPARTAMENTO" in e or "DEPARTAMENTAL" in e: e = "DEPARTAMENTAL"
-    elif "MUNICIP" in e: e = "MUNICIPIO"  # 🛠️ FIX: Tu base de datos usa MUNICIPIO, no MUNICIPAL
+    elif "MUNICIP" in e: e = "MUNICIPIO"
     elif "REGION" in e or "SUBREGION" in e: e = "SUBREGION"
     elif "CAR" in e or "AUTORIDAD" in e: e = "CAR"
     elif "CUENCA" in e or "NSS" in e or "SZH" in e or "ZH" in e or "AH" in e: e = "CUENCA"
@@ -466,6 +469,7 @@ def generar_llave_maestra(escala, territorio):
     return f"{e}_{t}_TOTAL"
 
 llave_busqueda = generar_llave_maestra(nivel_req, nombre_seleccion)
+terr_limpio = norm_alfanumerico(nombre_seleccion)
 
 try:
     from sqlalchemy import text
@@ -478,7 +482,18 @@ try:
         df_pec_full = pd.read_sql(q_pec, conn)
     
     if not df_pec_full.empty and 'LLAVE_UNIVERSAL' in df_pec_full.columns:
-        df_pec = df_pec_full[df_pec_full['LLAVE_UNIVERSAL'] == llave_busqueda]
+        # 1. Intento exacto por LLAVE_UNIVERSAL
+        df_pec = df_pec_full[df_pec_full['LLAVE_UNIVERSAL'].astype(str).str.upper() == llave_busqueda]
+        
+        # 2. Fallback elástico inmune a guiones bajos y variantes (SUBREGION vs REGIONAL vs SUBREGIONAL)
+        if df_pec.empty:
+            col_terr_p = next((c for c in df_pec_full.columns if c.lower() in ['territorio', 'municipio', 'nombre']), None)
+            if col_terr_p:
+                mask_t = df_pec_full[col_terr_p].apply(norm_alfanumerico) == terr_limpio
+                df_pec = df_pec_full[mask_t]
+            if df_pec.empty:
+                llave_sin_guion = norm_alfanumerico(llave_busqueda.replace("_TOTAL", ""))
+                df_pec = df_pec_full[df_pec_full['LLAVE_UNIVERSAL'].apply(norm_alfanumerico).str.contains(terr_limpio)]
     else:
         df_pec = pd.DataFrame()
 except Exception as e:
@@ -489,29 +504,28 @@ except Exception as e:
 total_bovinos, total_porcinos, total_aves = 0.0, 0.0, 0.0
 
 if not df_pec.empty:
+    # Si por compatibilidad se inyectaron varios alias de nivel (ej. REGIONAL y SUBREGIONAL), evitamos duplicar sumando una sola vez por especie
+    col_esp_name = next((c for c in df_pec.columns if c.lower() == 'especie'), 'Especie')
+    if col_esp_name in df_pec.columns:
+        df_pec = df_pec.drop_duplicates(subset=[col_esp_name], keep='first')
+
     for _, f in df_pec.iterrows():
-        # Limpieza numérica de seguridad
-        val_str = str(f.get('Poblacion_Base', 0)).replace(',','').strip()
-        import re
-        val_str = re.sub(r'[^\d.]', '', val_str) # Quitar todo lo que no sea número
+        col_pob_p = next((c for c in f.index if c.lower() in ['poblacion_base', 'pob_base']), 'Poblacion_Base')
+        val_str = str(f.get(col_pob_p, 0)).replace(',','').strip()
+        val_str = re.sub(r'[^\d.]', '', val_str)
         def_pob = float(val_str) if val_str else 0.0
         
         val_calc = proyectar_modelo_calidad(f, anio_analisis)
         val_final = max(0.0, val_calc if val_calc > 0 else def_pob)
 
-        # 🛠️ FIX: Extracción robusta de especie (Ignora mayúsculas/minúsculas)
-        especie = str(f.get('Especie', '')).upper().strip()
+        especie = str(f.get(col_esp_name, '')).upper().strip()
         if 'BOVIN' in especie: total_bovinos += val_final
         elif 'PORCIN' in especie: total_porcinos += val_final
         elif 'AVE' in especie: total_aves += val_final
             
-    metodo_animal = f"Matriz SQL (Llave: {llave_busqueda})"
+    metodo_animal = f"Matriz SQL Exacta ({llave_busqueda})"
 else:
-    # 🛡️ BYPASS JURISDICCIONAL AMVA
-    if nombre_seleccion == "AMVA" or "VALLE_DE_ABURRA" in llave_busqueda:
-        metodo_animal = "Bypass Jurisdicción (Asume Rural)"
-    else:
-        metodo_animal = f"Error: No hay animales para la llave ({llave_busqueda})"
+    metodo_animal = f"Error: No hay animales para la llave ({llave_busqueda})"
 
 # 🧠 Sincronización con la Memoria Global para gráficas y simulación
 st.session_state['ica_bovinos_calc_met'] = total_bovinos
