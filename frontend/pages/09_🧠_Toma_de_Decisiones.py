@@ -407,80 +407,83 @@ if gdf_zona is not None and not gdf_zona.empty:
         nivel_demo = "Departamental"
 
     # ---------------------------------------------------------
-    # 1. CONEXIÓN DEMOGRÁFICA (Sincronizada 1:1 con Matriz Maestra SQL)
+    # 1. CONEXIÓN DEMOGRÁFICA (Sincronizada 1:1 con Calidad y Vertimientos)
     # ---------------------------------------------------------
     from modules.demografia_tools import calcular_poblacion_al_vuelo
     from modules.utils import generar_llave_universal, extraer_datos_matriz_sql, proyectar_modelo_sql
-    import re
+    from sqlalchemy import text
+    from modules.db_manager import get_engine
+    import pandas as pd
+    import unicodedata, re
 
     pob_total, pob_urb, pob_rur = 0.0, 0.0, 0.0
     origen_demo = False
 
-    # 1. Prioridad A: Matriz Maestra Demográfica en Supabase (Garantiza 100% simetría con Demografía y Calidad)
-    llave_demo = generar_llave_universal(nivel_demo, lugar_puro, "Total")
-    df_demo_sql = extraer_datos_matriz_sql("matriz_maestra_demografica", llave_demo, es_llave=True)
+    def _norm_demo(t):
+        s = unicodedata.normalize('NFKD', str(t)).encode('ascii', 'ignore').decode('utf-8').upper()
+        return re.sub(r'[^A-Z0-9]', '', s)
 
-    # Fallback en SQL por nombre o código IDEAM de cuenca (ej. 2317-03-01-04 o 2502-01-02-03)
-    if df_demo_sql.empty:
-        df_demo_sql = extraer_datos_matriz_sql("matriz_maestra_demografica", lugar_puro, nivel=nivel_demo, es_llave=False)
-    if df_demo_sql.empty:
-        try:
-            from sqlalchemy import text
-            from modules.db_manager import get_engine
-            import pandas as pd
+    # Si es AMVA en escala CAR, buscamos "AMVA"; en los demás casos usamos el territorio seleccionado
+    es_amva_car = (str(lugar_original).upper().strip() == "AMVA") or ("AMVA" in str(lugar_original).upper() and "CAR" in str(escala).upper())
+    terr_objetivo = "AMVA" if es_amva_car else str(lugar_puro).strip()
+
+    try:
+        df_d_full = st.session_state.get('df_matriz_demografica', pd.DataFrame())
+        if df_d_full.empty:
+            with get_engine().connect() as conn:
+                df_d_full = pd.read_sql(text("SELECT * FROM matriz_maestra_demografica"), conn)
+                st.session_state['df_matriz_demografica'] = df_d_full
+
+        df_demo_match = pd.DataFrame()
+        if not df_d_full.empty:
+            # 1. Si es cuenca con código entre paréntesis: ej. (2317-03-01-04)
             m_cod_d = re.search(r'\(([\d\-]+)\)\s*$', str(lugar_original).strip())
             if m_cod_d:
                 cod_d = m_cod_d.group(1).strip()
-                with get_engine().connect() as conn:
-                    df_demo_sql = pd.read_sql(
-                        text("SELECT * FROM matriz_maestra_demografica WHERE \"Territorio\" ILIKE :c"),
-                        conn, params={"c": f"%({cod_d})%"}
-                    )
-        except Exception:
-            pass
+                df_demo_match = df_d_full[df_d_full['Territorio'].astype(str).str.contains(rf"\({re.escape(cod_d)}\)", case=False, na=False, regex=True)]
+            
+            # 2. Búsqueda por Territorio normalizado (Trae juntas las 3 filas: Total, Urbana y Rural)
+            if df_demo_match.empty:
+                key_obj = _norm_demo(terr_objetivo)
+                mask_t = df_d_full['Territorio'].astype(str).apply(lambda x: _norm_demo(re.split(r'\s*-\s*\([\d\-]+\)', str(x))[0])) == key_obj
+                if es_amva_car:
+                    mask_t = mask_t & (df_d_full['Nivel'].astype(str).str.upper() == 'CAR')
+                elif "REGION" in str(escala).upper() and key_obj == "VALLEDEABURRA":
+                    mask_t = mask_t & (df_d_full['Nivel'].astype(str).str.upper().str.contains('REGION'))
+                df_demo_match = df_d_full[mask_t]
 
-    if not df_demo_sql.empty:
-        df_t_row = df_demo_sql[df_demo_sql['Area'].astype(str).str.upper() == 'TOTAL'] if 'Area' in df_demo_sql.columns else df_demo_sql
-        fila_t = df_t_row.iloc[0] if not df_t_row.empty else df_demo_sql.iloc[0]
-        pob_total = max(0.0, proyectar_modelo_sql(fila_t, anio_actual))
+        if not df_demo_match.empty:
+            f_t = df_demo_match[df_demo_match['Area'].astype(str).str.lower().str.contains('tot')]
+            f_u = df_demo_match[df_demo_match['Area'].astype(str).str.lower().str.contains('urb|cab')]
+            f_r = df_demo_match[df_demo_match['Area'].astype(str).str.lower().str.contains('rur|rest')]
 
-        # Extraer Urbana y Rural desde SQL
-        df_u_sql = extraer_datos_matriz_sql("matriz_maestra_demografica", generar_llave_universal(nivel_demo, lugar_puro, "Urbana"), es_llave=True)
-        df_r_sql = extraer_datos_matriz_sql("matriz_maestra_demografica", generar_llave_universal(nivel_demo, lugar_puro, "Rural"), es_llave=True)
-        pob_urb = max(0.0, proyectar_modelo_sql(df_u_sql.iloc[0], anio_actual)) if not df_u_sql.empty else 0.0
-        pob_rur = max(0.0, proyectar_modelo_sql(df_r_sql.iloc[0], anio_actual)) if not df_r_sql.empty else 0.0
+            if not f_t.empty:
+                pob_total = max(0.0, proyectar_modelo_sql(f_t.iloc[0], anio_actual))
+            if not f_u.empty:
+                pob_urb = max(0.0, proyectar_modelo_sql(f_u.iloc[0], anio_actual))
+            if not f_r.empty:
+                pob_rur = max(0.0, proyectar_modelo_sql(f_r.iloc[0], anio_actual))
 
-        if (pob_urb + pob_rur) > 0:
-            fac_eq = pob_total / (pob_urb + pob_rur)
-            pob_urb, pob_rur = pob_urb * fac_eq, pob_rur * fac_eq
-        else:
-            # En Cuencas (donde solo existe la fila Total), se asigna a Rural
-            pob_urb, pob_rur = 0.0, pob_total
-
-        st.success(f" 👥  **Cerebro Demográfico Enlazado:** {pob_total:,.0f} habitantes detectados (🏙️ Urb: {pob_urb:,.0f} | 🏡 Rur: {pob_rur:,.0f}) — (Matriz Maestra SQL).")
-        origen_demo = True
-    else:
-        # 2. Prioridad B (Respaldo): Motor Híbrido Dasimétrico si no existiera en SQL
-        df_demo_hibrido = calcular_poblacion_al_vuelo(lugar_maestro, nivel_demo, "Total", anio_especifico=anio_actual)
-        if df_demo_hibrido is not None and not df_demo_hibrido.empty:
-            pob_total = float(df_demo_hibrido['Total'].iloc[0])
-            df_urb_h = calcular_poblacion_al_vuelo(lugar_maestro, nivel_demo, "Urbana", anio_especifico=anio_actual)
-            df_rur_h = calcular_poblacion_al_vuelo(lugar_maestro, nivel_demo, "Rural", anio_especifico=anio_actual)
-            pob_urb = float(df_urb_h['Total'].iloc[0]) if (df_urb_h is not None and not df_urb_h.empty and 'Total' in df_urb_h.columns) else 0.0
-            pob_rur = float(df_rur_h['Total'].iloc[0]) if (df_rur_h is not None and not df_rur_h.empty and 'Total' in df_rur_h.columns) else 0.0
-            if (pob_urb + pob_rur) > 0:
-                fac_eq = pob_total / (pob_urb + pob_rur)
-                pob_urb, pob_rur = pob_urb * fac_eq, pob_rur * fac_eq
+            if es_amva_car:
+                pob_urb = pob_total
+                pob_rur = 0.0
+            elif (pob_urb + pob_rur) > 0:
+                if pob_total == 0:
+                    pob_total = pob_urb + pob_rur
+                else:
+                    fac_eq = pob_total / (pob_urb + pob_rur)
+                    pob_urb, pob_rur = pob_urb * fac_eq, pob_rur * fac_eq
             else:
-                pob_rur = pob_total
+                pob_urb, pob_rur = 0.0, pob_total
 
-            st.success(f" 👥  **Cerebro Demográfico Enlazado:** {pob_total:,.0f} habitantes detectados (🏙️ Urb: {pob_urb:,.0f} | 🏡 Rur: {pob_rur:,.0f}) — (Motor Híbrido).")
+            st.success(f" 👥  **Cerebro Demográfico Enlazado:** {pob_total:,.0f} habitantes detectados (🏙️ Urb: {pob_urb:,.0f} | 🏡 Rur: {pob_rur:,.0f}) — (Matriz Maestra SQL).")
             origen_demo = True
-        else:
-            pob_total, pob_urb, pob_rur = 0.0, 0.0, 0.0
-            st.error(f" ❌  El territorio '{lugar_puro}' no pudo ser procesado demográficamente.")
-            origen_demo = False
+    except Exception:
+        pass
 
+    if not origen_demo:
+        st.error(f" ❌  El territorio '{lugar_puro}' no pudo ser procesado demográficamente.")
+        
     st.session_state['aleph_pob_total'] = pob_total
     st.session_state['pob_hum_calc_met'] = pob_total
 
@@ -522,21 +525,17 @@ if gdf_zona is not None and not gdf_zona.empty:
     st.session_state['ica_aves_calc_met'] = aves
 
     # ---------------------------------------------------------
-    # 3. CONEXIÓN HIDROLÓGICA (Conectado a la Matriz SQL Real)
+    # 3. CONEXIÓN HIDROLÓGICA (Inmune a tildes corruptas como 'Medelln')
     # ---------------------------------------------------------
     llave_hidro = generar_llave_universal(escala, lugar_original, "Total")
     nombre_tabla_hidro = "matriz_hidrologica_maestra"
     
-    # 1. Búsqueda por Llave Exacta (Titanio)
     df_hidro = extraer_datos_matriz_sql(nombre_tabla_hidro, llave_hidro, es_llave=True)
 
-    # 2. 🛡️ Fallback Semántico (Búsqueda exacta por nombre limpio)
     if df_hidro.empty:
-        # Pasamos el nombre completo sin recortar. utils.py lo limpiará y hará el match exacto.
         lugar_puro = str(lugar_original).split(" - (")[0].strip()
         df_hidro = extraer_datos_matriz_sql(nombre_tabla_hidro, lugar_puro, nivel=escala, es_llave=False)
 
-    # 3. 💉 CIRUGÍA 2: Rescate por Código Único de Cuenca (ej. 2317-03-01-04 o 2702) o Nombre ASCII sin '- NSS'
     if df_hidro.empty:
         try:
             import re, unicodedata
@@ -548,17 +547,20 @@ if gdf_zona is not None and not gdf_zona.empty:
                 s = unicodedata.normalize('NFKD', str(t)).encode('ascii', 'ignore').decode('utf-8').upper()
                 return re.sub(r'[^A-Z0-9]', '', s)
 
-            with get_engine().connect() as conn:
-                df_h_all = pd.read_sql(text(f"SELECT * FROM {nombre_tabla_hidro}"), conn)
+            df_h_all = st.session_state.get('df_matriz_hidrologica', pd.DataFrame())
+            if df_h_all.empty:
+                with get_engine().connect() as conn:
+                    df_h_all = pd.read_sql(text(f"SELECT * FROM {nombre_tabla_hidro}"), conn)
+                    st.session_state['df_matriz_hidrologica'] = df_h_all
             
             if not df_h_all.empty and 'Territorio' in df_h_all.columns:
-                # A. Buscar por código IDEAM al final entre paréntesis: ej. (2317-03-01-04) o (2702)
+                # A. Por código IDEAM entre paréntesis: ej. (2317-03-01-04) o (2702)
                 m_cod = re.search(r'\(([\d\-]+)\)\s*$', str(lugar_original).strip())
                 if m_cod:
                     cod_id = m_cod.group(1).strip()
                     df_hidro = df_h_all[df_h_all['Territorio'].astype(str).str.contains(rf"\({re.escape(cod_id)}\)", case=False, na=False, regex=True)]
                 
-                # B. Si no hay código o no cruzó, buscar por nombre limpio ignorando '- NSS', puntos y tildes
+                # B. Por nombre limpio o patrón tolerante a vocales con tilde corrupta ('Medelln' vs 'MEDELLIN')
                 if df_hidro.empty:
                     nom_busq = _norm_h(re.split(r'\s*-\s*\([\d\-]+\)', str(lugar_original))[0].replace("- NSS -", "").replace("- NSS", ""))
                     if nom_busq:
@@ -566,6 +568,13 @@ if gdf_zona is not None and not gdf_zona.empty:
                             lambda x: _norm_h(re.split(r'\s*-\s*\([\d\-]+\)', str(x))[0].replace("- NSS -", "").replace("- NSS", ""))
                         )
                         df_hidro = df_h_all[serie_limpia == nom_busq]
+                        # Si la BD perdió la vocal acentuada (ej. MEDELLN en vez de MEDELLIN), quitamos vocales para comparar consonantes + estructura
+                        if df_hidro.empty:
+                            cons_busq = re.sub(r'[AEIOU]', '', nom_busq)
+                            mask_cons = serie_limpia.apply(lambda x: re.sub(r'[AEIOU]', '', x) == cons_busq)
+                            if "MUNICIP" in str(escala).upper() and 'Jerarquia' in df_h_all.columns:
+                                mask_cons = mask_cons & (df_h_all['Jerarquia'].astype(str).str.upper().str.contains('MUNICIP'))
+                            df_hidro = df_h_all[mask_cons]
         except Exception:
             pass
 

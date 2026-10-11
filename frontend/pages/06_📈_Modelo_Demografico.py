@@ -262,12 +262,12 @@ with tab_opt:
                                 st.error(f"🚨 Error durante la reparación masiva: {e}")
 
                     # ---------------------------------------------------
-                    # 🏛️ BOTÓN 3: FORJA DE SUBREGIONES Y CARs EN SUPABASE
+                    # 🏛️ BOTÓN 3: FORJA DE SUBREGIONES Y CARs EN SUPABASE (CON JURISDICCIÓN ESTRICTA AMVA / CORANTIOQUIA)
                     # ---------------------------------------------------
                     st.markdown("---")
                     st.markdown("##### 🧩 3. Forjar Niveles Subregionales y CARs en Matrices Maestras (Demografía + Pecuaria)")
-                    st.caption("Construye e inyecta las ecuaciones de las 9 Subregiones y las 4 CARs (AMVA, Corantioquia, Cornare, Corpourabá) directamente en Supabase.")
-                    if st.button("🏛️ Inyectar Subregiones y CARs en Supabase", use_container_width=True):
+                    st.caption("Construye e inyecta las ecuaciones de las 9 Subregiones y las 4 CARs en Supabase aplicando la jurisdicción estricta: AMVA (10 áreas urbanas, 0 rural, 0 ganado) y CORANTIOQUIA (80 municipios: 70 completos + 10 áreas rurales y pecuarias del Valle de Aburrá).")
+                    if st.button("🏛️ Inyectar Subregiones y CARs en Supabase (Jurisdicción Exacta)", type="primary", use_container_width=True):
                         try:
                             from sqlalchemy import text
                             from modules.db_manager import get_engine
@@ -279,29 +279,54 @@ with tab_opt:
                                 t = unicodedata.normalize('NFKD', str(txt)).encode('ascii', 'ignore').decode('utf-8').upper()
                                 return re.sub(r'[^A-Z0-9]', '', t)
 
+                            def norm_con_guion(txt):
+                                t = unicodedata.normalize('NFKD', str(txt)).encode('ascii', 'ignore').decode('utf-8').upper()
+                                t = re.sub(r'[^A-Z0-9]', '_', t)
+                                return re.sub(r'_+', '_', t).strip('_')
+
                             SUBREGIONES_ANT = {
                                 "Valle de Aburra": ["MEDELLIN", "BELLO", "ITAGUI", "ENVIGADO", "SABANETA", "LA ESTRELLA", "CALDAS", "COPACABANA", "GIRARDOTA", "BARBOSA"],
                                 "Bajo Cauca": ["CAUCASIA", "EL BAGRE", "NECHI", "TARAZA", "CACERES", "ZARAGOZA"],
                                 "Magdalena Medio": ["PUERTO BERRIO", "PUERTO NARE", "PUERTO TRIUNFO", "YONDO", "CARACOLI", "MACEO"],
                                 "Nordeste": ["AMALFI", "ANORI", "CISNEROS", "REMEDIOS", "SAN ROQUE", "SANTO DOMINGO", "SEGOVIA", "VEGACHI", "YALI", "YOLOMBO"],
-                                "Norte": ["ANGOSTURA", "BELMIRA", "BRICENO", "CAMPAMENTO", "CAROLINA", "DONMATIAS", "ENTRERRIOS", "GOMEZ PLATA", "GUADALUPE", "ITUANGO", "SAN ANDRES DE CUERQUIA", "SAN JOSE DE LA MONTANA", "SAN PEDRO DE LOS MILAGROS", "SANTA ROSA DE OSOS", "TOLEDO", "VALDIVIA", "YARUMAL"],
+                                "Norte": ["ANGOSTURA", "BELMIRA", "BRICENO", "CAMPAMENTO", "CAROLINA", "CAROLINA DEL PRINCIPE", "DONMATIAS", "ENTRERRIOS", "GOMEZ PLATA", "GUADALUPE", "ITUANGO", "SAN ANDRES DE CUERQUIA", "SAN JOSE DE LA MONTANA", "SAN PEDRO DE LOS MILAGROS", "SANTA ROSA DE OSOS", "TOLEDO", "VALDIVIA", "YARUMAL"],
                                 "Occidente": ["ABRIAQUI", "ANZA", "ARMENIA", "BURITICA", "CANASGORDAS", "DABEIBA", "EBEJICO", "FRONTINO", "GIRALDO", "HELICONIA", "LIBORINA", "OLAYA", "PEQUE", "SABANALARGA", "SAN JERONIMO", "SANTAFE DE ANTIOQUIA", "SANTA FE DE ANTIOQUIA", "SOPETRAN", "URAMITA"],
-                                "Oriente": ["ABEJORRAL", "ALEJANDRIA", "ARGELIA", "EL CARMEN DE VIBORAL", "CARMEN DE VIBORAL", "COCORNA", "CONCEPCION", "EL PENOL", "EL RETIRO", "RETIRO", "EL SANTUARIO", "SANTUARIO", "GRANADA", "GUARNE", "GUATAPE", "LA CEJA", "LA UNION", "MARINILLA", "NARINO", "RIONEGRO", "SAN CARLOS", "SAN FRANCISCO", "SAN LUIS", "SAN RAFAEL", "SAN VICENTE", "SONSON"],
-                                "Suroeste": ["AMAGA", "ANDES", "ANGELOPOLIS", "BETANIA", "BETULIA", "CAICEDO", "CARAMANTA", "CIUDAD BOLIVAR", "CONCORDIA", "FREDONIA", "HISPANIA", "JARDIN", "JERICO", "LA PINTADA", "MONTEBELLO", "PUEBLORRICO", "SALGAR", "SANTA BARBARA", "TAMESIS", "TARSO", "TITIRIBI", "URRAO", "VALPARAISO", "VENECIA"],
+                                "Oriente": ["ABEJORRAL", "ALEJANDRIA", "ARGELIA", "EL CARMEN DE VIBORAL", "CARMEN DE VIBORAL", "COCORNA", "CONCEPCION", "EL PENOL", "PENOL", "EL RETIRO", "RETIRO", "EL SANTUARIO", "SANTUARIO", "GRANADA", "GUARNE", "GUATAPE", "LA CEJA", "LA UNION", "MARINILLA", "NARINO", "RIONEGRO", "SAN CARLOS", "SAN FRANCISCO", "SAN LUIS", "SAN RAFAEL", "SAN VICENTE", "SAN VICENTE FERRER", "SONSON"],
+                                "Suroeste": ["AMAGA", "ANDES", "ANGELOPOLIS", "BETANIA", "BETULIA", "CAICEDO", "CARAMANTA", "CIUDAD BOLIVAR", "BOLIVAR", "CONCORDIA", "FREDONIA", "HISPANIA", "JARDIN", "JERICO", "LA PINTADA", "MONTEBELLO", "PUEBLORRICO", "PUEBLO RICO", "SALGAR", "SANTA BARBARA", "TAMESIS", "TARSO", "TITIRIBI", "URRAO", "VALPARAISO", "VENECIA"],
                                 "Uraba": ["APARTADO", "ARBOLETES", "CAREPA", "CHIGORODO", "MURINDO", "MUTATA", "NECOCLI", "SAN JUAN DE URABA", "SAN PEDRO DE URABA", "TURBO", "VIGIA DEL FUERTE"]
                             }
 
-                            CARS_ANT = {
-                                "AMVA": SUBREGIONES_ANT["Valle de Aburra"],
-                                "CORNARE": list(set(SUBREGIONES_ANT["Oriente"] + ["SAN ROQUE", "SANTO DOMINGO", "CONCEPCION", "ALEJANDRIA", "PUERTO NARE", "PUERTO TRIUNFO", "SONSON"])),
-                                "CORPOURABA": list(set(SUBREGIONES_ANT["Uraba"] + ["DABEIBA", "FRONTINO", "CAICEDO", "URAMITA", "PEQUE", "ABRIAQUI", "CANASGORDAS", "GIRALDO", "URRAO"])),
-                                "CORANTIOQUIA": list(set(
-                                    SUBREGIONES_ANT["Bajo Cauca"] + SUBREGIONES_ANT["Magdalena Medio"] +
-                                    SUBREGIONES_ANT["Nordeste"] + SUBREGIONES_ANT["Norte"] +
-                                    SUBREGIONES_ANT["Occidente"] + SUBREGIONES_ANT["Suroeste"] +
-                                    SUBREGIONES_ANT["Valle de Aburra"]
-                                ))
-                            }
+                            # 10 municipios del Valle de Aburrá
+                            MPIOS_ABURRA_10 = SUBREGIONES_ANT["Valle de Aburra"]
+
+                            # 70 municipios completos de CORANTIOQUIA (Excluyendo los de Cornare y Corpourabá)
+                            MPIOS_CORANTIOQUIA_70 = [
+                                # Bajo Cauca (6)
+                                "CACERES", "CAUCASIA", "EL BAGRE", "NECHI", "TARAZA", "ZARAGOZA",
+                                # Magdalena Medio Corantioquia (4)
+                                "CARACOLI", "MACEO", "PUERTO BERRIO", "YONDO",
+                                # Nordeste Corantioquia (8)
+                                "AMALFI", "ANORI", "CISNEROS", "REMEDIOS", "SEGOVIA", "VEGACHI", "YALI", "YOLOMBO",
+                                # Norte (17)
+                                "ANGOSTURA", "BELMIRA", "BRICENO", "CAMPAMENTO", "CAROLINA", "CAROLINA DEL PRINCIPE",
+                                "DONMATIAS", "ENTRERRIOS", "GOMEZ PLATA", "GUADALUPE", "ITUANGO",
+                                "SAN ANDRES DE CUERQUIA", "SAN JOSE DE LA MONTANA", "SAN PEDRO DE LOS MILAGROS",
+                                "SANTA ROSA DE OSOS", "TOLEDO", "VALDIVIA", "YARUMAL",
+                                # Occidente Corantioquia (12)
+                                "ANZA", "ARMENIA", "BURITICA", "EBEJICO", "HELICONIA", "LIBORINA",
+                                "OLAYA", "SABANALARGA", "SAN JERONIMO", "SANTAFE DE ANTIOQUIA", "SANTA FE DE ANTIOQUIA", "SOPETRAN",
+                                # Suroeste Corantioquia (22)
+                                "AMAGA", "ANDES", "ANGELOPOLIS", "BETANIA", "BETULIA", "CARAMANTA",
+                                "CIUDAD BOLIVAR", "BOLIVAR", "CONCORDIA", "FREDONIA", "HISPANIA", "JARDIN", "JERICO",
+                                "LA PINTADA", "MONTEBELLO", "PUEBLORRICO", "PUEBLO RICO", "SALGAR", "SANTA BARBARA",
+                                "TAMESIS", "TARSO", "TITIRIBI", "VALPARAISO", "VENECIA"
+                            ]
+
+                            # 80 municipios de CORANTIOQUIA para zona Rural y Pecuaria (70 completos + 10 del Aburrá)
+                            MPIOS_CORANTIOQUIA_80 = list(set(MPIOS_CORANTIOQUIA_70 + MPIOS_ABURRA_10))
+
+                            MPIOS_CORNARE_26 = list(set(SUBREGIONES_ANT["Oriente"] + ["SAN ROQUE", "SANTO DOMINGO", "PUERTO NARE", "PUERTO TRIUNFO"]))
+                            MPIOS_CORPOURABA_19 = list(set(SUBREGIONES_ANT["Uraba"] + ["DABEIBA", "FRONTINO", "CAICEDO", "URAMITA", "PEQUE", "ABRIAQUI", "CANASGORDAS", "GIRALDO", "URRAO"]))
 
                             engine_sql = get_engine()
                             with st.spinner("Calculando e inyectando matrices de Subregiones y CARs en Supabase..."):
@@ -309,124 +334,192 @@ with tab_opt:
                                     df_demo_all = pd.read_sql(text("SELECT * FROM matriz_maestra_demografica WHERE UPPER(\"Nivel\") LIKE 'MUNICIP%' AND UPPER(\"Padre\") LIKE '%ANTIOQUIA%'"), conn)
                                     df_pec_all = pd.read_sql(text("SELECT * FROM matriz_maestra_pecuaria"), conn)
 
+                                # =================================================================
+                                # 1. PREPARACIÓN Y SANEAMIENTO DEMOGRÁFICO MUNICIPAL
+                                # =================================================================
                                 df_demo_all['mun_key'] = df_demo_all['Territorio'].apply(norm_key)
-                                nuevas_filas_demo = []
+                                
+                                def std_area(a):
+                                    s = str(a).upper().strip()
+                                    if 'URB' in s or 'CAB' in s: return 'Urbana'
+                                    if 'RUR' in s or 'REST' in s: return 'Rural'
+                                    return 'Total'
+
+                                df_demo_all['Area_Std'] = df_demo_all['Area'].apply(std_area)
+                                df_demo_all = df_demo_all.drop_duplicates(subset=['mun_key', 'Area_Std'], keep='first').copy()
+
+                                # Saneamos cualquier fila municipal cuyo polinomio esté desbordado en 2025 (x=40)
+                                def sanear_polinomio_mun(row):
+                                    p0 = float(pd.to_numeric(row.get('Pob_Base', 0.0), errors='coerce') or 0.0)
+                                    if p0 <= 0: return row
+                                    pa = float(pd.to_numeric(row.get('Poly_A', 0.0), errors='coerce') or 0.0)
+                                    pb = float(pd.to_numeric(row.get('Poly_B', 0.0), errors='coerce') or 0.0)
+                                    pc = float(pd.to_numeric(row.get('Poly_C', 0.0), errors='coerce') or 0.0)
+                                    pd_v = float(pd.to_numeric(row.get('Poly_D', 0.0), errors='coerce') or 0.0)
+                                    
+                                    val_2025 = pa*(40.0**3) + pb*(40.0**2) + pc*40.0 + pd_v
+                                    if val_2025 <= 0 or val_2025 > (p0 * 3.8):
+                                        lk = float(pd.to_numeric(row.get('Log_K', 0.0), errors='coerce') or 0.0)
+                                        la = float(pd.to_numeric(row.get('Log_a', 0.0), errors='coerce') or 0.0)
+                                        lr = float(pd.to_numeric(row.get('Log_r', 0.0), errors='coerce') or 0.0)
+                                        while lk > p0 * 4.0: lk /= 10.0
+                                        while lr > 0.12: lr /= 10.0
+                                        val_log = lk / (1.0 + la * np.exp(-lr * 40.0)) if (lk > 0 and la > 0) else (p0 * 1.15)
+                                        if val_log <= 0 or val_log > (p0 * 3.8):
+                                            val_log = p0 * 1.15
+                                        row['Poly_A'] = 0.0
+                                        row['Poly_B'] = 0.0
+                                        row['Poly_C'] = (val_log - p0) / 40.0
+                                        row['Poly_D'] = p0
+                                    return row
+
+                                # Solo limpiamos si algún municipio individual tiene Pob_Base negativa, respetando 100% la curva del Botón 2
+                                for c_num_d in ['Pob_Base', 'Poly_A', 'Poly_B', 'Poly_C', 'Poly_D', 'Log_K', 'Log_a', 'Log_r']:
+                                    if c_num_d in df_demo_all.columns:
+                                        df_demo_all[c_num_d] = pd.to_numeric(df_demo_all[c_num_d], errors='coerce').fillna(0.0)
+
+                                def empaquetar_fila_demo(df_a, area_t, etiqueta_nivel, nombre_grupo, prefijo_llave, forzar_cero=False):
+                                    llave_u = f"{prefijo_llave}_{norm_con_guion(nombre_grupo)}_{area_t.upper()}"
+                                    if forzar_cero or df_a.empty:
+                                        return {
+                                            "Area": area_t, "Nivel": etiqueta_nivel, "Territorio": nombre_grupo, "Padre": "Antioquia",
+                                            "Año_Base": 1985, "Pob_Base": 0, "Log_K": 0.0, "Log_a": 0.0, "Log_r": 0.0, "Log_R2": 0.99,
+                                            "Exp_a": 0.0, "Exp_b": 0.0, "Exp_R2": 0.95, "Poly_A": 0.0, "Poly_B": 0.0, "Poly_C": 0.0, "Poly_D": 0.0,
+                                            "Poly_R2": 0.995, "Modelo_Recomendado": "Polinomial_3", "Mejor_R2": 0.995,
+                                            "LLAVE_UNIVERSAL": llave_u, "Lin_m": 0.0, "Lin_b": 0.0, "Lin_R2": 0.96
+                                        }
+                                    p0_sum = float(df_a['Pob_Base'].sum())
+                                    pa_sum = float(df_a['Poly_A'].sum())
+                                    pb_sum = float(df_a['Poly_B'].sum())
+                                    pc_sum = float(df_a['Poly_C'].sum())
+                                    pd_sum = float(df_a['Poly_D'].sum())
+                                    lk_sum = float(df_a['Log_K'].sum())
+                                    if lk_sum <= p0_sum: lk_sum = p0_sum * 2.2
+                                    la_calc = max(0.1, (lk_sum / max(1.0, p0_sum)) - 1.0)
+                                    lr_calc = float(df_a[df_a['Log_r'] > 0]['Log_r'].mean()) if not df_a[df_a['Log_r'] > 0].empty else 0.025
+                                    return {
+                                        "Area": area_t, "Nivel": etiqueta_nivel, "Territorio": nombre_grupo, "Padre": "Antioquia",
+                                        "Año_Base": 1985, "Pob_Base": round(p0_sum), "Log_K": lk_sum, "Log_a": la_calc, "Log_r": lr_calc, "Log_R2": 0.99,
+                                        "Exp_a": p0_sum, "Exp_b": 0.012, "Exp_R2": 0.95, "Poly_A": pa_sum, "Poly_B": pb_sum, "Poly_C": pc_sum, "Poly_D": pd_sum,
+                                        "Poly_R2": 0.995, "Modelo_Recomendado": "Polinomial_3", "Mejor_R2": 0.995,
+                                        "LLAVE_UNIVERSAL": llave_u, "Lin_m": pc_sum, "Lin_b": pd_sum, "Lin_R2": 0.96
+                                    }
 
                                 def construir_filas_grupo(nombre_grupo, lista_mpios, etiqueta_nivel, prefijo_llave):
                                     mpios_keys = set(norm_key(m) for m in lista_mpios)
                                     sub_df = df_demo_all[df_demo_all['mun_key'].isin(mpios_keys)]
                                     if sub_df.empty: return []
                                     
-                                    filas = []
-                                    for area_t in ["Total", "Urbana", "Rural"]:
-                                        df_a = sub_df[sub_df['Area'].str.upper() == area_t.upper()]
-                                        if df_a.empty: continue
-                                        
-                                        p0_sum = float(df_a['Pob_Base'].sum())
-                                        pa_sum = float(df_a['Poly_A'].sum())
-                                        pb_sum = float(df_a['Poly_B'].sum())
-                                        pc_sum = float(df_a['Poly_C'].sum())
-                                        pd_sum = float(df_a['Poly_D'].sum())
-                                        lk_sum = float(df_a['Log_K'].sum())
-                                        
-                                        if lk_sum <= p0_sum: lk_sum = p0_sum * 2.2
-                                        la_calc = max(0.1, (lk_sum / max(1.0, p0_sum)) - 1.0)
-                                        lr_calc = float(df_a[df_a['Log_r'] > 0]['Log_r'].mean()) if not df_a[df_a['Log_r'] > 0].empty else 0.035
+                                    df_u = sub_df[sub_df['Area_Std'] == 'Urbana']
+                                    df_r = sub_df[sub_df['Area_Std'] == 'Rural']
+                                    # Construimos Total como la suma exacta de Urbana + Rural para que siempre cuadren al habitante
+                                    df_t = pd.concat([df_u, df_r], ignore_index=True)
+                                    return [
+                                        empaquetar_fila_demo(df_t, "Total", etiqueta_nivel, nombre_grupo, prefijo_llave),
+                                        empaquetar_fila_demo(df_u, "Urbana", etiqueta_nivel, nombre_grupo, prefijo_llave),
+                                        empaquetar_fila_demo(df_r, "Rural", etiqueta_nivel, nombre_grupo, prefijo_llave)
+                                    ]
 
-                                        filas.append({
-                                            "Area": area_t,
-                                            "Nivel": etiqueta_nivel,
-                                            "Territorio": nombre_grupo,
-                                            "Padre": "Antioquia",
-                                            "Año_Base": 1985,
-                                            "Pob_Base": round(p0_sum),
-                                            "Log_K": lk_sum,
-                                            "Log_a": la_calc,
-                                            "Log_r": lr_calc,
-                                            "Log_R2": 0.99,
-                                            "Exp_a": p0_sum,
-                                            "Exp_b": 0.012,
-                                            "Exp_R2": 0.95,
-                                            "Poly_A": pa_sum,
-                                            "Poly_B": pb_sum,
-                                            "Poly_C": pc_sum,
-                                            "Poly_D": pd_sum,
-                                            "Poly_R2": 0.995,
-                                            "Modelo_Recomendado": "Polinomial_3",
-                                            "Mejor_R2": 0.995,
-                                            "LLAVE_UNIVERSAL": f"{prefijo_llave}_{norm_key(nombre_grupo)}_{area_t.upper()}",
-                                            "Lin_m": pc_sum,
-                                            "Lin_b": pd_sum,
-                                            "Lin_R2": 0.96
-                                        })
-                                    return filas
-
+                                nuevas_filas_demo = []
+                                # A. 9 Subregiones (Completas: Urbano + Rural)
                                 for sub_nom, mpios in SUBREGIONES_ANT.items():
                                     nuevas_filas_demo.extend(construir_filas_grupo(sub_nom, mpios, "REGIONAL", "REGIONAL"))
                                     nuevas_filas_demo.extend(construir_filas_grupo(sub_nom, mpios, "SUBREGIONAL", "SUBREGIONAL"))
 
-                                for car_nom, mpios in CARS_ANT.items():
-                                    nuevas_filas_demo.extend(construir_filas_grupo(car_nom, mpios, "CAR", "CAR"))
+                                # B. CORNARE y CORPOURABÁ (Completas en sus municipios)
+                                nuevas_filas_demo.extend(construir_filas_grupo("CORNARE", MPIOS_CORNARE_26, "CAR", "CAR"))
+                                nuevas_filas_demo.extend(construir_filas_grupo("CORPOURABA", MPIOS_CORPOURABA_19, "CAR", "CAR"))
+
+                                # C. AMVA (Jurisdicción Estricta: Solo Urbana de los 10 municipios del Valle de Aburrá, Rural = 0)
+                                keys_aburra_10 = set(norm_key(m) for m in MPIOS_ABURRA_10)
+                                df_amva_urb = df_demo_all[(df_demo_all['mun_key'].isin(keys_aburra_10)) & (df_demo_all['Area_Std'] == 'Urbana')]
+                                nuevas_filas_demo.extend([
+                                    empaquetar_fila_demo(df_amva_urb, "Total", "CAR", "AMVA", "CAR", forzar_cero=False),
+                                    empaquetar_fila_demo(df_amva_urb, "Urbana", "CAR", "AMVA", "CAR", forzar_cero=False),
+                                    empaquetar_fila_demo(pd.DataFrame(), "Rural", "CAR", "AMVA", "CAR", forzar_cero=True)
+                                ])
+
+                                # D. CORANTIOQUIA (Jurisdicción Estricta: 70 municipios en Urbana + 80 municipios en Rural)
+                                keys_cor_70 = set(norm_key(m) for m in MPIOS_CORANTIOQUIA_70)
+                                keys_cor_80 = set(norm_key(m) for m in MPIOS_CORANTIOQUIA_80)
+                                df_cor_urb_70 = df_demo_all[(df_demo_all['mun_key'].isin(keys_cor_70)) & (df_demo_all['Area_Std'] == 'Urbana')]
+                                df_cor_rur_80 = df_demo_all[(df_demo_all['mun_key'].isin(keys_cor_80)) & (df_demo_all['Area_Std'] == 'Rural')]
+                                df_cor_tot = pd.concat([df_cor_urb_70, df_cor_rur_80], ignore_index=True)
+                                nuevas_filas_demo.extend([
+                                    empaquetar_fila_demo(df_cor_tot, "Total", "CAR", "CORANTIOQUIA", "CAR", forzar_cero=False),
+                                    empaquetar_fila_demo(df_cor_urb_70, "Urbana", "CAR", "CORANTIOQUIA", "CAR", forzar_cero=False),
+                                    empaquetar_fila_demo(df_cor_rur_80, "Rural", "CAR", "CORANTIOQUIA", "CAR", forzar_cero=False)
+                                ])
 
                                 df_nuevas_demo = pd.DataFrame(nuevas_filas_demo)
 
-                                col_terr_pec = next((c for c in df_pec_all.columns if c.lower() in ['territorio', 'municipio', 'unidad', 'nombre']), None)
+                                # =================================================================
+                                # 2. PREPARACIÓN Y FORJA PECUARIA (AMVA = 0, CORANTIOQUIA = 80 Mpios)
+                                # =================================================================
+                                col_terr_pec = next((c for c in df_pec_all.columns if c.lower() in ['territorio', 'municipio', 'unidad', 'nombre']), 'Territorio')
                                 col_llave_pec = next((c for c in df_pec_all.columns if 'llave' in c.lower()), 'LLAVE_UNIVERSAL')
                                 col_nivel_pec = next((c for c in df_pec_all.columns if 'nivel' in c.lower()), 'Nivel')
+                                col_esp_pec = next((c for c in df_pec_all.columns if c.lower() == 'especie'), 'Especie')
+                                col_p0_pec = next((c for c in df_pec_all.columns if c.lower() in ['poblacion_base', 'pob_base']), 'Poblacion_Base')
 
-                                if col_terr_pec:
-                                    df_pec_all['mun_key'] = df_pec_all[col_terr_pec].apply(norm_key)
-                                else:
-                                    df_pec_all['mun_key'] = df_pec_all[col_llave_pec].astype(str).apply(lambda x: x.split('_')[1] if '_' in x else norm_key(x))
+                                # Filtramos solo municipios para no duplicar sumas
+                                df_pec_mun = df_pec_all[df_pec_all[col_nivel_pec].astype(str).str.upper().str.contains('MUNICIP')].copy()
+                                df_pec_mun['mun_key'] = df_pec_mun[col_terr_pec].apply(norm_key)
+                                df_pec_mun = df_pec_mun.drop_duplicates(subset=['mun_key', col_esp_pec], keep='first').copy()
 
-                                cols_num_pec = [c for c in df_pec_all.select_dtypes(include=[np.number]).columns if c.lower() not in ['id', 'año_base', 'anio_base']]
+                                cols_num_pec = [c for c in df_pec_mun.select_dtypes(include=[np.number]).columns if c.lower() not in ['id', 'año_base', 'anio_base']]
 
-                                nuevas_filas_pec = []
-                                def construir_pec_grupo(nombre_grupo, lista_mpios, etiqueta_nivel, prefijo_llave):
+                                def construir_pec_grupo(nombre_grupo, lista_mpios, etiqueta_nivel, prefijo_llave, forzar_cero=False):
                                     mpios_keys = set(norm_key(m) for m in lista_mpios)
-                                    sub_p = df_pec_all[df_pec_all['mun_key'].isin(mpios_keys)]
+                                    sub_p = df_pec_mun[df_pec_mun['mun_key'].isin(mpios_keys)]
                                     if sub_p.empty: return []
                                     
-                                    # Si la tabla pecuaria tiene varias filas por municipio (ej. por especie), agrupamos por especie; si es 1 fila por municipio, sumamos columnas
-                                    col_esp = next((c for c in sub_p.columns if c.lower() in ['especie', 'sistema', 'tipo', 'categoria', 'area']), None)
-                                    if col_esp and sub_p[col_esp].nunique() > 1:
-                                        filas_p = []
-                                        for esp_val, grp in sub_p.groupby(col_esp):
-                                            base_row = grp.iloc[0].to_dict()
-                                            base_row.pop('mun_key', None)
-                                            base_row.pop('id', None)
-                                            for c_num in cols_num_pec:
-                                                base_row[c_num] = float(grp[c_num].sum())
-                                            if col_terr_pec: base_row[col_terr_pec] = nombre_grupo
-                                            if col_nivel_pec in base_row: base_row[col_nivel_pec] = etiqueta_nivel
-                                            if col_llave_pec in base_row: base_row[col_llave_pec] = f"{prefijo_llave}_{norm_key(nombre_grupo)}_{norm_key(esp_val)}"
-                                            filas_p.append(base_row)
-                                        return filas_p
-                                    else:
-                                        base_row = sub_p.iloc[0].to_dict()
+                                    filas_p = []
+                                    for esp_val, grp in sub_p.groupby(col_esp_pec):
+                                        base_row = grp.iloc[0].to_dict()
                                         base_row.pop('mun_key', None)
                                         base_row.pop('id', None)
-                                        for c_num in cols_num_pec:
-                                            base_row[c_num] = float(sub_p[c_num].sum())
-                                        if col_terr_pec: base_row[col_terr_pec] = nombre_grupo
-                                        if col_nivel_pec in base_row: base_row[col_nivel_pec] = etiqueta_nivel
-                                        if col_llave_pec in base_row: base_row[col_llave_pec] = f"{prefijo_llave}_{norm_key(nombre_grupo)}"
-                                        return [base_row]
+                                        if forzar_cero:
+                                            for c_num in cols_num_pec: base_row[c_num] = 0.0
+                                            base_row['Log_a'], base_row['Log_r'], base_row['Exp_b'] = 0.0, 0.0, 0.0
+                                        else:
+                                            for c_num in cols_num_pec:
+                                                base_row[c_num] = float(pd.to_numeric(grp[c_num], errors='coerce').fillna(0.0).sum())
+                                            p0_s = float(base_row.get(col_p0_pec, 0.0) or 0.0)
+                                            lk_s = float(base_row.get('Log_K', 0.0) or 0.0)
+                                            if lk_s <= p0_s: lk_s = p0_s * 2.0
+                                            base_row['Log_K'] = lk_s
+                                            base_row['Log_a'] = max(0.1, (lk_s / max(1.0, p0_s)) - 1.0) if p0_s > 0 else 0.0
+                                            base_row['Log_r'] = 0.025
+                                        
+                                        base_row[col_terr_pec] = nombre_grupo
+                                        base_row[col_nivel_pec] = etiqueta_nivel
+                                        # Estándar universal compatible con todos los módulos
+                                        base_row[col_llave_pec] = f"{prefijo_llave}_{norm_con_guion(nombre_grupo)}_TOTAL"
+                                        filas_p.append(base_row)
+                                    return filas_p
 
+                                nuevas_filas_pec = []
+                                # A. 9 Subregiones (Incluye Valle de Aburrá con todo su ganado rural)
                                 for sub_nom, mpios in SUBREGIONES_ANT.items():
                                     nuevas_filas_pec.extend(construir_pec_grupo(sub_nom, mpios, "REGIONAL", "REGIONAL"))
                                     nuevas_filas_pec.extend(construir_pec_grupo(sub_nom, mpios, "SUBREGIONAL", "SUBREGIONAL"))
-                                for car_nom, mpios in CARS_ANT.items():
-                                    nuevas_filas_pec.extend(construir_pec_grupo(car_nom, mpios, "CAR", "CAR"))
+                                    nuevas_filas_pec.extend(construir_pec_grupo(sub_nom, mpios, "SUBREGION", "SUBREGION"))
+
+                                # B. CARs: CORANTIOQUIA recibe los 80 municipios (70 + 10 rurales del Aburrá); AMVA queda en 0 animales
+                                nuevas_filas_pec.extend(construir_pec_grupo("CORANTIOQUIA", MPIOS_CORANTIOQUIA_80, "CAR", "CAR", forzar_cero=False))
+                                nuevas_filas_pec.extend(construir_pec_grupo("AMVA", MPIOS_ABURRA_10, "CAR", "CAR", forzar_cero=True))
+                                nuevas_filas_pec.extend(construir_pec_grupo("CORNARE", MPIOS_CORNARE_26, "CAR", "CAR", forzar_cero=False))
+                                nuevas_filas_pec.extend(construir_pec_grupo("CORPOURABA", MPIOS_CORPOURABA_19, "CAR", "CAR", forzar_cero=False))
 
                                 df_nuevas_pec = pd.DataFrame(nuevas_filas_pec)
 
                                 with engine_sql.begin() as conn:
-                                    conn.execute(text("DELETE FROM matriz_maestra_demografica WHERE UPPER(\"Nivel\") IN ('SUBREGIONAL', 'REGIONAL', 'CAR', 'AUTORIDAD AMBIENTAL')"))
+                                    conn.execute(text("DELETE FROM matriz_maestra_demografica WHERE UPPER(\"Nivel\") IN ('SUBREGIONAL', 'REGIONAL', 'SUBREGION', 'CAR', 'AUTORIDAD AMBIENTAL')"))
                                     if col_nivel_pec in df_pec_all.columns:
-                                        conn.execute(text(f"DELETE FROM matriz_maestra_pecuaria WHERE UPPER(\"{col_nivel_pec}\") IN ('SUBREGIONAL', 'REGIONAL', 'CAR', 'AUTORIDAD AMBIENTAL')"))
+                                        conn.execute(text(f"DELETE FROM matriz_maestra_pecuaria WHERE UPPER(\"{col_nivel_pec}\") IN ('SUBREGIONAL', 'REGIONAL', 'SUBREGION', 'CAR', 'AUTORIDAD AMBIENTAL')"))
 
-                                cols_validas_demo = [c for c in df_nuevas_demo.columns if c in df_demo_all.columns and c not in ['id', 'mun_key']]
+                                cols_validas_demo = [c for c in df_nuevas_demo.columns if c in df_demo_all.columns and c not in ['id', 'mun_key', 'Area_Std']]
                                 df_nuevas_demo[cols_validas_demo].to_sql('matriz_maestra_demografica', engine_sql, if_exists='append', index=False, chunksize=200, method='multi')
 
                                 if not df_nuevas_pec.empty:
@@ -434,9 +527,9 @@ with tab_opt:
                                     df_nuevas_pec[cols_validas_pec].to_sql('matriz_maestra_pecuaria', engine_sql, if_exists='append', index=False, chunksize=200, method='multi')
 
                                 st.cache_data.clear()
-                                if 'df_matriz_demografica' in st.session_state: del st.session_state['df_matriz_demografica']
-                                if 'df_matriz_pecuaria' in st.session_state: del st.session_state['df_matriz_pecuaria']
-                                st.success(f"✅ ¡Forja completada! Se inyectaron {len(df_nuevas_demo)} ecuaciones demográficas y {len(df_nuevas_pec)} registros pecuarios de Subregiones y CARs en Supabase.")
+                                for k_mem in ['df_matriz_demografica', 'df_matriz_pecuaria', 'df_demo_cache']:
+                                    st.session_state.pop(k_mem, None)
+                                st.success(f"✅ ¡Forja Jurisdiccional Completada! {len(df_nuevas_demo)} ecuaciones demográficas y {len(df_nuevas_pec)} registros pecuarios inyectados en Supabase.")
                         except Exception as e:
                             st.error(f"🚨 Error forjando Subregiones y CARs: {e}")
 
