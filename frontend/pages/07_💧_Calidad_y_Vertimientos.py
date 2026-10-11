@@ -323,38 +323,93 @@ def consultar_matriz_sql_calidad(tabla, territorio, nivel, col_nivel="Nivel"):
         from sqlalchemy import text
         from modules.db_manager import get_engine
         import pandas as pd
+        import unicodedata, re
         
         engine_sql = get_engine()
         
-        # 🚀 BÚSQUEDA BLINDADA: Busca directamente en las columnas
+        # Limpiamos tildes y caracteres especiales para búsqueda infalible via LLAVE_UNIVERSAL
+        t_clean = str(territorio).split(" - (")[0].strip()
+        t_clean = unicodedata.normalize('NFKD', t_clean).encode('ascii', 'ignore').decode('utf-8').upper()
+        t_key = re.sub(r'[^A-Z0-9]', '', t_clean)
+        
+        n_clean = str(nivel).strip().upper()
+        prefijo_n = "MUNICIPIO" if "MUNICIP" in n_clean else n_clean
+        
+        # 1. Intento directo o por coincidencia de LLAVE_UNIVERSAL (inmune a tildes)
         q = text(f'''
             SELECT * FROM {tabla} 
-            WHERE TRIM(UPPER("Territorio")) = UPPER(:t) 
-            AND TRIM(UPPER("{col_nivel}")) = UPPER(:n)
+            WHERE (
+                UPPER(TRIM("Territorio")) = UPPER(:t)
+                OR UPPER("LLAVE_UNIVERSAL") LIKE :llave_pat
+            )
+            AND UPPER(TRIM("{col_nivel}")) LIKE UPPER(:n)
         ''')
-        df_res = pd.read_sql(q, engine_sql, params={'t': str(territorio).strip(), 'n': str(nivel).strip()})
-
-        if df_res.empty:
-            q_fallback = text(f'''
-                SELECT * FROM {tabla} 
-                WHERE UPPER("Territorio") LIKE UPPER(:t) 
-                AND UPPER("{col_nivel}") LIKE UPPER(:n)
-            ''')
-            df_res = pd.read_sql(q_fallback, engine_sql, params={'t': f"%{str(territorio).strip()}%", 'n': f"%{str(nivel)[:3]}%"})
+        
+        with engine_sql.connect() as conn:
+            df_res = pd.read_sql(q, conn, params={
+                't': str(territorio).strip(),
+                'llave_pat': f"{prefijo_n}_{t_key}_%",
+                'n': f"%{n_clean[:5]}%"
+            })
             
         return df_res
     except Exception as e: 
+        import streamlit as st
+        st.error(f"🚨 Error crítico consultando {tabla}: {str(e)}")
         return pd.DataFrame()
 
 def proyectar_modelo_calidad(f, anio_obj):
-    x_norm = anio_obj - f.get('Año_Base', 2018)
-    mod = str(f.get('Modelo_Recomendado', 'Logístico'))
+    import pandas as pd
+    import numpy as np
+    
+    def extraer_num(columna):
+        val = f.get(columna, 0.0)
+        if pd.isna(val) or val == "" or val == "None" or val is None: return 0.0
+        try: return float(val)
+        except: return 0.0
+
     try:
-        if 'Logistico' in mod or 'Logístico' in mod: return f.get('Log_K',0) / (1 + f.get('Log_a',0) * np.exp(-f.get('Log_r',0) * x_norm))
-        elif 'Exponencial' in mod: return f.get('Exp_a',0) * np.exp(f.get('Exp_b',0) * x_norm)
-        elif 'Lineal' in mod: return f.get('Lin_m',0) * x_norm + f.get('Lin_b',0)
-        else: return f.get('Poly_A',0)*(x_norm**3) + f.get('Poly_B',0)*(x_norm**2) + f.get('Poly_C',0)*x_norm + f.get('Poly_D',0)
-    except: return 0.0
+        anio_base = extraer_num('Año_Base')
+        if anio_base == 0: anio_base = 2018
+        x_norm = int(anio_obj) - int(anio_base)
+        
+        mod = str(f.get('Modelo_Recomendado', 'Logistico')).lower().strip()
+        if mod in ['nan', 'none', 'null', '']: mod = 'logistico'
+            
+        col_pob = next((c for c in f.keys() if 'Pob_Base' in str(c) or 'Poblacion_Base' in str(c)), None)
+        pob_base = extraer_num(col_pob) if col_pob else 0.0
+
+        resultado = pob_base # Valor por defecto seguro
+
+        # Bloque de ejecución matemática
+        if 'logist' in mod or 'logíst' in mod: 
+            k = extraer_num('Log_K')
+            if k > 0: resultado = k / (1 + extraer_num('Log_a') * np.exp(-extraer_num('Log_r') * x_norm))
+        elif 'exp' in mod: 
+            a = extraer_num('Exp_a')
+            if a > 0: resultado = a * np.exp(extraer_num('Exp_b') * x_norm)
+        elif 'lin' in mod: 
+            resultado = extraer_num('Lin_m') * x_norm + extraer_num('Lin_b')
+        elif 'poli' in mod or 'poly' in mod: 
+            resultado = extraer_num('Poly_A')*(x_norm**3) + extraer_num('Poly_B')*(x_norm**2) + extraer_num('Poly_C')*x_norm + extraer_num('Poly_D')
+
+        # 🛡️ ESCUDO ANTI-COLAPSO: Si la matemática dio negativo o se desbordó mal, forzamos el modelo Logístico (Plan B)
+        if resultado <= 0 or resultado > (pob_base * 5):
+            k = extraer_num('Log_K')
+            if k > 0: 
+                resultado = k / (1 + extraer_num('Log_a') * np.exp(-extraer_num('Log_r') * x_norm))
+            else:
+                resultado = pob_base
+
+        return max(pob_base, resultado) # Nunca devolveremos menos que la población original
+            
+    except Exception as e: 
+        import streamlit as st
+        st.error(f"Error Matemático: {e}")
+        return pob_base if 'pob_base' in locals() else 0.0
+            
+    except Exception as e: 
+        return 0.0
 
 # --- 2. CONEXIÓN AL MOTOR HUMANO ---
 df_demo = consultar_matriz_sql_calidad("matriz_maestra_demografica", nombre_seleccion, nivel_demo, "Nivel")
@@ -394,11 +449,12 @@ import re
 # 🚀 FIX DEFINITIVO: Uso estricto de la LLAVE_UNIVERSAL para el cruce pecuario
 def generar_llave_maestra(escala, territorio):
     import unicodedata
+    import re
     e = str(escala).upper().strip()
     if "NACION" in e: e = "NACIONAL"
     elif "DEPARTAMENTO" in e or "DEPARTAMENTAL" in e: e = "DEPARTAMENTAL"
-    elif "MUNICIP" in e: e = "MUNICIPAL"
-    elif "REGION" in e or "SUBREGION" in e: e = "REGIONAL"
+    elif "MUNICIP" in e: e = "MUNICIPIO"  # 🛠️ FIX: Tu base de datos usa MUNICIPIO, no MUNICIPAL
+    elif "REGION" in e or "SUBREGION" in e: e = "SUBREGION"
     elif "CAR" in e or "AUTORIDAD" in e: e = "CAR"
     elif "CUENCA" in e or "NSS" in e or "SZH" in e or "ZH" in e or "AH" in e: e = "CUENCA"
     
@@ -417,16 +473,17 @@ try:
     import pandas as pd
     engine_sql = get_engine()
     
-    # Descargamos la matriz entera (o usamos caché si tuviéramos)
     q_pec = text('SELECT * FROM matriz_maestra_pecuaria')
-    df_pec_full = pd.read_sql(q_pec, engine_sql)
+    with engine_sql.connect() as conn:
+        df_pec_full = pd.read_sql(q_pec, conn)
     
-    # 🚀 Filtro de titanio por LLAVE_UNIVERSAL
     if not df_pec_full.empty and 'LLAVE_UNIVERSAL' in df_pec_full.columns:
         df_pec = df_pec_full[df_pec_full['LLAVE_UNIVERSAL'] == llave_busqueda]
     else:
         df_pec = pd.DataFrame()
-except Exception:
+except Exception as e:
+    import streamlit as st
+    st.error(f"🚨 Error en BD Pecuaria: {str(e)}")
     df_pec = pd.DataFrame()
 
 total_bovinos, total_porcinos, total_aves = 0.0, 0.0, 0.0
@@ -434,22 +491,27 @@ total_bovinos, total_porcinos, total_aves = 0.0, 0.0, 0.0
 if not df_pec.empty:
     for _, f in df_pec.iterrows():
         # Limpieza numérica de seguridad
-        def_pob = float(str(f.get('Poblacion_Base', 0)).replace(',','').replace(r'\.(?=.*\.)', '')) if pd.notna(f.get('Poblacion_Base')) else 0.0
+        val_str = str(f.get('Poblacion_Base', 0)).replace(',','').strip()
+        import re
+        val_str = re.sub(r'[^\d.]', '', val_str) # Quitar todo lo que no sea número
+        def_pob = float(val_str) if val_str else 0.0
         
         val_calc = proyectar_modelo_calidad(f, anio_analisis)
         val_final = max(0.0, val_calc if val_calc > 0 else def_pob)
 
-        if f['Especie'] == 'Bovinos': total_bovinos = val_final
-        if f['Especie'] == 'Porcinos': total_porcinos = val_final
-        if f['Especie'] == 'Aves': total_aves = val_final
+        # 🛠️ FIX: Extracción robusta de especie (Ignora mayúsculas/minúsculas)
+        especie = str(f.get('Especie', '')).upper().strip()
+        if 'BOVIN' in especie: total_bovinos += val_final
+        elif 'PORCIN' in especie: total_porcinos += val_final
+        elif 'AVE' in especie: total_aves += val_final
             
-    metodo_animal = f"Matriz SQL Exacta (Llave: {llave_busqueda})"
+    metodo_animal = f"Matriz SQL (Llave: {llave_busqueda})"
 else:
     # 🛡️ BYPASS JURISDICCIONAL AMVA
-    if nombre_seleccion == "AMVA" or "VALLE DE ABURRA" in llave_busqueda:
-        metodo_animal = "Bypass Jurisdicción (Corantioquia asume Rural)"
+    if nombre_seleccion == "AMVA" or "VALLE_DE_ABURRA" in llave_busqueda:
+        metodo_animal = "Bypass Jurisdicción (Asume Rural)"
     else:
-        metodo_animal = f"Error SQL (Sin Datos para {llave_busqueda})"
+        metodo_animal = f"Error: No hay animales para la llave ({llave_busqueda})"
 
 # 🧠 Sincronización con la Memoria Global para gráficas y simulación
 st.session_state['ica_bovinos_calc_met'] = total_bovinos
@@ -474,15 +536,19 @@ with st.expander(f"📍 Contexto Demográfico Base ({anio_analisis}): {nombre_se
     st.markdown("⚙️ **Ajuste Manual de Población (Calibración)**")
     col_p1, col_p2 = st.columns(2)
     with col_p1: 
-        pob_urbana = st.number_input("Pob. Urbana (Conectada a Alcantarillado):", min_value=0.0, value=float(pob_urb_base), step=1.0)
+        pob_urbana = st.number_input("Pob. Urbana (Conectada a Alcantarillado):", min_value=0.0, value=float(pob_urb_base), step=1.0, key=f"pob_u_{nombre_seleccion}_{ int(pob_urb_base) }")
         st.caption(f"Bovinos base: {total_bovinos:,.0f}")
     with col_p2: 
-        pob_rural = st.number_input("Pob. Rural (Sistemas Individuales/Sépticos):", min_value=0.0, value=float(pob_rur_base), step=1.0)
+        pob_rural = st.number_input("Pob. Rural (Sistemas Individuales/Sépticos):", min_value=0.0, value=float(pob_rur_base), step=1.0, key=f"pob_r_{nombre_seleccion}_{ int(pob_rur_base) }")
         st.caption(f"Porcinos base: {total_porcinos:,.0f} | Aves base: {total_aves:,.0f}")
     
     pob_total = pob_urbana + pob_rural
 
-st.success(f"📌 **SÍNTESIS ACTIVA |** 📍 Territorio: **{nombre_seleccion}** | 👥 Humanos: **{pob_total:,.0f}** | 🐄 Bov: **{total_bovinos:,.0f}** | 🐖 Porc: **{total_porcinos:,.0f}** | 🐔 Aves: **{total_aves:,.0f}**")
+st.success(
+    f"📌 **SÍNTESIS ACTIVA |** 📍 Territorio: **{nombre_seleccion}** | "
+    f"👥 Humanos: **{pob_total:,.0f}** *(🏙️ Urb: {pob_urbana:,.0f} | 🏡 Rur: {pob_rural:,.0f})* | "
+    f"🐄 Bov: **{total_bovinos:,.0f}** | 🐖 Porc: **{total_porcinos:,.0f}** | 🐔 Aves: **{total_aves:,.0f}**"
+)
 
 # --- 🌉 ALIAS DE COMPATIBILIDAD ---
 lugar_sel = nombre_seleccion
@@ -1030,8 +1096,11 @@ with tab_fuentes:
         from modules.db_manager import get_engine
         import pandas as pd
         try:
-            return pd.read_sql(f"SELECT * FROM {tabla}", get_engine())
-        except Exception:
+            # 🛠️ FIX SUPREMO Dinámico
+            with get_engine().connect() as conn:
+                return pd.read_sql(f"SELECT * FROM {tabla}", conn)
+        except Exception as e:
+            st.error(f"🚨 Error crítico cargando matriz completa {tabla}: {str(e)}")
             return pd.DataFrame()
 
     df_demo_full = st.session_state.get('df_matriz_demografica', cargar_matriz_maestra_sql("matriz_maestra_demografica"))
@@ -1042,12 +1111,54 @@ with tab_fuentes:
         df_pecu = df_pecu_full
         
         def calcular_curva_v2(fila, anios):
-            x_norm = anios - fila['Año_Base']
-            modelo = str(fila.get('Modelo_Recomendado', 'Logístico'))
-            if 'Logistico' in modelo or 'Logístico' in modelo: return fila['Log_K'] / (1 + fila['Log_a'] * np.exp(-fila['Log_r'] * x_norm))
-            elif 'Exponencial' in modelo: return fila['Exp_a'] * np.exp(fila['Exp_b'] * x_norm)
-            elif 'Lineal' in modelo: return fila.get('Lin_m',0) * x_norm + fila.get('Lin_b',0)
-            else: return fila['Poly_A']*(x_norm**3) + fila['Poly_B']*(x_norm**2) + fila['Poly_C']*x_norm + fila.get('Poly_D',0)
+            import pandas as pd
+            import numpy as np
+            
+            def extraer_num(columna):
+                val = fila.get(columna, 0.0)
+                if pd.isna(val) or val == "" or val == "None" or val is None: return 0.0
+                try: return float(val)
+                except: return 0.0
+
+            try:
+                anio_base = extraer_num('Año_Base')
+                if anio_base == 0: anio_base = 2018
+                x_norm = anios - int(anio_base)
+                
+                mod = str(fila.get('Modelo_Recomendado', 'Logistico')).lower().strip()
+                if mod in ['nan', 'none', 'null', '']: mod = 'logistico'
+                    
+                col_pob = next((c for c in fila.keys() if 'Pob_Base' in str(c) or 'Poblacion_Base' in str(c)), None)
+                pob_base = extraer_num(col_pob) if col_pob else 0.0
+
+                resultado = np.full(len(anios), pob_base)
+
+                # Ejecución matemática vectorial
+                if 'logist' in mod or 'logíst' in mod: 
+                    k = extraer_num('Log_K')
+                    if k > 0: resultado = k / (1 + extraer_num('Log_a') * np.exp(-extraer_num('Log_r') * x_norm))
+                elif 'exp' in mod: 
+                    a = extraer_num('Exp_a')
+                    if a > 0: resultado = a * np.exp(extraer_num('Exp_b') * x_norm)
+                elif 'lin' in mod: 
+                    resultado = extraer_num('Lin_m') * x_norm + extraer_num('Lin_b')
+                elif 'poli' in mod or 'poly' in mod: 
+                    resultado = extraer_num('Poly_A')*(x_norm**3) + extraer_num('Poly_B')*(x_norm**2) + extraer_num('Poly_C')*x_norm + extraer_num('Poly_D')
+
+                # 🛡️ ESCUDO ANTI-COLAPSO VECTORIAL
+                mask_bad = (resultado <= 0) | (resultado > (pob_base * 5))
+                if np.any(mask_bad):
+                    k = extraer_num('Log_K')
+                    if k > 0: 
+                        resultado_seguro = k / (1 + extraer_num('Log_a') * np.exp(-extraer_num('Log_r') * x_norm))
+                        resultado = np.where(mask_bad, resultado_seguro, resultado)
+                    else:
+                        resultado = np.where(mask_bad, pob_base, resultado)
+
+                return np.maximum(pob_base, resultado)
+                    
+            except Exception as e: 
+                return np.full(len(anios), pob_base) if 'pob_base' in locals() else np.zeros(len(anios))
 
         def obtener_vector_v2(df, territorio, nivel_exacto, categoria, col_cat, anios, val_fallback):
             mask = (df['Territorio'].str.strip().str.upper() == str(territorio).strip().upper()) & \
