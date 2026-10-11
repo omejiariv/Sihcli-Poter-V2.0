@@ -282,9 +282,20 @@ st.sidebar.success(f"🔗 Conexión Aleph Activa: {nombre_seleccion}")
 # ==============================================================================
 import numpy as np
 
-anio_analisis = 2025 
-pob_urb_base, pob_rur_base, pob_total = 0, 0, 0
-total_bovinos, total_porcinos, total_aves = 0, 0, 0
+# 📅 SELECTOR DE HORIZONTE TEMPORAL (Sincronizado con Toma de Decisiones y Demografía)
+anio_default = int(st.session_state.get('anio_proyeccion_global', 2025))
+anio_analisis = st.slider(
+    "📅 Año de Análisis y Proyección (Simulación del Ciclo Hidrosocial):",
+    min_value=1985,
+    max_value=2060,
+    value=anio_default,
+    step=1,
+    help="Desliza para proyectar la población humana, el hato pecuario, la demanda hídrica y las cargas contaminantes en el tiempo."
+)
+st.session_state['anio_proyeccion_global'] = anio_analisis
+
+pob_urb_base, pob_rur_base, pob_total = 0.0, 0.0, 0.0
+total_bovinos, total_porcinos, total_aves = 0.0, 0.0, 0.0
 origen_dato = "No Identificado"
 metodo_animal = "Sin Datos"
 
@@ -514,11 +525,23 @@ with st.expander(f"📍 Contexto Demográfico Base ({anio_analisis}): {nombre_se
     st.markdown("⚙️ **Ajuste Manual de Población (Calibración)**")
     col_p1, col_p2 = st.columns(2)
     with col_p1: 
-        pob_urbana = st.number_input("Pob. Urbana (Conectada a Alcantarillado):", min_value=0.0, value=float(pob_urb_base), step=1.0, key=f"pob_u_{nombre_seleccion}_{ int(pob_urb_base) }")
-        st.caption(f"Bovinos base: {total_bovinos:,.0f}")
+        pob_urbana = st.number_input(
+            "Pob. Urbana (Conectada a Alcantarillado):", 
+            min_value=0.0, 
+            value=float(pob_urb_base), 
+            step=1.0, 
+            key=f"pob_u_{nombre_seleccion}_{anio_analisis}_{int(pob_urb_base)}"
+        )
+        st.caption(f"Bovinos base ({anio_analisis}): {total_bovinos:,.0f}")
     with col_p2: 
-        pob_rural = st.number_input("Pob. Rural (Sistemas Individuales/Sépticos):", min_value=0.0, value=float(pob_rur_base), step=1.0, key=f"pob_r_{nombre_seleccion}_{ int(pob_rur_base) }")
-        st.caption(f"Porcinos base: {total_porcinos:,.0f} | Aves base: {total_aves:,.0f}")
+        pob_rural = st.number_input(
+            "Pob. Rural (Sistemas Individuales/Sépticos):", 
+            min_value=0.0, 
+            value=float(pob_rur_base), 
+            step=1.0, 
+            key=f"pob_r_{nombre_seleccion}_{anio_analisis}_{int(pob_rur_base)}"
+        )
+        st.caption(f"Porcinos base ({anio_analisis}): {total_porcinos:,.0f} | Aves base ({anio_analisis}): {total_aves:,.0f}")
     
     pob_total = pob_urbana + pob_rural
 
