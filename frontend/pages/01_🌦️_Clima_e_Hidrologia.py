@@ -1522,15 +1522,18 @@ def main():
                                     # Actualizamos dinámicamente las columnas que existan en matriz_hidrologica_maestra
                                     mapeo_posible = {
                                         'area_km2': float(area_km2), 'Area_km2': float(area_km2),
+                                        'altitud_m': float(alt_media), 'Altitud_m': float(alt_media),
+                                        'temp_c': float(v_temp), 'Temp_C': float(v_temp),
+                                        'lluvia_mm': float(v_ppt), 'Lluvia_mm': float(v_ppt),
                                         'precipitacion_mm': float(v_ppt), 'Precipitacion_mm': float(v_ppt), 'ppt_mm': float(v_ppt),
                                         'etr_mm': float(v_etr), 'ETR_mm': float(v_etr),
                                         'escorrentia_mm': float(v_esc), 'Escorrentia_mm': float(v_esc),
                                         'infiltracion_mm': float(v_inf), 'Infiltracion_mm': float(v_inf),
                                         'recarga_mm': float(v_rec_real), 'Recarga_mm': float(v_rec_real), 'recarga_real_mm': float(v_rec_real),
-                                        'caudal_medio_m3s': float(Q_medio), 'Q_Medio_m3s': float(Q_medio), 'q_medio_m3s': float(Q_medio), 'Caudal_Medio': float(Q_medio),
-                                        'caudal_min_m3s': float(Q_base), 'Q_Min_m3s': float(Q_base), 'q_min_m3s': float(Q_base), 'Caudal_Minimo': float(Q_base),
-                                        'caudal_max_m3s': float(Q_maximo), 'Q_Max_m3s': float(Q_maximo), 'q_max_m3s': float(Q_maximo),
-                                        'caudal_eco_m3s': float(Q_ecologico), 'Q_Eco_m3s': float(Q_ecologico), 'q_eco_m3s': float(Q_ecologico)
+                                        'caudal_medio_m3s': float(Q_medio), 'Caudal_Medio_m3s': float(Q_medio), 'Q_Medio_m3s': float(Q_medio), 'q_medio_m3s': float(Q_medio), 'Caudal_Medio': float(Q_medio),
+                                        'caudal_min_m3s': float(Q_base), 'Caudal_Min_m3s': float(Q_base), 'Q_Min_m3s': float(Q_base), 'q_min_m3s': float(Q_base), 'Caudal_Minimo': float(Q_base),
+                                        'caudal_max_m3s': float(Q_maximo), 'Caudal_Max_m3s': float(Q_maximo), 'Q_Max_m3s': float(Q_maximo), 'q_max_m3s': float(Q_maximo),
+                                        'caudal_eco_m3s': float(Q_ecologico), 'Caudal_Eco_m3s': float(Q_ecologico), 'Q_Eco_m3s': float(Q_ecologico), 'q_eco_m3s': float(Q_ecologico)
                                     }
                                     sets_sql = []
                                     params_sql = {'terr': str(nombre_zona).strip()}
@@ -1671,13 +1674,12 @@ def main():
             )
     
     # ==============================================================================
-    # ⚙️ BÓVEDA DE ADMINISTRADOR: FORJA DE LA MATRIZ MAESTRA
+    # ⚙️ BÓVEDA DE ADMINISTRADOR: FORJA DE LA MATRIZ MAESTRA UNIFICADA (HIDRO + SUBT)
     # ==============================================================================
     st.markdown("---")
     with st.expander("⚙️ Área Restringida: Motor de Generación de Matriz Hidrológica", expanded=False):
-        st.subheader("Matriz Hidrológica Maestra (Recálculo Global)")
+        st.subheader("Matriz Hidrológica y Subterránea Maestra (Recálculo Global)")
         
-        # 🔐 SISTEMA DE SEGURIDAD
         admin_pwd = st.text_input("🔑 Ingrese clave de administrador para desbloquear el motor:", type="password", key="admin_pwd_forja")
         
         if admin_pwd == "AdminPoter":
@@ -1685,8 +1687,8 @@ def main():
             
             st.markdown("""
             <div style="border-left: 5px solid #f39c12; padding: 15px; background-color: rgba(243, 156, 18, 0.1); border-radius: 5px; margin-bottom: 15px;">
-                <h4 style="color: #d35400; margin-top: 0;">⚠️ Advertencia de Sincronización Territorial</h4>
-                <b style="font-size: 0.95em;">Esta Matriz Maestra es el motor de alta velocidad que alimenta la Toma de Decisiones. Solo debe ejecutarse si se han modificado las bases de datos espaciales (nuevos municipios, cuencas o capas topográficas).</b>
+                <h4 style="color: #d35400; margin-top: 0;">⚠️ Sincronización Física Total (Superficial + Subterránea)</h4>
+                <b style="font-size: 0.95em;">Esta Matriz Maestra alimenta en milisegundos a Aguas Subterráneas, Calidad y Vertimientos, Toma de Decisiones y Simulador Integral con una única verdad física.</b>
             </div>
             """, unsafe_allow_html=True)
 
@@ -1699,31 +1701,53 @@ def main():
                     import geopandas as gpd
                     from sqlalchemy import text
                     import pandas as pd
+                    import unicodedata, re
                     
+                    def limpiar_llave_estandar(txt):
+                        t = str(txt).split("(")[0].replace("- NSS -", "").replace("- NSS", "").strip()
+                        t = unicodedata.normalize('NFKD', t).encode('ascii', 'ignore').decode('utf-8').upper()
+                        t = re.sub(r'[^A-Z0-9]', '_', t)
+                        return re.sub(r'_+', '_', t).strip('_')
+
                     prog_nivel = st.progress(0, text="Iniciando motores espaciales...")
 
-                    # 1. Cargamos el clima global (Estaciones y Lluvia)
-                    with st.spinner("📡 Cargando red de Estaciones y Perfiles Mensuales..."):
-                        q_est = text("SELECT id_estacion, altitud, ST_SetSRID(ST_MakePoint(CAST(longitud AS FLOAT), CAST(latitud AS FLOAT)), 4326) as geometry FROM estaciones WHERE latitud IS NOT NULL")
+                    # 1. Cargamos el clima global priorizando la serie limpia y filtrada del modelo
+                    with st.spinner("📡 Cargando red de Estaciones y Perfiles Mensuales Depurados..."):
+                        q_est = text("SELECT id_estacion, nombre, altitud, ST_SetSRID(ST_MakePoint(CAST(longitud AS FLOAT), CAST(latitud AS FLOAT)), 4326) as geometry FROM estaciones WHERE latitud IS NOT NULL")
                         gdf_est = cargar_capa_espacial_cache(q_est, geom_col="geometry").to_crs("EPSG:3116")
                         gdf_est['id_estacion'] = gdf_est['id_estacion'].astype(str)
                         
-                        # 🚀 EXTRACCIÓN HÍBRIDA: Traemos el promedio por MES de la BD para no saturar la RAM
+                        # Calculamos la lluvia anual real sumando por año (min_count=10) como en el Motor Distribuido
+                        q_anual_real = text("""
+                            SELECT id_estacion, anio, SUM(valor) as ppt_anual
+                            FROM (
+                                SELECT CAST(id_estacion AS TEXT) as id_estacion, 
+                                       EXTRACT(year FROM fecha) as anio, 
+                                       EXTRACT(month FROM fecha) as mes, 
+                                       AVG(valor) as valor
+                                FROM precipitacion
+                                WHERE valor > 0
+                                GROUP BY CAST(id_estacion AS TEXT), EXTRACT(year FROM fecha), EXTRACT(month FROM fecha)
+                            ) sub
+                            GROUP BY id_estacion, anio
+                            HAVING COUNT(mes) >= 10
+                        """)
+                        df_anual_est = pd.read_sql(q_anual_real, engine)
+                        
                         q_meses = text("""
-                            SELECT id_estacion, EXTRACT(month FROM fecha) as mes, AVG(valor) as ppt_mes
+                            SELECT CAST(id_estacion AS TEXT) as id_estacion, EXTRACT(month FROM fecha) as mes, AVG(valor) as ppt_mes
                             FROM precipitacion 
-                            GROUP BY id_estacion, EXTRACT(month FROM fecha)
+                            WHERE valor > 0
+                            GROUP BY CAST(id_estacion AS TEXT), EXTRACT(month FROM fecha)
                         """)
                         df_rain_mes = pd.read_sql(q_meses, engine)
                         
-                        if not df_rain_mes.empty and 'id_estacion' in df_rain_mes.columns:
-                            df_rain_mes['id_estacion'] = df_rain_mes['id_estacion'].astype(str)
-                            # Precalculamos el anual multiplicando el promedio mensual por 12
+                        if not df_anual_est.empty:
+                            df_rain_anual = df_anual_est.groupby('id_estacion')['ppt_anual'].mean().reset_index(name='ppt')
+                        elif not df_rain_mes.empty:
                             df_rain_anual = df_rain_mes.groupby('id_estacion')['ppt_mes'].sum().reset_index(name='ppt')
                         else:
-                            st.warning("⚠️ No se encontraron datos históricos de lluvia. Los cálculos asumirán 2500mm por defecto.")
                             df_rain_anual = pd.DataFrame(columns=['id_estacion', 'ppt'])
-                            df_rain_mes = pd.DataFrame(columns=['id_estacion', 'mes', 'ppt_mes'])
 
                     res_multiescala = []
 
@@ -1735,53 +1759,67 @@ def main():
                         for nombre_nivel, col_bd in dicc_niveles.items():
                             if col_bd not in gdf_base.columns: continue
                             
-                            prog_nivel.progress(paso_actual / total_pasos, text=f"Calculando Hidrología para: {nombre_nivel}")
+                            prog_nivel.progress(min(0.99, paso_actual / total_pasos), text=f"Calculando Física Hidrológica para: {nombre_nivel}")
                             paso_actual += 1
                             
                             gdf_nivel = gdf_base.dissolve(by=col_bd).reset_index()
                             
                             for i, row in gdf_nivel.iterrows():
                                 nom_territorio = str(row.get(col_bd, "Desconocido")).strip()
-                                if nom_territorio in ["", "None", "nan", "Cuenca Sin Nombre"]: continue
+                                if nom_territorio in ["", "None", "nan", "Cuenca Sin Nombre", "Sin Datos"]: continue
                                 
                                 area_km2 = row.geometry.area / 1e6
                                 if area_km2 <= 0: area_km2 = 1.0
                                 
-                                buffer_seguro = float(st.session_state.get("buffer_global_km", 15.0))
+                                buffer_seguro = float(st.session_state.get("buffer_global_km", 25.0))
                                 buf = row.geometry.buffer(buffer_seguro * 1000)
                                 est_in = gdf_est[gdf_est.geometry.within(buf)]
                                 
-                                ppt_media, altitud_media = 2500.0, 1500.0
+                                # Si una microcuenca pequeña no alcanza estaciones con el buffer, toma las 3 más cercanas
+                                if est_in.empty and not gdf_est.empty:
+                                    dists = gdf_est.geometry.distance(row.geometry.centroid)
+                                    est_in = gdf_est.loc[dists.nsmallest(3).index]
+                                
+                                ppt_media, altitud_media = 2800.0, 1500.0
                                 dict_meses = {m: 0.0 for m in range(1, 13)}
                                 
                                 if not est_in.empty:
-                                    ids = est_in['id_estacion'].tolist()
-                                    
-                                    # 1. Total Anual
+                                    ids = est_in['id_estacion'].astype(str).tolist()
                                     vals_ppt = df_rain_anual[df_rain_anual['id_estacion'].isin(ids)]['ppt']
-                                    if not vals_ppt.empty: ppt_media = vals_ppt.mean()
+                                    if not vals_ppt.empty:
+                                        ppt_media = float(vals_ppt.mean())
                                     
-                                    # 2. Perfil Mensual (El ADN estacional de visualizer.py)
                                     df_local_mes = df_rain_mes[df_rain_mes['id_estacion'].isin(ids)]
                                     if not df_local_mes.empty:
                                         promedios = df_local_mes.groupby('mes')['ppt_mes'].mean().to_dict()
+                                        suma_meses = sum(promedios.values())
+                                        factor_ajuste_mes = (ppt_media / suma_meses) if suma_meses > 0 else 1.0
                                         for m in range(1, 13):
-                                            dict_meses[m] = promedios.get(m, 0.0)
+                                            dict_meses[m] = promedios.get(m, 0.0) * factor_ajuste_mes
                                             
-                                    vals_alt = est_in['altitud'].dropna()
-                                    if not vals_alt.empty: altitud_media = vals_alt.mean()
+                                    vals_alt = pd.to_numeric(est_in['altitud'], errors='coerce').dropna()
+                                    if not vals_alt.empty:
+                                        altitud_media = float(vals_alt.mean())
                                     
+                                # Física Unificada (Turc Modificado + Partición Hidrogeológica Equivalente al Motor Distribuido)
                                 temp_calc = max(5.0, 28.0 - (0.006 * altitud_media))
-                                L = 300 + 25*temp_calc + 0.05*(temp_calc**3)
-                                etr = ppt_media / np.sqrt(0.9 + (ppt_media/L)**2) if L > 0 else 0
-                                escorrentia_total = ppt_media - etr
+                                L = 300.0 + 25.0 * temp_calc + 0.05 * (temp_calc ** 3)
+                                etr = ppt_media / np.sqrt(0.9 + (ppt_media / L) ** 2) if L > 0 else 0.0
+                                agua_disponible = max(0.0, ppt_media - etr)
                                 
-                                recarga_mm = escorrentia_total * 0.15
-                                escorrentia_superficial = escorrentia_total * 0.85
-                                q_medio = (escorrentia_superficial * area_km2 * 1000) / 31536000
-                                q_base = (recarga_mm * area_km2 * 1000) / 31536000
+                                # Coeficientes calibrados con el modelo distribuido (Ki ~ 0.546, Kg ~ 0.30 de infiltración -> Recarga ~ 16.4% de disp)
+                                infiltracion_mm = agua_disponible * 0.546
+                                recarga_mm = infiltracion_mm * 0.30
+                                escorrentia_superficial = max(0.0, agua_disponible - infiltracion_mm)
                                 
-                                res_multiescala.append({
+                                # Oferta Hídrica Total = Escorrentía Superficial + Recarga Subterránea (Flujo Base)
+                                factor_q = (area_km2 * 1000.0) / 31536000.0
+                                q_medio_total = (escorrentia_superficial + recarga_mm) * factor_q
+                                q_base_min = recarga_mm * factor_q
+                                q_max_pico = q_medio_total * 2.5
+                                q_eco_25 = q_medio_total * 0.25
+                                
+                                fila_base = {
                                     "Jerarquia": nombre_nivel,
                                     "Territorio": nom_territorio,
                                     "Area_km2": round(area_km2, 2), 
@@ -1789,31 +1827,34 @@ def main():
                                     "Temp_C": round(temp_calc, 1),
                                     "Lluvia_mm": round(ppt_media, 0), 
                                     "ETR_mm": round(etr, 0),
+                                    "Infiltracion_mm": round(infiltracion_mm, 0),
                                     "Recarga_mm": round(recarga_mm, 0),
                                     "Escorrentia_mm": round(escorrentia_superficial, 0),
-                                    "Caudal_Medio_m3s": round(q_medio + q_base, 3),
-                                    # 🚀 COLUMNAS DEL CEREBRO MULTIESCALAR
+                                    "Caudal_Medio_m3s": round(q_medio_total, 3),
+                                    "Caudal_Min_m3s": round(q_base_min, 3),
+                                    "Caudal_Max_m3s": round(q_max_pico, 3),
+                                    "Caudal_Eco_m3s": round(q_eco_25, 3),
                                     "P_01": round(dict_meses[1], 1), "P_02": round(dict_meses[2], 1),
                                     "P_03": round(dict_meses[3], 1), "P_04": round(dict_meses[4], 1),
                                     "P_05": round(dict_meses[5], 1), "P_06": round(dict_meses[6], 1),
                                     "P_07": round(dict_meses[7], 1), "P_08": round(dict_meses[8], 1),
                                     "P_09": round(dict_meses[9], 1), "P_10": round(dict_meses[10], 1),
                                     "P_11": round(dict_meses[11], 1), "P_12": round(dict_meses[12], 1)
-                                })
+                                }
+                                res_multiescala.append(fila_base)
                         return paso_actual
 
                     # --- 🗺️ FASE 1: PROCESAR CUENCAS ---
                     with st.spinner("Calculando red hidrográfica..."):
                         gdf_cuencas = cargar_capa_espacial_cache("SELECT * FROM cuencas", geom_col="geometry").to_crs("EPSG:3116")
 
-                        # 🧬 INYECCIÓN DE ADN (LLAVE ÚNICA)
-                        # Fusionamos Nombre + Código para evitar que cuencas homónimas se derritan en una sola
+                        # Formato exacto del Selector del Aleph: "Nombre - (Codigo)"
                         mapa_columnas = {'nom_nss3': 'nss3', 'nom_nss2': 'nss2', 'nom_nss1': 'nss1', 'nom_szh': 'szh', 'nomzh': 'zh', 'nomah': 'ah'}
                         for col_nom, col_cod in mapa_columnas.items():
                             if col_nom in gdf_cuencas.columns and col_cod in gdf_cuencas.columns:
                                 gdf_cuencas[col_nom] = gdf_cuencas.apply(
                                     lambda r: f"{str(r[col_nom]).strip()} - ({str(r[col_cod]).strip()})"
-                                    if pd.notnull(r[col_nom]) and str(r[col_nom]).strip() != "" and pd.notnull(r[col_cod])
+                                    if pd.notnull(r[col_nom]) and str(r[col_nom]).strip() != "" and pd.notnull(r[col_cod]) and str(r[col_cod]).strip() not in str(r[col_nom])
                                     else r[col_nom], axis=1
                                 )
                         
@@ -1823,156 +1864,118 @@ def main():
                             mask_aburra = gdf_cuencas['depto_regi'].str.contains('Aburr', case=False, na=False)
                             gdf_cuencas.loc[mask_aburra, 'CorpoAmb'] = 'AMVA'
 
-                        niveles_cuencas = {'NSS3': 'nom_nss3', 'NSS2': 'nom_nss2', 'NSS1': 'nom_nss1', 'SZH': 'nom_szh', 'ZH': 'nomzh', 'AH': 'nomah', 'CAR': 'CorpoAmb', 'REGION_CUENCA': 'depto_regi'}
+                        niveles_cuencas = {'NSS3': 'nom_nss3', 'NSS2': 'nom_nss2', 'NSS1': 'nom_nss1', 'SZH': 'nom_szh', 'ZH': 'nomzh', 'AH': 'nomah'}
                         pasos_totales = len(niveles_cuencas) + 5
                         paso_actual = procesar_capa_espacial(gdf_cuencas, niveles_cuencas, 0, pasos_totales)
 
-                    # --- 🏛️ FASE 2: PROCESAR MUNICIPIOS ---
+                    # --- 🏛️ FASE 2: PROCESAR MUNICIPIOS, SUBREGIONES, CARs Y DEPARTAMENTO ---
                     with st.spinner("🏛️ Sincronizando Niveles Administrativos..."):
-                        try:
-                            import io, requests
-                            url_maestro = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/sihcli_maestros/territorio_maestro.xlsx"
-                            res_m = requests.get(url_maestro, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=15)
-                            df_maestro = pd.read_excel(io.BytesIO(res_m.content))
-                            
-                            # 🚀 FIX SÚPER BLINDADO: Normalización extrema de columnas
-                            def normalize_col_name(col):
-                                return str(col).lower().strip().replace(' ', '_').replace('.', '').replace('-', '_')
-                            
-                            df_maestro.columns = [normalize_col_name(c) for c in df_maestro.columns]
-                            
-                            # Mapeo de columnas conocidas (por si vienen con nombres ligeramente distintos)
-                            col_mapping = {
-                                'sub_region': 'subregion',
-                                'subreg': 'subregion',
-                                'departamento': 'depto_nom',
-                                'depto': 'depto_nom',
-                                'corporacion': 'car',
-                                'corp': 'car',
-                                'cod_dane': 'dp_mp',
-                                'codigo_dane': 'dp_mp'
-                            }
-                            df_maestro.rename(columns=col_mapping, inplace=True)
-                            
-                            # Asegurar formato del código DANE (5 dígitos)
-                            if 'dp_mp' in df_maestro.columns:
-                                df_maestro['dp_mp'] = df_maestro['dp_mp'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().str.zfill(5)
-                            else:
-                                st.warning("⚠️ No se encontró columna DANE ('dp_mp' o 'cod_dane') en el Excel maestro. Usando nombres para el cruce (menos preciso).")
-                            
-                            gdf_mun = cargar_capa_espacial_cache("SELECT * FROM municipios", geom_col="geometry").to_crs("EPSG:3116")
-                            gdf_mun.columns = [normalize_col_name(c) for c in gdf_mun.columns]
-                            
-                            # Identificar la columna de ID en el GeoDataFrame
-                            posibles_cols_id = ['id_municipio', 'mpio_cdpmp', 'dane', 'dp_mp', 'cod_dane', 'mpo_cdpmp']
-                            col_id_mapa = next((c for c in posibles_cols_id if c in gdf_mun.columns), None)
-                            
-                            if col_id_mapa and 'dp_mp' in df_maestro.columns:
-                                gdf_mun['dp_mp'] = gdf_mun[col_id_mapa].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().str.zfill(5)
-                                merge_on = 'dp_mp'
-                            else:
-                                # Fallback: Cruce por nombre si no hay DANE válido
-                                posibles_cols_nom = ['nombre_municipio', 'mpio_cnmbr', 'municipio']
-                                col_nom_mapa = next((c for c in posibles_cols_nom if c in gdf_mun.columns), 'municipio')
-                                col_nom_excel = next((c for c in posibles_cols_nom if c in df_maestro.columns), 'municipio')
-                                
-                                gdf_mun['match_name'] = gdf_mun[col_nom_mapa].apply(limpiar_fuerte)
-                                df_maestro['match_name'] = df_maestro[col_nom_excel].apply(limpiar_fuerte)
-                                merge_on = 'match_name'
-
-                            # 🚀 FIX MAGISTRAL: Evitar sufijos y asegurar columnas requeridas
-                            cols_requeridas = ['municipio', 'subregion', 'region', 'depto_nom', 'car']
-                            
-                            # Eliminar del gdf_mun para priorizar el Excel
-                            cols_a_borrar = [c for c in cols_requeridas if c in gdf_mun.columns and c != merge_on]
-                            if cols_a_borrar:
-                                gdf_mun = gdf_mun.drop(columns=cols_a_borrar)
-
-                            # Asegurar que existan en df_maestro
-                            cols_a_traer = [merge_on]
-                            for col_req in cols_requeridas:
-                                if col_req not in df_maestro.columns and col_req != merge_on:
-                                    df_maestro[col_req] = 'Sin Especificar'
-                                if col_req not in cols_a_traer:
-                                    cols_a_traer.append(col_req)
-                                    
-                            # Cruce definitivo
-                            gdf_mun = gdf_mun.merge(df_maestro[cols_a_traer], on=merge_on, how='left')
-                            
-                            # Limpieza post-merge y valores por defecto
-                            for col in cols_requeridas:
-                                if col not in gdf_mun.columns:
-                                    gdf_mun[col] = 'Sin Datos'
-                                else:
-                                    gdf_mun[col] = gdf_mun[col].fillna('Sin Datos')
-
-                            # Regla de negocio: AMVA
-                            mask_aburra = gdf_mun['subregion'].str.contains('aburr', case=False, na=False)
-                            gdf_mun.loc[mask_aburra, 'car'] = 'AMVA'
-                            
-                            # Limpiar nombre del municipio final
+                        import io, requests
+                        url_maestro = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/sihcli_maestros/territorio_maestro.xlsx"
+                        res_m = requests.get(url_maestro, headers={'User-Agent': 'Mozilla/5.0'}, verify=False, timeout=15)
+                        df_maestro = pd.read_excel(io.BytesIO(res_m.content))
+                        
+                        def normalize_col_name(col):
+                            return str(col).lower().strip().replace(' ', '_').replace('.', '').replace('-', '_')
+                        
+                        df_maestro.columns = [normalize_col_name(c) for c in df_maestro.columns]
+                        col_mapping = {
+                            'sub_region': 'subregion', 'subreg': 'subregion',
+                            'departamento': 'depto_nom', 'depto': 'depto_nom',
+                            'corporacion': 'car', 'corp': 'car',
+                            'cod_dane': 'dp_mp', 'codigo_dane': 'dp_mp'
+                        }
+                        df_maestro.rename(columns=col_mapping, inplace=True)
+                        
+                        if 'dp_mp' in df_maestro.columns:
+                            df_maestro['dp_mp'] = df_maestro['dp_mp'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().str.zfill(5)
+                        
+                        gdf_mun = cargar_capa_espacial_cache("SELECT * FROM municipios", geom_col="geometry").to_crs("EPSG:3116")
+                        gdf_mun.columns = [normalize_col_name(c) for c in gdf_mun.columns]
+                        
+                        posibles_cols_id = ['id_municipio', 'mpio_cdpmp', 'dane', 'dp_mp', 'cod_dane', 'mpo_cdpmp']
+                        col_id_mapa = next((c for c in posibles_cols_id if c in gdf_mun.columns), None)
+                        
+                        if col_id_mapa and 'dp_mp' in df_maestro.columns:
+                            gdf_mun['dp_mp'] = gdf_mun[col_id_mapa].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().str.zfill(5)
+                            merge_on = 'dp_mp'
+                        else:
                             posibles_cols_nom = ['nombre_municipio', 'mpio_cnmbr', 'municipio']
                             col_nom_mapa = next((c for c in posibles_cols_nom if c in gdf_mun.columns), 'municipio')
-                            gdf_mun['municipio_clean'] = gdf_mun[col_nom_mapa]
-                            
-                            # Filtrar Antioquia
-                            if 'dp_mp' in gdf_mun.columns:
-                                gdf_mun = gdf_mun[gdf_mun['dp_mp'].str.startswith('05')].copy()
-                            
-                            # Definir niveles garantizando que las columnas existan
-                            niveles_admin = {}
-                            if 'municipio_clean' in gdf_mun.columns: niveles_admin['MUNICIPAL'] = 'municipio_clean'
-                            if 'subregion' in gdf_mun.columns: niveles_admin['REGION'] = 'subregion'
-                            if 'region' in gdf_mun.columns: niveles_admin['MACROREGION'] = 'region'
-                            if 'depto_nom' in gdf_mun.columns: niveles_admin['DEPARTAMENTO'] = 'depto_nom'
-                            if 'car' in gdf_mun.columns: niveles_admin['CAR'] = 'car'
+                            col_nom_excel = next((c for c in posibles_cols_nom if c in df_maestro.columns), 'municipio')
+                            gdf_mun['match_name'] = gdf_mun[col_nom_mapa].apply(limpiar_llave_estandar)
+                            df_maestro['match_name'] = df_maestro[col_nom_excel].apply(limpiar_llave_estandar)
+                            merge_on = 'match_name'
 
-                            paso_actual = procesar_capa_espacial(gdf_mun, niveles_admin, paso_actual, pasos_totales)
+                        cols_requeridas = ['municipio', 'subregion', 'region', 'depto_nom', 'car']
+                        cols_a_borrar = [c for c in cols_requeridas if c in gdf_mun.columns and c != merge_on]
+                        if cols_a_borrar:
+                            gdf_mun = gdf_mun.drop(columns=cols_a_borrar)
+
+                        cols_a_traer = [merge_on] + [c for c in cols_requeridas if c in df_maestro.columns and c != merge_on]
+                        gdf_mun = gdf_mun.merge(df_maestro[cols_a_traer], on=merge_on, how='left')
                         
-                        except Exception as e:
-                            st.error(f"🚨 Error Crítico en Fase 2: {e}. Detalles de columnas: {gdf_mun.columns.tolist() if 'gdf_mun' in locals() else 'N/A'}")
-                            st.stop()
-                            
+                        for col in cols_requeridas:
+                            if col not in gdf_mun.columns: gdf_mun[col] = 'Sin Datos'
+                            else: gdf_mun[col] = gdf_mun[col].fillna('Sin Datos')
+
+                        mask_aburra = gdf_mun['subregion'].str.contains('aburr', case=False, na=False)
+                        gdf_mun.loc[mask_aburra, 'car'] = 'AMVA'
+                        
+                        posibles_cols_nom = ['nombre_municipio', 'mpio_cnmbr', 'municipio']
+                        col_nom_mapa = next((c for c in posibles_cols_nom if c in gdf_mun.columns), 'municipio')
+                        gdf_mun['municipio_clean'] = gdf_mun[col_nom_mapa]
+                        
+                        if 'dp_mp' in gdf_mun.columns:
+                            gdf_mun = gdf_mun[gdf_mun['dp_mp'].str.startswith('05')].copy()
+                        
+                        niveles_admin = {
+                            'MUNICIPAL': 'municipio_clean',
+                            'REGION': 'subregion',
+                            'DEPARTAMENTO': 'depto_nom',
+                            'CAR': 'car'
+                        }
+                        paso_actual = procesar_capa_espacial(gdf_mun, niveles_admin, paso_actual, pasos_totales)
+                    
                     prog_nivel.progress(1.0, text="¡Física territorial procesada al 100%!")
                     
-                    # --- 💾 GUARDADO MAESTRO CON LLAVES UNIVERSALES PERFECTAS ---
+                    # --- 💾 GUARDADO MAESTRO CON LLAVES UNIVERSALES ESTANDARIZADAS ---
                     with st.spinner("Forjando Llaves Universales e Inyectando a PostgreSQL..."):
-                        from modules.utils import normalizar_texto
                         df_matriz = pd.DataFrame(res_multiescala)
                         
                         def forjar_llave_hidro(row):
-                            jerarquia = str(row.get('Jerarquia', '')).upper()
-                            if jerarquia in ["DEPARTAMENTAL", "DEPARTAMENTO"]: 
-                                jerarquia = "DEPARTAMENTO"
-                            elif jerarquia in ["REGIONAL", "REGION", "SUBREGION"]: 
-                                jerarquia = "REGION"
-                            elif jerarquia in ["MUNICIPAL", "MUNICIPIO"]: 
-                                jerarquia = "MUNICIPIO"
+                            jer = str(row.get('Jerarquia', '')).upper().strip()
+                            if jer in ["DEPARTAMENTAL", "DEPARTAMENTO"]: pref = "DEPARTAMENTO"
+                            elif jer in ["REGIONAL", "REGION", "SUBREGION", "SUBREGIONAL"]: pref = "REGION"
+                            elif jer in ["MUNICIPAL", "MUNICIPIO"]: pref = "MUNICIPIO"
+                            elif jer in ["NSS1", "NSS2", "NSS3", "SZH", "ZH", "AH", "CUENCA"]: pref = "CUENCA"
+                            else: pref = jer
                                 
-                            if row.get('Territorio') is None or str(row.get('Territorio')) == 'nan': 
-                                return None
-                                
-                            terr = str(normalizar_texto(row.get('Territorio', ''))).replace(" ", "_").upper()
-                            return f"{jerarquia}_{terr}_TOTAL"
+                            terr_raw = str(row.get('Territorio', ''))
+                            if not terr_raw or terr_raw == 'nan': return None
+                            
+                            terr_clean = limpiar_llave_estandar(terr_raw)
+                            return f"{pref}_{terr_clean}_TOTAL"
 
                         df_matriz['LLAVE_UNIVERSAL'] = df_matriz.apply(forjar_llave_hidro, axis=1)
-                        df_matriz = df_matriz.drop_duplicates(subset=['LLAVE_UNIVERSAL'], keep='first')
+                        df_matriz = df_matriz.dropna(subset=['LLAVE_UNIVERSAL']).drop_duplicates(subset=['LLAVE_UNIVERSAL'], keep='first')
                         
                         with engine.begin() as conn:
-                            # 1. Aseguramos la columna de la llave
                             conn.execute(text('ALTER TABLE matriz_hidrologica_maestra ADD COLUMN IF NOT EXISTS "LLAVE_UNIVERSAL" TEXT;'))
-                            
-                            # 🚀 FIX: Forzamos a PostgreSQL a crear las 12 columnas mensuales si no existen
+                            conn.execute(text('ALTER TABLE matriz_hidrologica_maestra ADD COLUMN IF NOT EXISTS "Infiltracion_mm" FLOAT;'))
+                            conn.execute(text('ALTER TABLE matriz_hidrologica_maestra ADD COLUMN IF NOT EXISTS "Caudal_Min_m3s" FLOAT;'))
+                            conn.execute(text('ALTER TABLE matriz_hidrologica_maestra ADD COLUMN IF NOT EXISTS "Caudal_Max_m3s" FLOAT;'))
+                            conn.execute(text('ALTER TABLE matriz_hidrologica_maestra ADD COLUMN IF NOT EXISTS "Caudal_Eco_m3s" FLOAT;'))
                             for i in range(1, 13):
                                 conn.execute(text(f'ALTER TABLE matriz_hidrologica_maestra ADD COLUMN IF NOT EXISTS "P_{i:02d}" FLOAT;'))
                                 
-                            # 2. Vaciamos la tabla vieja
                             conn.execute(text("DELETE FROM matriz_hidrologica_maestra;"))
                             
-                        # 3. Inyectamos la nueva matriz completa
-                        df_matriz.to_sql("matriz_hidrologica_maestra", engine, if_exists='append', index=False)
+                        df_matriz.to_sql("matriz_hidrologica_maestra", engine, if_exists='append', index=False, chunksize=300, method='multi')
                         st.cache_data.clear()
-                        st.success(f"✅ EL ALEPH ESTÁ COMPLETO. {len(df_matriz)} territorios sincronizados.")
+                        if 'df_matriz_hidrologica' in st.session_state:
+                            del st.session_state['df_matriz_hidrologica']
+                        st.success(f"✅ EL ALEPH HIDROLÓGICO Y SUBTERRÁNEO ESTÁ COMPLETO. {len(df_matriz)} territorios sincronizados en Supabase.")
                         
                         csv_data = df_matriz.to_csv(index=False).encode('utf-8')
                         st.download_button("📥 Descargar Matriz Recién Forjada (CSV)", csv_data, "Matriz_Hidro_Multiescala.csv", "text/csv")
@@ -1998,4 +2001,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
