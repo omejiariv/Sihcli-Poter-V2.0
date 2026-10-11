@@ -509,59 +509,71 @@ if gdf_zona is not None:
                 area_km2 = 10.0
 
             # --- 🌍 B. NEXO CLIMÁTICO Y SINCRONIZACIÓN CON MATRIZ HIDROLÓGICA MAESTRA ---
-            # 1. Intentamos recuperar primero desde la memoria viva (si se acaba de ejecutar la Pág 01 para el mismo territorio)
-            lluvia_aleph = float(st.session_state.get('aleph_ppt_anual', 0.0) or 0.0)
-            etr_aleph = float(st.session_state.get('aleph_etr_anual', 0.0) or 0.0)
-            esc_aleph = float(st.session_state.get('aleph_esc_anual', 0.0) or 0.0)
-            inf_aleph = float(st.session_state.get('aleph_inf_anual', 0.0) or 0.0)
-            rec_aleph = float(st.session_state.get('aleph_recarga_mm', 0.0) or 0.0)
-            q_med_aleph = float(st.session_state.get('aleph_q_rio_m3s', 0.0) or 0.0)
-            q_min_aleph = float(st.session_state.get('aleph_q_min_m3s', 0.0) or 0.0)
-            q_eco_aleph = float(st.session_state.get('aleph_q_eco_m3s', 0.0) or 0.0)
+            lluvia_aleph, etr_aleph, esc_aleph, inf_aleph, rec_aleph = 0.0, 0.0, 0.0, 0.0, 0.0
+            q_med_aleph, q_min_aleph, q_eco_aleph = 0.0, 0.0, 0.0
 
-            # 2. Si no está en sesión viva, consultamos la Matriz Hidrológica Maestra en Supabase (Búsqueda infalible)
-            if lluvia_aleph <= 0 and q_med_aleph <= 0:
-                try:
-                    import unicodedata, re
-                    def _limpiar_ascii(txt):
-                        t = unicodedata.normalize('NFKD', str(txt)).encode('ascii', 'ignore').decode('utf-8').upper()
-                        return re.sub(r'[^A-Z0-9]', '', t)
+            # 1. Consultamos primero la Matriz Hidrológica Maestra en Supabase para el territorio exacto seleccionado
+            try:
+                import unicodedata, re
+                def _limpiar_ascii(txt):
+                    t = unicodedata.normalize('NFKD', str(txt)).encode('ascii', 'ignore').decode('utf-8').upper()
+                    return re.sub(r'[^A-Z0-9]', '', t)
 
-                    df_hm = st.session_state.get('df_matriz_hidrologica', pd.DataFrame())
-                    if df_hm.empty:
-                        with engine.connect() as conn:
-                            df_hm = pd.read_sql(text("SELECT * FROM matriz_hidrologica_maestra"), conn)
-                            st.session_state['df_matriz_hidrologica'] = df_hm
+                df_hm = st.session_state.get('df_matriz_hidrologica', pd.DataFrame())
+                if df_hm.empty:
+                    with engine.connect() as conn:
+                        df_hm = pd.read_sql(text("SELECT * FROM matriz_hidrologica_maestra"), conn)
+                        st.session_state['df_matriz_hidrologica'] = df_hm
 
-                    if not df_hm.empty:
-                        m_cod = re.search(r'\(([\d\-]+)\)', str(nombre_zona))
-                        cod_cuenca = m_cod.group(1).strip() if m_cod else ""
-                        nom_limpio = _limpiar_ascii(str(nombre_zona).split("(")[0].replace("- NSS -", "").replace("- NSS", ""))
+                if not df_hm.empty:
+                    # Extraemos el código final entre paréntesis (ej. 2317-03-01-04 o 2702), ignorando (mi) o (md)
+                    m_cod = re.search(r'\(([\d\-]+)\)\s*$', str(nombre_zona).strip())
+                    cod_cuenca = m_cod.group(1).strip() if m_cod else ""
+                    
+                    # Cortamos solo en " - (" final para NO truncar nombres con (mi) o (md)
+                    nom_sin_cod = re.split(r'\s*-\s*\([\d\-]+\)', str(nombre_zona))[0].replace("- NSS -", "").replace("- NSS", "")
+                    nom_limpio = _limpiar_ascii(nom_sin_cod)
 
-                        col_th = next((c for c in df_hm.columns if c.lower() in ['territorio', 'nombre', 'unidad', 'municipio', 'cuenca']), None)
-                        col_kh = next((c for c in df_hm.columns if 'llave' in c.lower()), None)
+                    col_th = next((c for c in df_hm.columns if c.lower() in ['territorio', 'nombre', 'unidad', 'municipio', 'cuenca']), None)
+                    col_kh = next((c for c in df_hm.columns if 'llave' in c.lower()), None)
 
-                        match_h = pd.DataFrame()
-                        if cod_cuenca and col_th:
-                            match_h = df_hm[df_hm[col_th].astype(str).str.contains(re.escape(cod_cuenca), case=False, na=False)]
-                        if match_h.empty and col_th and nom_limpio:
-                            serie_t = df_hm[col_th].astype(str).apply(lambda x: _limpiar_ascii(x.split("(")[0].replace("- NSS -", "").replace("- NSS", "")))
-                            match_h = df_hm[serie_t == nom_limpio]
-                        if match_h.empty and col_kh and nom_limpio:
-                            match_h = df_hm[df_hm[col_kh].astype(str).apply(_limpiar_ascii).str.contains(nom_limpio, na=False)]
+                    match_h = pd.DataFrame()
+                    # Prioridad 1: Código único de cuenca (Infalible para NSS1, NSS2, NSS3, SZH)
+                    if cod_cuenca and col_th:
+                        match_h = df_hm[df_hm[col_th].astype(str).str.contains(rf"\({re.escape(cod_cuenca)}\)", case=False, na=False, regex=True)]
+                    # Prioridad 2: Nombre exacto normalizado (preservando mi/md)
+                    if match_h.empty and col_th and nom_limpio:
+                        serie_t = df_hm[col_th].astype(str).apply(
+                            lambda x: _limpiar_ascii(re.split(r'\s*-\s*\([\d\-]+\)', str(x))[0].replace("- NSS -", "").replace("- NSS", ""))
+                        )
+                        match_h = df_hm[serie_t == nom_limpio]
+                    # Prioridad 3: Búsqueda en LLAVE_UNIVERSAL
+                    if match_h.empty and col_kh and nom_limpio:
+                        match_h = df_hm[df_hm[col_kh].astype(str).apply(_limpiar_ascii).str.contains(nom_limpio, na=False)]
 
-                        if not match_h.empty:
-                            r_h = match_h.iloc[0]
-                            lluvia_aleph = float(r_h.get('Precipitacion_mm', r_h.get('precipitacion_mm', r_h.get('ppt_mm', 0.0))) or 0.0)
-                            etr_aleph = float(r_h.get('ETR_mm', r_h.get('etr_mm', 0.0)) or 0.0)
-                            esc_aleph = float(r_h.get('Escorrentia_mm', r_h.get('escorrentia_mm', 0.0)) or 0.0)
-                            inf_aleph = float(r_h.get('Infiltracion_mm', r_h.get('infiltracion_mm', 0.0)) or 0.0)
-                            rec_aleph = float(r_h.get('Recarga_mm', r_h.get('recarga_mm', r_h.get('recarga_real_mm', 0.0))) or 0.0)
-                            q_med_aleph = float(r_h.get('Q_Medio_m3s', r_h.get('caudal_medio_m3s', r_h.get('q_medio_m3s', r_h.get('Caudal_Medio', 0.0)))) or 0.0)
-                            q_min_aleph = float(r_h.get('Q_Min_m3s', r_h.get('caudal_min_m3s', r_h.get('q_min_m3s', r_h.get('Caudal_Minimo', 0.0)))) or 0.0)
-                            q_eco_aleph = float(r_h.get('Q_Eco_m3s', r_h.get('caudal_eco_m3s', r_h.get('q_eco_m3s', 0.0))) or 0.0)
-                except Exception:
-                    pass
+                    if not match_h.empty:
+                        r_h = match_h.iloc[0]
+                        lluvia_aleph = float(r_h.get('Lluvia_mm', r_h.get('Precipitacion_mm', r_h.get('precipitacion_mm', r_h.get('ppt_mm', 0.0)))) or 0.0)
+                        etr_aleph = float(r_h.get('ETR_mm', r_h.get('etr_mm', 0.0)) or 0.0)
+                        esc_aleph = float(r_h.get('Escorrentia_mm', r_h.get('escorrentia_mm', 0.0)) or 0.0)
+                        inf_aleph = float(r_h.get('Infiltracion_mm', r_h.get('infiltracion_mm', 0.0)) or 0.0)
+                        rec_aleph = float(r_h.get('Recarga_mm', r_h.get('recarga_mm', r_h.get('recarga_real_mm', 0.0))) or 0.0)
+                        q_med_aleph = float(r_h.get('Caudal_Medio_m3s', r_h.get('Q_Medio_m3s', r_h.get('caudal_medio_m3s', r_h.get('q_medio_m3s', r_h.get('Caudal_Medio', 0.0))))) or 0.0)
+                        q_min_aleph = float(r_h.get('Caudal_Min_m3s', r_h.get('Q_Min_m3s', r_h.get('caudal_min_m3s', r_h.get('q_min_m3s', r_h.get('Caudal_Minimo', 0.0))))) or 0.0)
+                        q_eco_aleph = float(r_h.get('Caudal_Eco_m3s', r_h.get('Q_Eco_m3s', r_h.get('caudal_eco_m3s', r_h.get('q_eco_m3s', 0.0)))) or 0.0)
+            except Exception:
+                pass
+
+            # 2. Si el usuario acaba de correr el Modelo Distribuido en vivo (Pág 01) para esta misma zona, usamos esa simulación en vivo
+            if lluvia_aleph <= 0:
+                lluvia_aleph = float(st.session_state.get('aleph_ppt_anual', 0.0) or 0.0)
+                etr_aleph = float(st.session_state.get('aleph_etr_anual', 0.0) or 0.0)
+                esc_aleph = float(st.session_state.get('aleph_esc_anual', 0.0) or 0.0)
+                inf_aleph = float(st.session_state.get('aleph_inf_anual', 0.0) or 0.0)
+                rec_aleph = float(st.session_state.get('aleph_recarga_mm', 0.0) or 0.0)
+                q_med_aleph = float(st.session_state.get('aleph_q_rio_m3s', 0.0) or 0.0)
+                q_min_aleph = float(st.session_state.get('aleph_q_min_m3s', 0.0) or 0.0)
+                q_eco_aleph = float(st.session_state.get('aleph_q_eco_m3s', 0.0) or 0.0)
 
             delta_ppt_sim = st.session_state.get('sim_delta_ppt', 0.0) 
             delta_temp_sim = st.session_state.get('sim_delta_temp', 0.0)

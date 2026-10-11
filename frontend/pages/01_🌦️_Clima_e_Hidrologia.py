@@ -1939,26 +1939,32 @@ def main():
                     
                     prog_nivel.progress(1.0, text="¡Física territorial procesada al 100%!")
                     
-                    # --- 💾 GUARDADO MAESTRO CON LLAVES UNIVERSALES ESTANDARIZADAS ---
+                    # --- 💾 GUARDADO MAESTRO CON LLAVES UNIVERSALES SIN COLISIÓN (1,954 TERRITORIOS) ---
                     with st.spinner("Forjando Llaves Universales e Inyectando a PostgreSQL..."):
+                        from modules.utils import normalizar_texto
                         df_matriz = pd.DataFrame(res_multiescala)
                         
                         def forjar_llave_hidro(row):
-                            jer = str(row.get('Jerarquia', '')).upper().strip()
-                            if jer in ["DEPARTAMENTAL", "DEPARTAMENTO"]: pref = "DEPARTAMENTO"
-                            elif jer in ["REGIONAL", "REGION", "SUBREGION", "SUBREGIONAL"]: pref = "REGION"
-                            elif jer in ["MUNICIPAL", "MUNICIPIO"]: pref = "MUNICIPIO"
-                            elif jer in ["NSS1", "NSS2", "NSS3", "SZH", "ZH", "AH", "CUENCA"]: pref = "CUENCA"
-                            else: pref = jer
+                            jerarquia = str(row.get('Jerarquia', '')).upper().strip()
+                            if jerarquia in ["DEPARTAMENTAL", "DEPARTAMENTO"]: 
+                                jerarquia = "DEPARTAMENTO"
+                            elif jerarquia in ["REGIONAL", "REGION", "SUBREGION"]: 
+                                jerarquia = "REGION"
+                            elif jerarquia in ["MUNICIPAL", "MUNICIPIO"]: 
+                                jerarquia = "MUNICIPIO"
                                 
-                            terr_raw = str(row.get('Territorio', ''))
-                            if not terr_raw or terr_raw == 'nan': return None
-                            
-                            terr_clean = limpiar_llave_estandar(terr_raw)
-                            return f"{pref}_{terr_clean}_TOTAL"
+                            terr_raw = row.get('Territorio')
+                            if terr_raw is None or str(terr_raw) == 'nan': 
+                                return None
+                                
+                            # Usamos normalizar_texto original para preservar el texto después de (mi)/(md)
+                            terr = str(normalizar_texto(str(terr_raw))).replace(" ", "_").upper()
+                            terr = re.sub(r'_+', '_', terr).strip('_')
+                            return f"{jerarquia}_{terr}_TOTAL"
 
                         df_matriz['LLAVE_UNIVERSAL'] = df_matriz.apply(forjar_llave_hidro, axis=1)
-                        df_matriz = df_matriz.dropna(subset=['LLAVE_UNIVERSAL']).drop_duplicates(subset=['LLAVE_UNIVERSAL'], keep='first')
+                        # Deduplicamos por (Jerarquia, Territorio) para no perder nunca cuencas homónimas (ej. dos Q. La Honda con distinto código IDEAM)
+                        df_matriz = df_matriz.dropna(subset=['LLAVE_UNIVERSAL']).drop_duplicates(subset=['Jerarquia', 'Territorio'], keep='first')
                         
                         with engine.begin() as conn:
                             conn.execute(text('ALTER TABLE matriz_hidrologica_maestra ADD COLUMN IF NOT EXISTS "LLAVE_UNIVERSAL" TEXT;'))
