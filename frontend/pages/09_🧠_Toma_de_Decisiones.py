@@ -407,32 +407,77 @@ if gdf_zona is not None and not gdf_zona.empty:
         nivel_demo = "Departamental"
 
     # ---------------------------------------------------------
-    # 1. CONEXIÓN DEMOGRÁFICA (Vía Motor Híbrido Sihcli-Poter)
+    # 1. CONEXIÓN DEMOGRÁFICA (Sincronizada 1:1 con Matriz Maestra SQL)
     # ---------------------------------------------------------
-    # 🔥 Forzamos la importación aquí para que sea a prueba de balas (Elimina el NameError)
     from modules.demografia_tools import calcular_poblacion_al_vuelo
     from modules.utils import generar_llave_universal, extraer_datos_matriz_sql, proyectar_modelo_sql
-    
-    # 1. Intentar con el Motor Híbrido Dasimétrico (Cerebro B)
-    # 🔥 Le enviamos 'lugar_maestro' para que AMVA se lea correctamente como VALLE DE ABURRA
-    df_demo_hibrido = calcular_poblacion_al_vuelo(lugar_maestro, nivel_demo, "Total", anio_especifico=anio_actual)
-    
-    if df_demo_hibrido is not None and not df_demo_hibrido.empty:
-        pob_total = float(df_demo_hibrido['Total'].iloc[0])
-        st.success(f" 👥  **Cerebro Demográfico Enlazado:** {pob_total:,.0f} habitantes detectados (Motor Híbrido).")
+    import re
+
+    pob_total, pob_urb, pob_rur = 0.0, 0.0, 0.0
+    origen_demo = False
+
+    # 1. Prioridad A: Matriz Maestra Demográfica en Supabase (Garantiza 100% simetría con Demografía y Calidad)
+    llave_demo = generar_llave_universal(nivel_demo, lugar_puro, "Total")
+    df_demo_sql = extraer_datos_matriz_sql("matriz_maestra_demografica", llave_demo, es_llave=True)
+
+    # Fallback en SQL por nombre o código IDEAM de cuenca (ej. 2317-03-01-04 o 2502-01-02-03)
+    if df_demo_sql.empty:
+        df_demo_sql = extraer_datos_matriz_sql("matriz_maestra_demografica", lugar_puro, nivel=nivel_demo, es_llave=False)
+    if df_demo_sql.empty:
+        try:
+            from sqlalchemy import text
+            from modules.db_manager import get_engine
+            import pandas as pd
+            m_cod_d = re.search(r'\(([\d\-]+)\)\s*$', str(lugar_original).strip())
+            if m_cod_d:
+                cod_d = m_cod_d.group(1).strip()
+                with get_engine().connect() as conn:
+                    df_demo_sql = pd.read_sql(
+                        text("SELECT * FROM matriz_maestra_demografica WHERE \"Territorio\" ILIKE :c"),
+                        conn, params={"c": f"%({cod_d})%"}
+                    )
+        except Exception:
+            pass
+
+    if not df_demo_sql.empty:
+        df_t_row = df_demo_sql[df_demo_sql['Area'].astype(str).str.upper() == 'TOTAL'] if 'Area' in df_demo_sql.columns else df_demo_sql
+        fila_t = df_t_row.iloc[0] if not df_t_row.empty else df_demo_sql.iloc[0]
+        pob_total = max(0.0, proyectar_modelo_sql(fila_t, anio_actual))
+
+        # Extraer Urbana y Rural desde SQL
+        df_u_sql = extraer_datos_matriz_sql("matriz_maestra_demografica", generar_llave_universal(nivel_demo, lugar_puro, "Urbana"), es_llave=True)
+        df_r_sql = extraer_datos_matriz_sql("matriz_maestra_demografica", generar_llave_universal(nivel_demo, lugar_puro, "Rural"), es_llave=True)
+        pob_urb = max(0.0, proyectar_modelo_sql(df_u_sql.iloc[0], anio_actual)) if not df_u_sql.empty else 0.0
+        pob_rur = max(0.0, proyectar_modelo_sql(df_r_sql.iloc[0], anio_actual)) if not df_r_sql.empty else 0.0
+
+        if (pob_urb + pob_rur) > 0:
+            fac_eq = pob_total / (pob_urb + pob_rur)
+            pob_urb, pob_rur = pob_urb * fac_eq, pob_rur * fac_eq
+        else:
+            # En Cuencas (donde solo existe la fila Total), se asigna a Rural
+            pob_urb, pob_rur = 0.0, pob_total
+
+        st.success(f" 👥  **Cerebro Demográfico Enlazado:** {pob_total:,.0f} habitantes detectados (🏙️ Urb: {pob_urb:,.0f} | 🏡 Rur: {pob_rur:,.0f}) — (Matriz Maestra SQL).")
         origen_demo = True
     else:
-        # 2. Fallback a la Matriz SQL Estricta (Cerebro A - Cuencas)
-        llave_demo = generar_llave_universal(nivel_demo, lugar_puro, "Total")
-        df_demo_sql = extraer_datos_matriz_sql("matriz_maestra_demografica", llave_demo, es_llave=True)
-        
-        if not df_demo_sql.empty:
-            pob_calc = proyectar_modelo_sql(df_demo_sql.iloc[0], anio_actual)
-            pob_total = max(0.0, pob_calc)
-            st.success(f" 👥  **Cerebro Demográfico Enlazado:** {pob_total:,.0f} habitantes detectados en SQL.")
+        # 2. Prioridad B (Respaldo): Motor Híbrido Dasimétrico si no existiera en SQL
+        df_demo_hibrido = calcular_poblacion_al_vuelo(lugar_maestro, nivel_demo, "Total", anio_especifico=anio_actual)
+        if df_demo_hibrido is not None and not df_demo_hibrido.empty:
+            pob_total = float(df_demo_hibrido['Total'].iloc[0])
+            df_urb_h = calcular_poblacion_al_vuelo(lugar_maestro, nivel_demo, "Urbana", anio_especifico=anio_actual)
+            df_rur_h = calcular_poblacion_al_vuelo(lugar_maestro, nivel_demo, "Rural", anio_especifico=anio_actual)
+            pob_urb = float(df_urb_h['Total'].iloc[0]) if (df_urb_h is not None and not df_urb_h.empty and 'Total' in df_urb_h.columns) else 0.0
+            pob_rur = float(df_rur_h['Total'].iloc[0]) if (df_rur_h is not None and not df_rur_h.empty and 'Total' in df_rur_h.columns) else 0.0
+            if (pob_urb + pob_rur) > 0:
+                fac_eq = pob_total / (pob_urb + pob_rur)
+                pob_urb, pob_rur = pob_urb * fac_eq, pob_rur * fac_eq
+            else:
+                pob_rur = pob_total
+
+            st.success(f" 👥  **Cerebro Demográfico Enlazado:** {pob_total:,.0f} habitantes detectados (🏙️ Urb: {pob_urb:,.0f} | 🏡 Rur: {pob_rur:,.0f}) — (Motor Híbrido).")
             origen_demo = True
         else:
-            pob_total = 0.0
+            pob_total, pob_urb, pob_rur = 0.0, 0.0, 0.0
             st.error(f" ❌  El territorio '{lugar_puro}' no pudo ser procesado demográficamente.")
             origen_demo = False
 
@@ -491,6 +536,39 @@ if gdf_zona is not None and not gdf_zona.empty:
         lugar_puro = str(lugar_original).split(" - (")[0].strip()
         df_hidro = extraer_datos_matriz_sql(nombre_tabla_hidro, lugar_puro, nivel=escala, es_llave=False)
 
+    # 3. 💉 CIRUGÍA 2: Rescate por Código Único de Cuenca (ej. 2317-03-01-04 o 2702) o Nombre ASCII sin '- NSS'
+    if df_hidro.empty:
+        try:
+            import re, unicodedata
+            import pandas as pd
+            from sqlalchemy import text
+            from modules.db_manager import get_engine
+            
+            def _norm_h(t):
+                s = unicodedata.normalize('NFKD', str(t)).encode('ascii', 'ignore').decode('utf-8').upper()
+                return re.sub(r'[^A-Z0-9]', '', s)
+
+            with get_engine().connect() as conn:
+                df_h_all = pd.read_sql(text(f"SELECT * FROM {nombre_tabla_hidro}"), conn)
+            
+            if not df_h_all.empty and 'Territorio' in df_h_all.columns:
+                # A. Buscar por código IDEAM al final entre paréntesis: ej. (2317-03-01-04) o (2702)
+                m_cod = re.search(r'\(([\d\-]+)\)\s*$', str(lugar_original).strip())
+                if m_cod:
+                    cod_id = m_cod.group(1).strip()
+                    df_hidro = df_h_all[df_h_all['Territorio'].astype(str).str.contains(rf"\({re.escape(cod_id)}\)", case=False, na=False, regex=True)]
+                
+                # B. Si no hay código o no cruzó, buscar por nombre limpio ignorando '- NSS', puntos y tildes
+                if df_hidro.empty:
+                    nom_busq = _norm_h(re.split(r'\s*-\s*\([\d\-]+\)', str(lugar_original))[0].replace("- NSS -", "").replace("- NSS", ""))
+                    if nom_busq:
+                        serie_limpia = df_h_all['Territorio'].astype(str).apply(
+                            lambda x: _norm_h(re.split(r'\s*-\s*\([\d\-]+\)', str(x))[0].replace("- NSS -", "").replace("- NSS", ""))
+                        )
+                        df_hidro = df_h_all[serie_limpia == nom_busq]
+        except Exception:
+            pass
+
     if not df_hidro.empty:
         row_h = df_hidro.iloc[0]
         area_km2 = float(row_h.get('Area_km2', 100.0))
@@ -501,7 +579,7 @@ if gdf_zona is not None and not gdf_zona.empty:
         recarga_base_mm = float(row_h.get('Recarga_mm', 350.0))
         altitud_m = float(row_h.get('Altitud_m', 1500.0))
         q_medio_real = caudal_base_m3s
-        q_min_real = float(row_h.get('Caudal_Minimo_m3s', caudal_base_m3s * 0.2)) 
+        q_min_real = float(row_h.get('Caudal_Min_m3s', row_h.get('Caudal_Minimo_m3s', caudal_base_m3s * 0.2)) or (caudal_base_m3s * 0.2))
         
         st.success(f" 💧  **Cerebro Hidrológico Enlazado:** Área {area_cuenca_km2:,.1f} km², Caudal Medio {caudal_base_m3s:,.2f} m³/s.")
         origen_hidro = True
@@ -713,19 +791,18 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
         if gdf_zona is not None and not gdf_zona.empty:
             gdf_zona_limpio = gdf_zona.dropna(subset=['geometry']).copy()
             if not gdf_zona_limpio.empty:
-                # 🛡️ FIX CRS: Si la geometría viene sin CRS (naive), le asignamos EPSG:4326 antes de pasarla a Folium
                 if gdf_zona_limpio.crs is None:
                     gdf_zona_limpio.set_crs(epsg=4326, inplace=True)
                 elif str(gdf_zona_limpio.crs).upper() != "EPSG:4326":
                     gdf_zona_limpio = gdf_zona_limpio.to_crs(epsg=4326)
-                    
+
                 # Convertir posibles columnas Timestamp en gdf_zona_limpio
                 for col in gdf_zona_limpio.select_dtypes(include=['datetime64', 'datetimetz']).columns:
                     gdf_zona_limpio[col] = gdf_zona_limpio[col].astype(str)
-                    
+
                 folium.GeoJson(
-                    gdf_zona_limpio, 
-                    name=f"Límite {nombre_seleccion}", 
+                    gdf_zona_limpio,
+                    name=f"Límite {nombre_zona}",
                     style_function=lambda x: {'fillColor': 'none', 'color': '#1E88E5', 'weight': 3}
                 ).add_to(m)
 

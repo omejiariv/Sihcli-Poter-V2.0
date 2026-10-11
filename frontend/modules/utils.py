@@ -238,22 +238,68 @@ def extraer_datos_matriz_sql(nombre_tabla, territorio_busqueda, nivel="", es_lla
         return pd.DataFrame()
 
 def proyectar_modelo_sql(f, anio_obj):
-    def limpiar_num(val):
-        if pd.isna(val): return 0.0
-        if isinstance(val, (int, float)): return float(val)
-        s = str(val).strip().replace(',', '')
-        if s.count('.') > 1: s = s.rsplit('.', 1)[0].replace('.', '') + '.' + s.rsplit('.', 1)[1]
-        try: return float(s)
-        except: return 0.0
+    import pandas as pd
+    import numpy as np
 
-    x_norm = anio_obj - limpiar_num(f.get('Año_Base', 2018))
-    mod = str(f.get('Modelo_Recomendado', 'Logístico'))
+    def limpiar_num(val):
+        if val is None or pd.isna(val) or val == "" or str(val).strip().lower() in ['none', 'nan', 'null']:
+            return 0.0
+        if isinstance(val, (int, float, np.number)):
+            return float(val)
+        s = str(val).strip().replace(',', '')
+        if s.count('.') > 1:
+            partes = s.rsplit('.', 1)
+            s = partes[0].replace('.', '') + '.' + partes[1]
+        try:
+            return float(s)
+        except Exception:
+            return 0.0
+
+    anio_base = limpiar_num(f.get('Año_Base', 1985))
+    if anio_base <= 0:
+        anio_base = 1985.0
+    x_norm = float(anio_obj) - anio_base
+
+    col_pob = next((c for c in f.keys() if str(c).lower() in ['pob_base', 'poblacion_base']), None)
+    pob_base = limpiar_num(f.get(col_pob, 0.0)) if col_pob else 0.0
+
+    mod = str(f.get('Modelo_Recomendado', 'Polinomial_3')).lower().strip()
+    resultado = 0.0
+
     try:
-        if 'Logistico' in mod or 'Logístico' in mod: return limpiar_num(f.get('Log_K',0)) / (1 + limpiar_num(f.get('Log_a',0)) * np.exp(-limpiar_num(f.get('Log_r',0)) * x_norm))
-        elif 'Exponencial' in mod: return limpiar_num(f.get('Exp_a',0)) * np.exp(limpiar_num(f.get('Exp_b',0)) * x_norm)
-        elif 'Lineal' in mod: return limpiar_num(f.get('Lin_m',0)) * x_norm + limpiar_num(f.get('Lin_b',0))
-        else: return limpiar_num(f.get('Poly_A',0))*(x_norm**3) + limpiar_num(f.get('Poly_B',0))*(x_norm**2) + limpiar_num(f.get('Poly_C',0))*x_norm + limpiar_num(f.get('Poly_D',0))
-    except: return 0.0
+        if 'logist' in mod or 'logíst' in mod:
+            k = limpiar_num(f.get('Log_K', 0.0))
+            a = limpiar_num(f.get('Log_a', 0.0))
+            r = limpiar_num(f.get('Log_r', 0.0))
+            if k > 0:
+                resultado = k / (1.0 + a * np.exp(-r * x_norm))
+        elif 'exp' in mod:
+            ea = limpiar_num(f.get('Exp_a', 0.0))
+            eb = limpiar_num(f.get('Exp_b', 0.0))
+            if ea > 0:
+                resultado = ea * np.exp(eb * x_norm)
+        elif 'lin' in mod:
+            resultado = limpiar_num(f.get('Lin_m', 0.0)) * x_norm + limpiar_num(f.get('Lin_b', 0.0))
+        else:
+            # Polinomial grado 3 (Estándar por defecto de la Matriz Maestra)
+            resultado = (
+                limpiar_num(f.get('Poly_A', 0.0)) * (x_norm ** 3) +
+                limpiar_num(f.get('Poly_B', 0.0)) * (x_norm ** 2) +
+                limpiar_num(f.get('Poly_C', 0.0)) * x_norm +
+                limpiar_num(f.get('Poly_D', 0.0))
+            )
+
+        # Fallback seguro solo si el polinomio da negativo o explota (>25x la base)
+        if resultado <= 0 or (pob_base > 0 and resultado > pob_base * 25.0):
+            k = limpiar_num(f.get('Log_K', 0.0))
+            if k > 0:
+                resultado = k / (1.0 + limpiar_num(f.get('Log_a', 0.0)) * np.exp(-limpiar_num(f.get('Log_r', 0.0)) * x_norm))
+            else:
+                resultado = pob_base
+
+        return max(0.0, float(resultado))
+    except Exception:
+        return max(0.0, float(pob_base))
 
 # ==============================================================================
 # 🧠 CEREBRO CENTRAL: MEMORIA Y GEOPROCESOS

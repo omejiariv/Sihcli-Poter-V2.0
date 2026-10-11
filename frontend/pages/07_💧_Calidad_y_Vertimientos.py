@@ -359,57 +359,8 @@ def consultar_matriz_sql_calidad(tabla, territorio, nivel, col_nivel="Nivel"):
         return pd.DataFrame()
 
 def proyectar_modelo_calidad(f, anio_obj):
-    import pandas as pd
-    import numpy as np
-    
-    def extraer_num(columna):
-        val = f.get(columna, 0.0)
-        if pd.isna(val) or val == "" or val == "None" or val is None: return 0.0
-        try: return float(val)
-        except: return 0.0
-
-    try:
-        anio_base = extraer_num('Año_Base')
-        if anio_base == 0: anio_base = 2018
-        x_norm = int(anio_obj) - int(anio_base)
-        
-        mod = str(f.get('Modelo_Recomendado', 'Logistico')).lower().strip()
-        if mod in ['nan', 'none', 'null', '']: mod = 'logistico'
-            
-        col_pob = next((c for c in f.keys() if 'Pob_Base' in str(c) or 'Poblacion_Base' in str(c)), None)
-        pob_base = extraer_num(col_pob) if col_pob else 0.0
-
-        resultado = pob_base # Valor por defecto seguro
-
-        # Bloque de ejecución matemática
-        if 'logist' in mod or 'logíst' in mod: 
-            k = extraer_num('Log_K')
-            if k > 0: resultado = k / (1 + extraer_num('Log_a') * np.exp(-extraer_num('Log_r') * x_norm))
-        elif 'exp' in mod: 
-            a = extraer_num('Exp_a')
-            if a > 0: resultado = a * np.exp(extraer_num('Exp_b') * x_norm)
-        elif 'lin' in mod: 
-            resultado = extraer_num('Lin_m') * x_norm + extraer_num('Lin_b')
-        elif 'poli' in mod or 'poly' in mod: 
-            resultado = extraer_num('Poly_A')*(x_norm**3) + extraer_num('Poly_B')*(x_norm**2) + extraer_num('Poly_C')*x_norm + extraer_num('Poly_D')
-
-        # 🛡️ ESCUDO ANTI-COLAPSO: Si la matemática dio negativo o se desbordó mal, forzamos el modelo Logístico (Plan B)
-        if resultado <= 0 or resultado > (pob_base * 5):
-            k = extraer_num('Log_K')
-            if k > 0: 
-                resultado = k / (1 + extraer_num('Log_a') * np.exp(-extraer_num('Log_r') * x_norm))
-            else:
-                resultado = pob_base
-
-        return max(pob_base, resultado) # Nunca devolveremos menos que la población original
-            
-    except Exception as e: 
-        import streamlit as st
-        st.error(f"Error Matemático: {e}")
-        return pob_base if 'pob_base' in locals() else 0.0
-            
-    except Exception as e: 
-        return 0.0
+    from modules.utils import proyectar_modelo_sql
+    return proyectar_modelo_sql(f, anio_obj)
 
 # --- 2. CONEXIÓN AL MOTOR HUMANO ---
 df_demo = consultar_matriz_sql_calidad("matriz_maestra_demografica", nombre_seleccion, nivel_demo, "Nivel")
@@ -422,24 +373,37 @@ if not df_demo.empty:
     f_u = df_demo[df_demo['Area'].astype(str).str.lower().str.contains('urb|cab')]
     f_r = df_demo[df_demo['Area'].astype(str).str.lower().str.contains('rur|resto')]
     
+    es_escala_cuenca = str(nivel_demo).upper().strip() in ["CUENCA", "NSS1", "NSS2", "NSS3", "SZH", "ZH", "AH"]
+
     if not f_t.empty: 
         pob_total = max(0.0, proyectar_modelo_calidad(f_t.iloc[0], anio_analisis))
-        if pob_total == 0.0: pob_total = max(0.0, f_t.iloc[0].get('Poblacion_Base', 0.0))
+        if pob_total == 0.0:
+            pob_total = max(0.0, float(f_t.iloc[0].get('Pob_Base', f_t.iloc[0].get('Poblacion_Base', 0.0)) or 0.0))
         
     if not f_u.empty:
         pob_urb_base = max(0.0, proyectar_modelo_calidad(f_u.iloc[0], anio_analisis))
-        if pob_urb_base == 0.0: pob_urb_base = max(0.0, f_u.iloc[0].get('Poblacion_Base', 0.0))
+        if pob_urb_base == 0.0:
+            pob_urb_base = max(0.0, float(f_u.iloc[0].get('Pob_Base', f_u.iloc[0].get('Poblacion_Base', 0.0)) or 0.0))
     else:
-        pob_urb_base = pob_total * 0.85
+        # En cuencas sin fila urbana se asume 0% urbana; en otras escalas 85% por defecto
+        pob_urb_base = 0.0 if es_escala_cuenca else (pob_total * 0.85)
         
     if not f_r.empty:
         pob_rur_base = max(0.0, proyectar_modelo_calidad(f_r.iloc[0], anio_analisis))
-        if pob_rur_base == 0.0: pob_rur_base = max(0.0, f_r.iloc[0].get('Poblacion_Base', 0.0))
+        if pob_rur_base == 0.0:
+            pob_rur_base = max(0.0, float(f_r.iloc[0].get('Pob_Base', f_r.iloc[0].get('Poblacion_Base', 0.0)) or 0.0))
     else:
-        pob_rur_base = pob_total * 0.15
+        # En cuencas sin fila rural se asume 100% rural; en otras escalas 15% por defecto
+        pob_rur_base = pob_total if es_escala_cuenca else (pob_total * 0.15)
 
     origen_dato = f"Matriz SQL Exacta ({nivel_demo})"
-    if pob_total == 0: pob_total = pob_urb_base + pob_rur_base
+    if pob_total == 0:
+        pob_total = pob_urb_base + pob_rur_base
+    elif (pob_urb_base + pob_rur_base) > 0:
+        # Reconciliación proporcional exacta para que Urb + Rur sume siempre igual a pob_total
+        factor_ajuste = pob_total / (pob_urb_base + pob_rur_base)
+        pob_urb_base *= factor_ajuste
+        pob_rur_base *= factor_ajuste
 else:
     origen_dato = "Error SQL (Sin Datos)"
 
