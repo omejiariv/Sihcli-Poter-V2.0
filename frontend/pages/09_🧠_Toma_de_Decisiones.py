@@ -709,18 +709,44 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
         m = folium.Map(location=[centro_y, centro_x], zoom_start=11, tiles="CartoDB positron")
         folium.TileLayer(tiles='https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', attr='Google', name='Google Satellite', overlay=False, control=True).add_to(m)
         
-        # 🚀 FIX: Prevenir caída de Folium validando que gdf_zona exista y tenga datos
+        # 🚀 FIX: Prevenir caída de Folium validando que gdf_zona exista, tenga datos y CRS válido
         if gdf_zona is not None and not gdf_zona.empty:
-            gdf_zona_limpio = gdf_zona.dropna(subset=['geometry'])
+            gdf_zona_limpio = gdf_zona.dropna(subset=['geometry']).copy()
             if not gdf_zona_limpio.empty:
-                folium.GeoJson(gdf_zona_limpio, name=f"Límite {nombre_zona}", style_function=lambda x: {'color': 'blue', 'weight': 3, 'fillOpacity': 0.1}).add_to(m)
+                # 🛡️ FIX CRS: Si la geometría viene sin CRS (naive), le asignamos EPSG:4326 antes de pasarla a Folium
+                if gdf_zona_limpio.crs is None:
+                    gdf_zona_limpio.set_crs(epsg=4326, inplace=True)
+                elif str(gdf_zona_limpio.crs).upper() != "EPSG:4326":
+                    gdf_zona_limpio = gdf_zona_limpio.to_crs(epsg=4326)
+                    
+                # Convertir posibles columnas Timestamp en gdf_zona_limpio
+                for col in gdf_zona_limpio.select_dtypes(include=['datetime64', 'datetimetz']).columns:
+                    gdf_zona_limpio[col] = gdf_zona_limpio[col].astype(str)
+                    
+                folium.GeoJson(
+                    gdf_zona_limpio, 
+                    name=f"Límite {nombre_seleccion}", 
+                    style_function=lambda x: {'fillColor': 'none', 'color': '#1E88E5', 'weight': 3}
+                ).add_to(m)
 
         if gdf_predios_mapa is not None and not gdf_predios_mapa.empty:
-            # 🚀 FIX: Convertir columnas de Fecha (Timestamp) a texto para que el mapa no colapse
-            for col in gdf_predios_mapa.select_dtypes(include=['datetime64', 'datetimetz']).columns:
-                gdf_predios_mapa[col] = gdf_predios_mapa[col].astype(str)
-                
-            folium.GeoJson(gdf_predios_mapa, name="🟢 Áreas Restauradas (CV)", style_function=lambda x: {'fillColor': '#00ff00', 'color': '#003300', 'weight': 1, 'fillOpacity': 0.7}).add_to(m)
+            gdf_predios_limpio = gdf_predios_mapa.dropna(subset=['geometry']).copy()
+            if not gdf_predios_limpio.empty:
+                # 🛡️ FIX CRS: Blindaje idéntico para la capa de predios restaurados
+                if gdf_predios_limpio.crs is None:
+                    gdf_predios_limpio.set_crs(epsg=4326, inplace=True)
+                elif str(gdf_predios_limpio.crs).upper() != "EPSG:4326":
+                    gdf_predios_limpio = gdf_predios_limpio.to_crs(epsg=4326)
+                    
+                # 🚀 FIX: Convertir columnas de Fecha (Timestamp) a texto para que el mapa no colapse
+                for col in gdf_predios_limpio.select_dtypes(include=['datetime64', 'datetimetz']).columns:
+                    gdf_predios_limpio[col] = gdf_predios_limpio[col].astype(str)
+                    
+                folium.GeoJson(
+                    gdf_predios_limpio, 
+                    name="🟢 Áreas Restauradas (CV)", 
+                    style_function=lambda x: {'fillColor': '#00ff00', 'color': '#003300', 'weight': 1, 'fillOpacity': 0.7}
+                ).add_to(m)
 
         areas_data = [] 
         try:

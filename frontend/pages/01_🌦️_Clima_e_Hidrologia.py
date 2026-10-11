@@ -1489,17 +1489,66 @@ def main():
                             k5.metric("Recarga Real", f"{v_rec_real:.0f} mm", "Acuífero")
                             k5.metric("Volumen Recarga", f"{(v_rec_real * area_km2 * 1000):.2e} m³", "Anual")
                             
-                            # 🌐 INYECCIÓN AL ALEPH (Memoria Global para todo el Gemelo Digital)
+                            # 🌐 INYECCIÓN COMPLETA AL ALEPH (Memoria Global para todo el Gemelo Digital)
+                            st.session_state['aleph_ppt_anual'] = float(v_ppt)
+                            st.session_state['aleph_etr_anual'] = float(v_etr)
+                            st.session_state['aleph_esc_anual'] = float(v_esc)
+                            st.session_state['aleph_inf_anual'] = float(v_inf)
+                            st.session_state['aleph_rec_pot_mm'] = float(v_rec_pot)
                             st.session_state['aleph_recarga_mm'] = float(v_rec_real)
                             st.session_state['aleph_area_km2'] = float(area_km2)
+                            st.session_state['recarga_total_m3'] = float(v_rec_real * area_km2 * 1000.0)
                             
-                            # 🚀 LAS NUEVAS CONEXIONES HIDROLÓGICAS
-                            st.session_state['aleph_q_rio_m3s'] = float(Q_medio)  # Caudal Medio Oferta
-                            st.session_state['aleph_q_min_m3s'] = float(Q_base)   # Caudal Mínimo (Estiaje / Q95)
-                            st.session_state['aleph_q_max_m3s'] = float(Q_maximo) # Caudal Máximo Pico
+                            # 🚀 LAS NUEVAS CONEXIONES HIDROLÓGICAS UNIFICADAS
+                            st.session_state['aleph_q_rio_m3s'] = float(Q_medio)      # Caudal Medio Oferta Total
+                            st.session_state['aleph_q_min_m3s'] = float(Q_base)       # Caudal Mínimo (Estiaje / Base)
+                            st.session_state['aleph_q_max_m3s'] = float(Q_maximo)     # Caudal Máximo Pico
+                            st.session_state['aleph_q_eco_m3s'] = float(Q_ecologico)  # Caudal Ecológico (25% Qm)
                             
-                            st.success("🧠 **¡Conexión Exitosa!** Caudales y recarga inyectados en vivo al Gemelo Digital. Las páginas de 'Toma de Decisiones' y 'Sistemas Hídricos' ahora usarán la física de esta cuenca.")
+                            st.success("🧠 **¡Conexión Exitosa!** Balance completo, caudales y recarga inyectados en vivo al Gemelo Digital (`Aguas Subterráneas`, `Calidad`, `Toma de Decisiones` y `Simulador Integral`).")
                             
+                            # 💾 BOTÓN PARA SELLAR ESTE CÁLCULO EN LA MATRIZ HIDROLÓGICA MAESTRA DE SUPABASE
+                            if st.button(f"💾 Sellar Física de '{nombre_zona}' en Matriz Hidrológica Maestra (Supabase)", type="primary"):
+                                try:
+                                    from sqlalchemy import text
+                                    from modules.db_manager import get_engine
+                                    import unicodedata, re
+                                    
+                                    eng_h = get_engine()
+                                    with eng_h.connect() as conn:
+                                        df_hm = pd.read_sql(text("SELECT * FROM matriz_hidrologica_maestra LIMIT 1"), conn)
+                                    cols_hm = df_hm.columns.tolist()
+                                    
+                                    # Actualizamos dinámicamente las columnas que existan en matriz_hidrologica_maestra
+                                    mapeo_posible = {
+                                        'area_km2': float(area_km2), 'Area_km2': float(area_km2),
+                                        'precipitacion_mm': float(v_ppt), 'Precipitacion_mm': float(v_ppt), 'ppt_mm': float(v_ppt),
+                                        'etr_mm': float(v_etr), 'ETR_mm': float(v_etr),
+                                        'escorrentia_mm': float(v_esc), 'Escorrentia_mm': float(v_esc),
+                                        'infiltracion_mm': float(v_inf), 'Infiltracion_mm': float(v_inf),
+                                        'recarga_mm': float(v_rec_real), 'Recarga_mm': float(v_rec_real), 'recarga_real_mm': float(v_rec_real),
+                                        'caudal_medio_m3s': float(Q_medio), 'Q_Medio_m3s': float(Q_medio), 'q_medio_m3s': float(Q_medio), 'Caudal_Medio': float(Q_medio),
+                                        'caudal_min_m3s': float(Q_base), 'Q_Min_m3s': float(Q_base), 'q_min_m3s': float(Q_base), 'Caudal_Minimo': float(Q_base),
+                                        'caudal_max_m3s': float(Q_maximo), 'Q_Max_m3s': float(Q_maximo), 'q_max_m3s': float(Q_maximo),
+                                        'caudal_eco_m3s': float(Q_ecologico), 'Q_Eco_m3s': float(Q_ecologico), 'q_eco_m3s': float(Q_ecologico)
+                                    }
+                                    sets_sql = []
+                                    params_sql = {'terr': str(nombre_zona).strip()}
+                                    for c_bd in cols_hm:
+                                        if c_bd in mapeo_posible:
+                                            sets_sql.append(f'"{c_bd}" = :{c_bd}')
+                                            params_sql[c_bd] = mapeo_posible[c_bd]
+                                    
+                                    col_terr_h = next((c for c in cols_hm if c.lower() in ['territorio', 'nombre', 'unidad', 'cuenca', 'municipio']), 'Territorio')
+                                    if sets_sql:
+                                        q_up = text(f'UPDATE matriz_hidrologica_maestra SET {", ".join(sets_sql)} WHERE UPPER(TRIM("{col_terr_h}")) = UPPER(TRIM(:terr))')
+                                        with eng_h.begin() as conn:
+                                            conn.execute(q_up, params_sql)
+                                        st.cache_data.clear()
+                                        st.success(f"✅ ¡Matriz Hidrológica Maestra actualizada en Supabase para **{nombre_zona}** con Caudal Medio = {Q_medio:,.2f} m³/s!")
+                                except Exception as ex_h:
+                                    st.error(f"Error actualizando matriz hidrológica: {ex_h}")
+
                             # 🧹 GARBAGE COLLECTION: Liberamos la memoria RAM de los pesados arrays raster
                             del matrices_finales
                             if 'dem_array' in locals(): del dem_array

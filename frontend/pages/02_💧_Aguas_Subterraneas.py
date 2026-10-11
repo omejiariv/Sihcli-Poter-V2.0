@@ -323,7 +323,7 @@ URL_RASTER_SUPABASE = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/objec
 
 modo_params = st.sidebar.radio(
     "Fuente de Coberturas:", 
-    ["Automático (Satélite)", "Manual (Simulación)"],
+    ["Manual (Simulación)", "Automático (Satélite)"],
     horizontal=True
 )
 
@@ -491,7 +491,7 @@ if gdf_zona is not None:
 
     st.markdown(f"### Análisis: {nombre_zona}")
 
-    # ==============================================================================
+# ==============================================================================
     # 1. PANEL SUPERIOR DE INDICADORES
     # ==============================================================================
     if not df_res.empty:
@@ -508,11 +508,61 @@ if gdf_zona is not None:
             else:
                 area_km2 = 10.0
 
-            # --- 🌍 B. NEXO CLIMÁTICO Y SINCRONIZACIÓN ALEPH ---
-            # Recuperamos la física calculada en la Página 01
-            lluvia_aleph = st.session_state.get('aleph_ppt_anual', 0.0)
-            etr_aleph = st.session_state.get('aleph_etr_anual', 0.0)
-            
+            # --- 🌍 B. NEXO CLIMÁTICO Y SINCRONIZACIÓN CON MATRIZ HIDROLÓGICA MAESTRA ---
+            # 1. Intentamos recuperar primero desde la memoria viva (si se acaba de ejecutar la Pág 01 para el mismo territorio)
+            lluvia_aleph = float(st.session_state.get('aleph_ppt_anual', 0.0) or 0.0)
+            etr_aleph = float(st.session_state.get('aleph_etr_anual', 0.0) or 0.0)
+            esc_aleph = float(st.session_state.get('aleph_esc_anual', 0.0) or 0.0)
+            inf_aleph = float(st.session_state.get('aleph_inf_anual', 0.0) or 0.0)
+            rec_aleph = float(st.session_state.get('aleph_recarga_mm', 0.0) or 0.0)
+            q_med_aleph = float(st.session_state.get('aleph_q_rio_m3s', 0.0) or 0.0)
+            q_min_aleph = float(st.session_state.get('aleph_q_min_m3s', 0.0) or 0.0)
+            q_eco_aleph = float(st.session_state.get('aleph_q_eco_m3s', 0.0) or 0.0)
+
+            # 2. Si no está en sesión viva, consultamos la Matriz Hidrológica Maestra en Supabase (Búsqueda infalible)
+            if lluvia_aleph <= 0 and q_med_aleph <= 0:
+                try:
+                    import unicodedata, re
+                    def _limpiar_ascii(txt):
+                        t = unicodedata.normalize('NFKD', str(txt)).encode('ascii', 'ignore').decode('utf-8').upper()
+                        return re.sub(r'[^A-Z0-9]', '', t)
+
+                    df_hm = st.session_state.get('df_matriz_hidrologica', pd.DataFrame())
+                    if df_hm.empty:
+                        with engine.connect() as conn:
+                            df_hm = pd.read_sql(text("SELECT * FROM matriz_hidrologica_maestra"), conn)
+                            st.session_state['df_matriz_hidrologica'] = df_hm
+
+                    if not df_hm.empty:
+                        m_cod = re.search(r'\(([\d\-]+)\)', str(nombre_zona))
+                        cod_cuenca = m_cod.group(1).strip() if m_cod else ""
+                        nom_limpio = _limpiar_ascii(str(nombre_zona).split("(")[0].replace("- NSS -", "").replace("- NSS", ""))
+
+                        col_th = next((c for c in df_hm.columns if c.lower() in ['territorio', 'nombre', 'unidad', 'municipio', 'cuenca']), None)
+                        col_kh = next((c for c in df_hm.columns if 'llave' in c.lower()), None)
+
+                        match_h = pd.DataFrame()
+                        if cod_cuenca and col_th:
+                            match_h = df_hm[df_hm[col_th].astype(str).str.contains(re.escape(cod_cuenca), case=False, na=False)]
+                        if match_h.empty and col_th and nom_limpio:
+                            serie_t = df_hm[col_th].astype(str).apply(lambda x: _limpiar_ascii(x.split("(")[0].replace("- NSS -", "").replace("- NSS", "")))
+                            match_h = df_hm[serie_t == nom_limpio]
+                        if match_h.empty and col_kh and nom_limpio:
+                            match_h = df_hm[df_hm[col_kh].astype(str).apply(_limpiar_ascii).str.contains(nom_limpio, na=False)]
+
+                        if not match_h.empty:
+                            r_h = match_h.iloc[0]
+                            lluvia_aleph = float(r_h.get('Precipitacion_mm', r_h.get('precipitacion_mm', r_h.get('ppt_mm', 0.0))) or 0.0)
+                            etr_aleph = float(r_h.get('ETR_mm', r_h.get('etr_mm', 0.0)) or 0.0)
+                            esc_aleph = float(r_h.get('Escorrentia_mm', r_h.get('escorrentia_mm', 0.0)) or 0.0)
+                            inf_aleph = float(r_h.get('Infiltracion_mm', r_h.get('infiltracion_mm', 0.0)) or 0.0)
+                            rec_aleph = float(r_h.get('Recarga_mm', r_h.get('recarga_mm', r_h.get('recarga_real_mm', 0.0))) or 0.0)
+                            q_med_aleph = float(r_h.get('Q_Medio_m3s', r_h.get('caudal_medio_m3s', r_h.get('q_medio_m3s', r_h.get('Caudal_Medio', 0.0)))) or 0.0)
+                            q_min_aleph = float(r_h.get('Q_Min_m3s', r_h.get('caudal_min_m3s', r_h.get('q_min_m3s', r_h.get('Caudal_Minimo', 0.0)))) or 0.0)
+                            q_eco_aleph = float(r_h.get('Q_Eco_m3s', r_h.get('caudal_eco_m3s', r_h.get('q_eco_m3s', 0.0))) or 0.0)
+                except Exception:
+                    pass
+
             delta_ppt_sim = st.session_state.get('sim_delta_ppt', 0.0) 
             delta_temp_sim = st.session_state.get('sim_delta_temp', 0.0)
             enso_estado = st.session_state.get('enso_fase', 'Neutro ⚖️')
@@ -520,41 +570,51 @@ if gdf_zona is not None:
             if delta_ppt_sim != 0.0 or delta_temp_sim != 0.0 or "Niño" in enso_estado or "Niña" in enso_estado:
                 st.success(f"🧠 **Nexo Atmosférico Activo:** El acuífero reacciona al clima global. (ENSO: {enso_estado} | CMIP6 Lluvia: {delta_ppt_sim}% | Temp: +{delta_temp_sim}°C)")
             
-            if lluvia_aleph > 0:
-                st.caption("🌐 **Gemelo Digital:** Lluvia y ETR heredados con precisión espacial desde el modelo distribuido (Pág 01).")
-
             factor_lluvia = 1 + (delta_ppt_sim / 100.0)
             if "Niño Severo" in enso_estado: factor_lluvia *= 0.6
             elif "Niño Moderado" in enso_estado: factor_lluvia *= 0.8
             elif "Niña" in enso_estado: factor_lluvia *= 1.2
             
-            # 🧠 Lógica Maestra: Si la Pág 01 tiene datos, los usamos. Si no, promediamos estaciones locales.
+            # 🧠 Lógica Maestra Unificada: Si la Pág 01 o la Matriz Hidrológica Maestra tienen datos, garantizamos simetría 1:1
             if lluvia_aleph > 0:
+                st.caption("🌐 **Gemelo Digital Sincronizado:** Lluvia, ETR, Recarga y Caudales heredados con precisión espacial desde el Modelo Distribuido / Matriz Maestra.")
                 p_med = lluvia_aleph * factor_lluvia
                 etr_med = etr_aleph * (1 + (delta_temp_sim * 0.03))
+                rec_med = rec_aleph * factor_lluvia if rec_aleph > 0 else max(0.0, (p_med - etr_med) * (ki_final * kg_factor))
+                inf_med = inf_aleph * factor_lluvia if inf_aleph > 0 else max(0.0, (p_med - etr_med) * ki_final)
+                esc_med = esc_aleph * factor_lluvia if esc_aleph > 0 else max(0.0, (p_med - etr_med) - rec_med)
             else:
                 p_med = (df_hist['p_final'].mean() * 12) * factor_lluvia
                 etr_med = (df_hist['etr_mm'].mean() * 12) * (1 + (delta_temp_sim * 0.03)) 
+                rec_med = max(0.0, (p_med - etr_med) * (ki_final * kg_factor))
+                inf_med = max(0.0, (p_med - etr_med) * ki_final)
+                esc_med = max(0.0, (p_med - etr_med) - rec_med)
             
-            # Recalculamos la física
-            rec_med = max(0.0, (p_med - etr_med) * (ki_final * kg_factor))
-            inf_med = max(0.0, (p_med - etr_med) * ki_final)
-            esc_med = max(0.0, (p_med - etr_med) - rec_med)
+            # Caudales Extremos y Medios (Fórmula Física Unificada: Oferta Total = Escorrentía Superficial + Recarga Base)
+            segundos_anio = 31536000.0
+            q_base_m3s = (rec_med * area_km2 * 1000.0) / segundos_anio
+            q_medio_m3s = (q_med_aleph * factor_lluvia) if q_med_aleph > 0 else (((esc_med + rec_med) * area_km2 * 1000.0) / segundos_anio)
             
-            # Caudales Extremos y Medios
-            segundos_anio = 31536000
-            q_base_m3s = (rec_med * area_km2 * 1000) / segundos_anio
-            q_medio_m3s = (esc_med * area_km2 * 1000) / segundos_anio
-            
-            q_min_50a, q_eco = 0, 0
-            if analysis:
+            q_min_50a, q_eco = 0.0, 0.0
+            if q_min_aleph > 0:
+                q_min_50a = q_min_aleph * factor_lluvia
+                q_eco = (q_eco_aleph * factor_lluvia) if q_eco_aleph > 0 else (q_medio_m3s * 0.25)
+            elif analysis:
                 try:
                     serie_p = df_hist.set_index('fecha')['p_final'] * factor_lluvia
                     c_dir = (esc_med - rec_med) / p_med if p_med > 0 else 0.3
                     stats = analysis.calculate_hydrological_statistics(serie_p, runoff_coeff=c_dir, area_km2=area_km2, q_base_m3s=q_base_m3s)
-                    q_min_50a = stats.get("Q_Min_50a", 0)
-                    q_eco = stats.get("Q_Ecologico_Q95", 0)
-                except: pass
+                    q_min_50a = stats.get("Q_Min_50a", q_base_m3s)
+                    q_eco = stats.get("Q_Ecologico_Q95", q_medio_m3s * 0.25)
+                except Exception:
+                    q_min_50a = q_base_m3s
+                    q_eco = q_medio_m3s * 0.25
+            else:
+                q_min_50a = q_base_m3s
+                q_eco = q_medio_m3s * 0.25
+
+            # Sincronizamos el volumen de recarga para que la Pestaña 4 (Gobernanza) use exactamente la misma oferta
+            st.session_state['recarga_total_m3'] = float(rec_med * area_km2 * 1000.0)
 
             # --- C. VISUALIZACIÓN DE MÉTRICAS (10 COLUMNAS) ---
             st.markdown("##### 💧 Balance Hídrico y Oferta Subterránea (Simulación Activa)")
@@ -1105,7 +1165,6 @@ if gdf_zona is not None:
             # 3. DESCARGA Y CRUCE INTELIGENTE
             # ---------------------------------------------------------------------
             with st.spinner("📥 Descargando Metabolismo Hídrico y ADN del Territorio desde Supabase..."):
-                st.cache_data.clear()
                 gdf_concesiones = cargar_concesiones_maestras()
                 df_territorio = cargar_territorio_maestro()
                 
