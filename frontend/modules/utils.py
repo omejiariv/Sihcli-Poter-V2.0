@@ -290,12 +290,17 @@ def proyectar_modelo_sql(f, anio_obj):
             )
 
         # Fallback seguro solo si el polinomio da negativo o explota (>25x la base)
-        if resultado <= 0 or (pob_base > 0 and resultado > pob_base * 25.0):
+        # Escudo Demográfico Realista: ningún territorio crece >3.2x entre 1985 y 2060 ni cae a negativo
+        if resultado <= 0 or (pob_base > 0 and (resultado > pob_base * 3.2 or resultado < pob_base * 0.35)):
             k = limpiar_num(f.get('Log_K', 0.0))
-            if k > 0:
-                resultado = k / (1.0 + limpiar_num(f.get('Log_a', 0.0)) * np.exp(-limpiar_num(f.get('Log_r', 0.0)) * x_norm))
-            else:
-                resultado = pob_base
+            a = limpiar_num(f.get('Log_a', 0.0))
+            r = limpiar_num(f.get('Log_r', 0.0))
+            while pob_base > 0 and k > pob_base * 3.2: k /= 10.0
+            while r > 0.10: r /= 10.0
+            if k > 0 and a > 0:
+                resultado = k / (1.0 + a * np.exp(-r * x_norm))
+            if resultado <= 0 or (pob_base > 0 and resultado > pob_base * 3.2):
+                resultado = pob_base * (1.0 + 0.008 * max(0.0, x_norm))
 
         return max(0.0, float(resultado))
     except Exception:
