@@ -565,7 +565,16 @@ st.success(
 
 # --- 🌉 ALIAS DE COMPATIBILIDAD ---
 lugar_sel = nombre_seleccion
-nivel_sel_interno = "Municipal" if "DANE" in origen_dato else "Cuenca Hidrográfica"
+MAPA_ETIQUETAS_NIVEL = {
+    "MUNICIPAL": "Municipal",
+    "DEPARTAMENTAL": "Departamental",
+    "REGIONAL": "Subregión",
+    "CAR": "Autoridad Ambiental (CAR)",
+    "CUENCA": "Cuenca Hidrográfica",
+    "Cuenca": "Cuenca Hidrográfica",
+    "NACIONAL": "Nacional"
+}
+nivel_sel_interno = MAPA_ETIQUETAS_NIVEL.get(str(nivel_demo).strip(), str(nivel_demo))
 nivel_sel_visual = nivel_sel_interno
 
 # ==============================================================================
@@ -627,13 +636,36 @@ with st.spinner(f"Cruzando datos espacialmente con {nombre_seleccion}..."):
             df_out = filtrar_puntos_por_poligono(df_in, poly_prep)
             if not df_out.empty: return df_out
 
-        # PLAN C: Filtro Semántico Exacto (Para Municipios y CARs)
+        # PLAN C: Filtro Semántico Exacto (Para Municipios, CARs y Subregiones)
         lugar_norm = normalizar_texto(str(nombre_zona).replace("CAR: ", ""))
+        lugar_key = re.sub(r'[^a-z0-9]', '', lugar_norm.lower())
+
+        GRUPOS_TERRITORIALES = {
+            "amva": ["medellin", "bello", "itagui", "envigado", "sabaneta", "la estrella", "caldas", "copacabana", "girardota", "barbosa"],
+            "valledeaburra": ["medellin", "bello", "itagui", "envigado", "sabaneta", "la estrella", "caldas", "copacabana", "girardota", "barbosa"],
+            "cornare": ["abejorral", "alejandria", "argelia", "el carmen de viboral", "carmen de viboral", "cocorna", "concepcion", "el penol", "penol", "el retiro", "retiro", "el santuario", "santuario", "granada", "guarne", "guatape", "la ceja", "la union", "marinilla", "narino", "rionegro", "san carlos", "san francisco", "san luis", "san rafael", "san vicente", "san vicente ferrer", "sonson", "san roque", "santo domingo", "puerto nare", "puerto triunfo"],
+            "corpouraba": ["apartado", "arboletes", "carepa", "chigorodo", "murindo", "mutata", "necocli", "san juan de uraba", "san pedro de uraba", "turbo", "vigia del fuerte", "dabeiba", "frontino", "caicedo", "uramita", "peque", "abriaqui", "canasgordas", "giraldo", "urrao"],
+            "corantioquia": ["caceres", "caucasia", "el bagre", "nechi", "taraza", "zaragoza", "caracoli", "maceo", "puerto berrio", "yondo", "amalfi", "anori", "cisneros", "remedios", "segovia", "vegachi", "yali", "yolombo", "angostura", "belmira", "briceno", "campamento", "carolina", "carolina del principe", "donmatias", "entrerrios", "gomez plata", "guadalupe", "ituango", "san andres de cuerquia", "san jose de la montana", "san pedro de los milagros", "santa rosa de osos", "toledo", "valdivia", "yarumal", "anza", "armenia", "buritica", "ebejico", "heliconia", "liborina", "olaya", "sabanalarga", "san jeronimo", "santafe de antioquia", "santa fe de antioquia", "sopetran", "amaga", "andes", "angelopolis", "betania", "betulia", "caramanta", "ciudad bolivar", "bolivar", "concordia", "fredonia", "hispania", "jardin", "jerico", "la pintada", "montebello", "pueblorrico", "pueblo rico", "salgar", "santa barbara", "tamesis", "tarso", "titiribi", "valparaiso", "venecia", "medellin", "bello", "itagui", "envigado", "sabaneta", "la estrella", "caldas", "copacabana", "girardota", "barbosa"],
+            "bajocauca": ["caucasia", "el bagre", "nechi", "taraza", "caceres", "zaragoza"],
+            "magdalenamedio": ["puerto berrio", "puerto nare", "puerto triunfo", "yondo", "caracoli", "maceo"],
+            "nordeste": ["amalfi", "anori", "cisneros", "remedios", "san roque", "santo domingo", "segovia", "vegachi", "yali", "yolombo"],
+            "norte": ["angostura", "belmira", "briceno", "campamento", "carolina", "carolina del principe", "donmatias", "entrerrios", "gomez plata", "guadalupe", "ituango", "san andres de cuerquia", "san jose de la montana", "san pedro de los milagros", "santa rosa de osos", "toledo", "valdivia", "yarumal"],
+            "occidente": ["abriaqui", "anza", "armenia", "buritica", "canasgordas", "dabeiba", "ebejico", "frontino", "giraldo", "heliconia", "liborina", "olaya", "peque", "sabanalarga", "san jeronimo", "santafe de antioquia", "santa fe de antioquia", "sopetran", "uramita"],
+            "oriente": ["abejorral", "alejandria", "argelia", "el carmen de viboral", "carmen de viboral", "cocorna", "concepcion", "el penol", "penol", "el retiro", "retiro", "el santuario", "santuario", "granada", "guarne", "guatape", "la ceja", "la union", "marinilla", "narino", "rionegro", "san carlos", "san francisco", "san luis", "san rafael", "san vicente", "san vicente ferrer", "sonson"],
+            "suroeste": ["amaga", "andes", "angelopolis", "betania", "betulia", "caicedo", "caramanta", "ciudad bolivar", "bolivar", "concordia", "fredonia", "hispania", "jardin", "jerico", "la pintada", "montebello", "pueblorrico", "pueblo rico", "salgar", "santa barbara", "tamesis", "tarso", "titiribi", "urrao", "valparaiso", "venecia"],
+            "uraba": ["apartado", "arboletes", "carepa", "chigorodo", "murindo", "mutata", "necocli", "san juan de uraba", "san pedro de uraba", "turbo", "vigia del fuerte"]
+        }
+
         if 'municipio_norm' in df_in.columns:
-            mask = df_in['municipio_norm'].apply(normalizar_texto) == lugar_norm
-            df_out = df_in[mask].copy()
-            if not df_out.empty: return df_out
-            
+            serie_mpio = df_in['municipio_norm'].apply(normalizar_texto)
+            if lugar_key in GRUPOS_TERRITORIALES:
+                mpios_grupo = {normalizar_texto(m) for m in GRUPOS_TERRITORIALES[lugar_key]}
+                df_out = df_in[serie_mpio.isin(mpios_grupo)].copy()
+                if not df_out.empty: return df_out
+            else:
+                df_out = df_in[serie_mpio == lugar_norm].copy()
+                if not df_out.empty: return df_out
+
         if 'car_norm' in df_in.columns:
             mask = df_in['car_norm'].apply(normalizar_texto) == lugar_norm
             df_out = df_in[mask].copy()
