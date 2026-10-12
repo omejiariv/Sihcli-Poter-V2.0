@@ -53,14 +53,16 @@ def calcular_penman_piedras_blancas(alt, lat, dia, tmax, tmin, rh, viento, rad_s
     
     return evap_total_dia, term_rad, term_aero, vpd_val, rn_val, P_atm
 
-# --- CABEZOTE INSTITUCIONAL DE LOGOS ---
+# --- CABEZOTE INSTITUCIONAL DE LOGOS (Conectado a Supabase Storage) ---
+URL_BASE_LOGOS = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/imagenes"
+
 col_l1, col_l2, col_l3, col_espacio = st.columns([1.2, 1.2, 1.2, 4])
 with col_l1:
-    st.image("CuencaVerdeLogo_V1.JPG", use_container_width=True)
+    st.image(f"{URL_BASE_LOGOS}/CuencaVerdeLogo_V1.JPG", use_container_width=True)
 with col_l2:
-    st.image("logo_epm.png", use_container_width=True)
+    st.image(f"{URL_BASE_LOGOS}/logo_epm.png", use_container_width=True)
 with col_l3:
-    st.image("logo_distritoMedellin.png", use_container_width=True)
+    st.image(f"{URL_BASE_LOGOS}/logo_distritoMedellin.png", use_container_width=True)
 
 # -----------------------------------------
 # Encabezado Ejecutivo
@@ -182,7 +184,7 @@ with tab_piloto:
     
     col_cfg1, col_cfg2, col_cfg3 = st.columns(3)
     with col_cfg1:
-        area_pb_ha = st.slider("🌊 Espejo de Agua Piedras Blancas (ha)", 12.0, 26.0, 20.0, 1.0)
+        area_pb_ha = st.slider("🌊 Espejo de Agua Piedras Blancas (ha)", 5.0, 20.0, 10.0, 1.0)
         pct_cobertura = st.slider("🛡️ Cobertura del Proyecto Piloto (%)", 15, 70, 40, 5)
     with col_cfg2:
         tech_piloto = st.selectbox("🔧 Configuración Tecnológica", [
@@ -197,7 +199,7 @@ with tab_piloto:
             "Condición Histórica Media (Altiplano Santa Elena)"
         ])
     with col_cfg3:
-        consumo_l_hab = st.number_input("🚰 Dotación Neta (L/hab-día)", 100, 250, 150, 10)
+        consumo_l_hab = st.number_input("🚰 Dotación Neta (L/hab-día)", 25, 150, 50, 10)
         dias_crisis = st.slider("📅 Ventana Crítica (Dic 2026 - Mar 2027)", 60, 150, 120, 15)
 
     # Parámetros climáticos base Santa Elena / Piedras Blancas (2,350 msnm)
@@ -238,6 +240,48 @@ with tab_piloto:
     m3.metric("🏊‍♂️ Escala Física", f"{agua_salvada_periodo/2500:.1f} Piscinas", "Olímpicas retenidas")
     m4.metric("👥 Población Protegida", f"{personas_abastecidas:,.0f} Hab", f"Durante {dias_crisis} días")
     m5.metric("💰 CAPEX Neto Est.", f"${capex_estimado:.2f}M USD", f"{mwp_instalados:.1f} MWp Solar" if mwp_instalados > 0 else "100% Barrera Física")
+
+    st.markdown("---")
+    col_g1, col_g2 = st.columns(2)
+    
+    with col_g1:
+        # Gráfico 1: Comparativa de Pérdida vs Agua Salvada en la Ventana Crítica
+        perdida_total_sin = perdida_sin_piloto_m3_dia * dias_crisis
+        perdida_total_con = perdida_con_piloto_m3_dia * dias_crisis
+        pct_embalse_salvado = (agua_salvada_periodo / 500000.0) * 100.0  # Sobre los 0.50 Mm3 (500,000 m3)
+
+        fig_bal = go.Figure(data=[
+            go.Bar(name="Pérdida Evaporativa (m³)", x=["Sin Piloto (Actual)", "Con Piloto Activo"], y=[perdida_total_sin, perdida_total_con], marker_color=["#ef4444", "#f59e0b"], text=[f"{perdida_total_sin:,.0f} m³", f"{perdida_total_con:,.0f} m³"], textposition="auto"),
+            go.Bar(name="Agua Potable Retenida (m³)", x=["Sin Piloto (Actual)", "Con Piloto Activo"], y=[0, agua_salvada_periodo], marker_color="#10b981", text=["0 m³", f"+{agua_salvada_periodo:,.0f} m³ ({pct_embalse_salvado:.1f}% del embalse)"], textposition="auto")
+        ])
+        fig_bal.update_layout(
+            barmode="stack",
+            title=f"Balance Evaporativo Acumulado ({dias_crisis} días) — Protege el {pct_embalse_salvado:.1f}% del Vaso",
+            yaxis_title="Volumen de Agua (m³)",
+            height=360,
+            margin=dict(t=45, b=20, l=20, r=20),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        st.plotly_chart(fig_bal, use_container_width=True)
+
+    with col_g2:
+        # Gráfico 2: Diagnóstico Termodinámico Penman-Monteith (Radiación vs Viento/VPD)
+        fig_pm = go.Figure(data=[
+            go.Pie(
+                labels=[f"Motor Radiativo (Rn = {rn_mj:.1f} MJ/m²·d)", f"Motor Aerodinámico (VPD = {vpd_kpa:.2f} kPa)"],
+                values=[max(0.01, t_rad), max(0.01, t_aero)],
+                hole=0.48,
+                marker_colors=["#f97316", "#0ea5e9"],
+                textinfo="label+percent"
+            )
+        ])
+        fig_pm.update_layout(
+            title=f"Aporte Físico a la Evaporación ({evap_dia_mm:.2f} mm/día a {patm:.1f} kPa)",
+            height=360,
+            margin=dict(t=45, b=20, l=20, r=20),
+            showlegend=False
+        )
+        st.plotly_chart(fig_pm, use_container_width=True)
 
 # -----------------------------------------
 # TAB 4: Hoja de Ruta para Tomadores de Decisiones
