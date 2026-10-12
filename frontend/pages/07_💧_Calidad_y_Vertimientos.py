@@ -418,12 +418,14 @@ if not df_demo.empty:
 else:
     origen_dato = "Error SQL (Sin Datos)"
 
-# --- 3. CONEXIÓN AL MOTOR PECUARIO (Sincronizado con Matrices Maestras) ---
+# --- 3. CONEXIÓN AL MOTOR PECUARIO (Sincronizado 1:1 con Toma de Decisiones y Modelo Pecuario) ---
 import re
 import unicodedata
 
 def norm_alfanumerico(texto):
-    t = str(texto).split(" - (")[0].strip()
+    # Quitamos el código final entre paréntesis y limpiamos el sufijo '- NSS -' o '- NSS'
+    t = re.split(r'\s*-\s*\([\d\-]+\)', str(texto))[0]
+    t = t.replace("- NSS -", "").replace("- NSS", "").strip()
     t = unicodedata.normalize('NFKD', t).encode('ascii', 'ignore').decode('utf-8').upper()
     return re.sub(r'[^A-Z0-9]', '', t)
 
@@ -436,7 +438,8 @@ def generar_llave_maestra(escala, territorio):
     elif "CAR" in e or "AUTORIDAD" in e: e = "CAR"
     elif "CUENCA" in e or "NSS" in e or "SZH" in e or "ZH" in e or "AH" in e: e = "CUENCA"
     
-    t = str(territorio).split(" - (")[0].strip()
+    t = re.split(r'\s*-\s*\([\d\-]+\)', str(territorio))[0]
+    t = t.replace("- NSS -", "").replace("- NSS", "").strip()
     t = unicodedata.normalize('NFKD', t).encode('ascii', 'ignore').decode('utf-8').upper()
     t = re.sub(r'[^A-Z0-9]', '_', t) 
     t = re.sub(r'_+', '_', t).strip('_') 
@@ -445,62 +448,71 @@ def generar_llave_maestra(escala, territorio):
 
 llave_busqueda = generar_llave_maestra(nivel_req, nombre_seleccion)
 terr_limpio = norm_alfanumerico(nombre_seleccion)
-
-try:
-    from sqlalchemy import text
-    from modules.db_manager import get_engine
-    import pandas as pd
-    engine_sql = get_engine()
-    
-    q_pec = text('SELECT * FROM matriz_maestra_pecuaria')
-    with engine_sql.connect() as conn:
-        df_pec_full = pd.read_sql(q_pec, conn)
-    
-    if not df_pec_full.empty and 'LLAVE_UNIVERSAL' in df_pec_full.columns:
-        # 1. Intento exacto por LLAVE_UNIVERSAL
-        df_pec = df_pec_full[df_pec_full['LLAVE_UNIVERSAL'].astype(str).str.upper() == llave_busqueda]
-        
-        # 2. Fallback elástico inmune a guiones bajos y variantes (SUBREGION vs REGIONAL vs SUBREGIONAL)
-        if df_pec.empty:
-            col_terr_p = next((c for c in df_pec_full.columns if c.lower() in ['territorio', 'municipio', 'nombre']), None)
-            if col_terr_p:
-                mask_t = df_pec_full[col_terr_p].apply(norm_alfanumerico) == terr_limpio
-                df_pec = df_pec_full[mask_t]
-            if df_pec.empty:
-                llave_sin_guion = norm_alfanumerico(llave_busqueda.replace("_TOTAL", ""))
-                df_pec = df_pec_full[df_pec_full['LLAVE_UNIVERSAL'].apply(norm_alfanumerico).str.contains(terr_limpio)]
-    else:
-        df_pec = pd.DataFrame()
-except Exception as e:
-    import streamlit as st
-    st.error(f"🚨 Error en BD Pecuaria: {str(e)}")
-    df_pec = pd.DataFrame()
+es_amva_pec = (str(nombre_seleccion).upper().strip() == "AMVA") or ("AMVA" in str(nombre_seleccion).upper() and "CAR" in str(nivel_req).upper())
 
 total_bovinos, total_porcinos, total_aves = 0.0, 0.0, 0.0
 
-if not df_pec.empty:
-    # Si por compatibilidad se inyectaron varios alias de nivel (ej. REGIONAL y SUBREGIONAL), evitamos duplicar sumando una sola vez por especie
-    col_esp_name = next((c for c in df_pec.columns if c.lower() == 'especie'), 'Especie')
-    if col_esp_name in df_pec.columns:
-        df_pec = df_pec.drop_duplicates(subset=[col_esp_name], keep='first')
-
-    for _, f in df_pec.iterrows():
-        col_pob_p = next((c for c in f.index if c.lower() in ['poblacion_base', 'pob_base']), 'Poblacion_Base')
-        val_str = str(f.get(col_pob_p, 0)).replace(',','').strip()
-        val_str = re.sub(r'[^\d.]', '', val_str)
-        def_pob = float(val_str) if val_str else 0.0
-        
-        val_calc = proyectar_modelo_calidad(f, anio_analisis)
-        val_final = max(0.0, val_calc if val_calc > 0 else def_pob)
-
-        especie = str(f.get(col_esp_name, '')).upper().strip()
-        if 'BOVIN' in especie: total_bovinos += val_final
-        elif 'PORCIN' in especie: total_porcinos += val_final
-        elif 'AVE' in especie: total_aves += val_final
-            
-    metodo_animal = f"Matriz SQL Exacta ({llave_busqueda})"
+if es_amva_pec:
+    metodo_animal = "Jurisdicción Urbana AMVA (0 Animales - Centralizados en Corantioquia)"
 else:
-    metodo_animal = f"Error: No hay animales para la llave ({llave_busqueda})"
+    try:
+        from sqlalchemy import text
+        from modules.db_manager import get_engine
+        import pandas as pd
+        engine_sql = get_engine()
+        
+        df_pec_full = st.session_state.get('df_matriz_pecuaria', pd.DataFrame())
+        if df_pec_full.empty:
+            q_pec = text('SELECT * FROM matriz_maestra_pecuaria')
+            with engine_sql.connect() as conn:
+                df_pec_full = pd.read_sql(q_pec, conn)
+                st.session_state['df_matriz_pecuaria'] = df_pec_full
+        
+        if not df_pec_full.empty and 'LLAVE_UNIVERSAL' in df_pec_full.columns:
+            col_terr_p = next((c for c in df_pec_full.columns if c.lower() in ['territorio', 'municipio', 'nombre']), 'Territorio')
+            
+            # 1. Intento exacto por LLAVE_UNIVERSAL
+            df_pec = df_pec_full[df_pec_full['LLAVE_UNIVERSAL'].astype(str).str.upper() == llave_busqueda]
+            
+            # 2. Rescate por código IDEAM de cuenca entre paréntesis: ej. (2701-02)
+            if df_pec.empty and col_terr_p in df_pec_full.columns:
+                m_cod_p = re.search(r'\(([\d\-]+)\)\s*$', str(nombre_seleccion).strip())
+                if m_cod_p:
+                    cod_p = m_cod_p.group(1).strip()
+                    df_pec = df_pec_full[df_pec_full[col_terr_p].astype(str).str.contains(rf"\({re.escape(cod_p)}\)", case=False, na=False, regex=True)]
+
+            # 3. Fallback elástico por nombre alfanumérico limpio (sin '- NSS', tildes ni guiones)
+            if df_pec.empty and col_terr_p in df_pec_full.columns and terr_limpio:
+                mask_t = df_pec_full[col_terr_p].apply(norm_alfanumerico) == terr_limpio
+                df_pec = df_pec_full[mask_t]
+
+            # 4. Último recurso: coincidencia limpia en LLAVE_UNIVERSAL
+            if df_pec.empty and terr_limpio:
+                df_pec = df_pec_full[df_pec_full['LLAVE_UNIVERSAL'].apply(norm_alfanumerico).str.contains(terr_limpio, na=False)]
+        else:
+            df_pec = pd.DataFrame()
+    except Exception as e:
+        import streamlit as st
+        st.error(f"🚨 Error en BD Pecuaria: {str(e)}")
+        df_pec = pd.DataFrame()
+
+    if not df_pec.empty:
+        # Evitamos duplicar sumando una sola vez por especie
+        col_esp_name = next((c for c in df_pec.columns if c.lower() == 'especie'), 'Especie')
+        if col_esp_name in df_pec.columns:
+            df_pec = df_pec.drop_duplicates(subset=[col_esp_name], keep='first')
+
+        for _, f in df_pec.iterrows():
+            val_final = max(0.0, proyectar_modelo_calidad(f, anio_analisis))
+
+            especie = str(f.get(col_esp_name, '')).upper().strip()
+            if 'BOVIN' in especie: total_bovinos += val_final
+            elif 'PORCIN' in especie: total_porcinos += val_final
+            elif 'AVE' in especie: total_aves += val_final
+                
+        metodo_animal = f"Matriz SQL Exacta ({llave_busqueda})"
+    else:
+        metodo_animal = f"Error: No hay animales para la llave ({llave_busqueda})"
 
 # 🧠 Sincronización con la Memoria Global para gráficas y simulación
 st.session_state['ica_bovinos_calc_met'] = total_bovinos

@@ -488,35 +488,75 @@ if gdf_zona is not None and not gdf_zona.empty:
     st.session_state['pob_hum_calc_met'] = pob_total
 
     # ---------------------------------------------------------
-    # 2. CONEXIÓN PECUARIA
+    # 2. CONEXIÓN PECUARIA (Inmune a sufijos '- NSS' y códigos de cuenca)
     # ---------------------------------------------------------
-    llave_pec = generar_llave_universal(escala, lugar_original, "Total")
-    df_pec = extraer_datos_matriz_sql("matriz_maestra_pecuaria", llave_pec, es_llave=True)
+    import re, unicodedata
+    import pandas as pd
+    from sqlalchemy import text
+    from modules.db_manager import get_engine
 
-    # 🛡️ Fallback Semántico Pecuario (Si la llave exacta falla)
-    if df_pec.empty:
-        lugar_puro = str(lugar_original).split(" - (")[0].strip()
-        df_pec = extraer_datos_matriz_sql("matriz_maestra_pecuaria", lugar_puro, nivel=escala, es_llave=False)
+    bovinos, porcinos, aves = 0.0, 0.0, 0.0
+    origen_pecu = False
 
-    if not df_pec.empty:
-        for _, f in df_pec.iterrows():
-            esp = str(f.get('Especie', '')).upper()
-            val_final = max(0.0, proyectar_modelo_sql(f, anio_actual))
-            if 'BOVINO' in esp: bovinos = val_final
-            if 'PORCINO' in esp: porcinos = val_final
-            if 'AVE' in esp: aves = val_final
-            
-        st.success(f" 🐄  **Cerebro Pecuario Enlazado:** {bovinos:,.0f} Bov, {porcinos:,.0f} Por, {aves:,.0f} Aves.")
+    es_amva_pec = (str(lugar_original).upper().strip() == "AMVA") or ("AMVA" in str(lugar_original).upper() and "CAR" in str(escala).upper())
+
+    if es_amva_pec:
+        st.success(" 🐄  **Cerebro Pecuario Enlazado:** 0 Bov, 0 Por, 0 Aves (Jurisdicción Urbana AMVA).")
         origen_pecu = True
     else:
-        # 🔥 FIX NECESARIO: Declarar en 0 para evitar caída del sistema al guardar en session_state
-        bovinos, porcinos, aves = 0, 0, 0 
+        # Limpiamos '- NSS -' y el código entre paréntesis para generar la llave limpia
+        lugar_limpio_pec = re.split(r'\s*-\s*\([\d\-]+\)', str(lugar_original))[0].replace("- NSS -", "").replace("- NSS", "").strip()
+        llave_pec = generar_llave_universal(escala, lugar_limpio_pec, "Total")
         
-        if "VALLE DE ABURRA" in str(lugar_maestro).upper() or "AMVA" in str(lugar_puro).upper():
-            st.success(" 🐄  **Cerebro Pecuario Enlazado:** 0 animales (Ganado rural centralizado en Corantioquia).")
+        df_pec = extraer_datos_matriz_sql("matriz_maestra_pecuaria", llave_pec, es_llave=True)
+
+        # Fallback 1: Búsqueda semántica sin '- NSS'
+        if df_pec.empty:
+            df_pec = extraer_datos_matriz_sql("matriz_maestra_pecuaria", lugar_limpio_pec, nivel=escala, es_llave=False)
+
+        # Fallback 2: Búsqueda directa en memoria/SQL por código IDEAM (ej. 2701-02) o nombre alfanumérico limpio
+        if df_pec.empty:
+            try:
+                def _norm_p(t):
+                    s = unicodedata.normalize('NFKD', str(t)).encode('ascii', 'ignore').decode('utf-8').upper()
+                    return re.sub(r'[^A-Z0-9]', '', s)
+
+                df_p_all = st.session_state.get('df_matriz_pecuaria', pd.DataFrame())
+                if df_p_all.empty:
+                    with get_engine().connect() as conn:
+                        df_p_all = pd.read_sql(text("SELECT * FROM matriz_maestra_pecuaria"), conn)
+                        st.session_state['df_matriz_pecuaria'] = df_p_all
+
+                if not df_p_all.empty:
+                    col_ter_p = next((c for c in df_p_all.columns if c.lower() in ['territorio', 'municipio', 'nombre']), 'Territorio')
+                    # A. Buscar por código entre paréntesis: ej. (2701-02)
+                    m_cod_p = re.search(r'\(([\d\-]+)\)\s*$', str(lugar_original).strip())
+                    if m_cod_p:
+                        cod_p = m_cod_p.group(1).strip()
+                        df_pec = df_p_all[df_p_all[col_ter_p].astype(str).str.contains(rf"\({re.escape(cod_p)}\)", case=False, na=False, regex=True)]
+                    
+                    # B. Buscar ignorando '- NSS', puntos, guiones y tildes
+                    if df_pec.empty:
+                        key_busq_p = _norm_p(lugar_limpio_pec)
+                        if key_busq_p:
+                            serie_p = df_p_all[col_ter_p].astype(str).apply(
+                                lambda x: _norm_p(re.split(r'\s*-\s*\([\d\-]+\)', str(x))[0].replace("- NSS -", "").replace("- NSS", ""))
+                            )
+                            df_pec = df_p_all[serie_p == key_busq_p]
+            except Exception:
+                pass
+
+        if not df_pec.empty:
+            for _, f in df_pec.iterrows():
+                esp = str(f.get('Especie', '')).upper()
+                val_final = max(0.0, proyectar_modelo_sql(f, anio_actual))
+                if 'BOVINO' in esp: bovinos = val_final
+                if 'PORCINO' in esp: porcinos = val_final
+                if 'AVE' in esp: aves = val_final
+                
+            st.success(f" 🐄  **Cerebro Pecuario Enlazado:** {bovinos:,.0f} Bov, {porcinos:,.0f} Por, {aves:,.0f} Aves.")
             origen_pecu = True
         else:
-            # 🔥 FIX NECESARIO: El nombre real de la variable es llave_pec
             st.warning(f" ⚠️  La llave '{llave_pec}' no generó cruce en la Matriz Pecuaria.")
             origen_pecu = False
             
