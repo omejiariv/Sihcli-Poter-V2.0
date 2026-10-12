@@ -182,7 +182,7 @@ def renderizar_menu_navegacion(pagina_actual):
         st.page_link("pages/12_📚_Ayuda_y_Docs.py", label="Ayuda y Docs", icon="📚")
         st.page_link("pages/13_🕵️_Detective.py", label="Detective", icon="🕵️")
         st.page_link("pages/14_🌍_Satelite_Terrestre.py", label="Satélite Terrestre", icon="🌍")
-        st.page_link("pages/15_�_Piloto_Piedras_Blancas.py", label="Piloto Piedras Blancas", icon="�")
+        st.page_link("pages/15_🚨_Piloto_Piedras_Blancas.py", label="Piloto Piedras Blancas", icon="🚨")
         st.page_link("pages/17_🛰️_Radar_Meteorologico.py", label="Radar Meteorológico", icon="🛰️")
         st.page_link("pages/16_🏭_Inyeccion_RURH.py", label="Inyección RURH", icon="🏭")
         
