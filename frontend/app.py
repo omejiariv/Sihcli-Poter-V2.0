@@ -226,7 +226,7 @@ with tab_arquitectura:
         df = pd.DataFrame(dict(ids=ids, parents=parents, values=values))
         fig = px.sunburst(df, names='ids', parents='parents', values='values', color='parents', color_discrete_sequence=px.colors.qualitative.Pastel)
         fig.update_layout(margin=dict(t=20, l=0, r=0, b=0), height=600, paper_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 # =====================================================================
 # PESTAÑA 3: EL ALEPH (FILOSOFÍA RESTAURADA)

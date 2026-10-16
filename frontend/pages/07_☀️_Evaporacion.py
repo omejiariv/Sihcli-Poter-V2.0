@@ -271,9 +271,9 @@ with tab2:
                 if len(galeria) > 1:
                     idx = st.slider("Desliza para ver más fotografías:", 1, len(galeria), 1) - 1
                     # 🔥 FIX APLICADO: use_container_width en lugar de use_column_width
-                    st.image(galeria[idx], use_container_width=True, caption=f"Fotografía {idx+1} de {len(galeria)}")
+                    st.image(galeria[idx], width="stretch", caption=f"Fotografía {idx+1} de {len(galeria)}")
                 else:
-                    st.image(galeria[0], use_container_width=True, caption="Fotografía de referencia")
+                    st.image(galeria[0], width="stretch", caption="Fotografía de referencia")
             else:
                 st.info("💡 Agrega imágenes con los prefijos correctos en tu carpeta 'frontend/data/Fotos/' para verlas aquí.")
             
@@ -316,7 +316,7 @@ with tab2:
             "Retorno de Inversión": ["2.5 - 4 Años (Ahorro Agua, Genera Energía, Mejora la Calidad)", "7 - 10 Años (Ahorra Agua, Mejora Calidad)", "5 - 8 Años (Ahorra Agua, Mejora Calidad)", "Inviable a gran escala", "No se amortiza (Gasto fijo)"],
             "Viabilidad en Antioquia": ["⭐⭐⭐⭐⭐ (Excelente)", "⭐⭐⭐⭐ (Muy Buena)", "⭐⭐ (Riesgo por vientos)", "⭐ (Útil en áreas pequeñas o crisis)", "⭐ (Áreas pequeñas o crisis)"]
         })
-        st.dataframe(df_sintesis, use_container_width=True, hide_index=True)
+        st.dataframe(df_sintesis, width="stretch", hide_index=True)
         st.caption("Nota: La viabilidad en Antioquia considera la topografía de cañones (vientos fuertes) y la necesidad de mantener la potabilidad del agua libre de aditivos constantes.")
 
 # -----------------------------------------
@@ -376,7 +376,7 @@ with tab3:
             title=f"Comparativa Global: {metrica_sel}"
         )
         fig_comp.update_layout(margin=dict(t=40, b=0, l=0, r=0), coloraxis_showscale=False)
-        st.plotly_chart(fig_comp, use_container_width=True)
+        st.plotly_chart(fig_comp, width="stretch")
         
         st.markdown("---")
         
@@ -405,14 +405,14 @@ with tab3:
             title="Relación Volumen / Área (Mm³/ha)"
         )
         fig_ratio.update_layout(margin=dict(t=40, b=0, l=0, r=0), coloraxis_showscale=False)
-        st.plotly_chart(fig_ratio, use_container_width=True)
+        st.plotly_chart(fig_ratio, width="stretch")
 
         st.markdown("---")
         st.markdown("#### 📋 Matriz de Datos Crudos")
 
         # FIX: Convertir a string para visualización segura sin corromper Arrow
         df_display = df_embalses.astype(str).copy()
-        st.dataframe(df_display, use_container_width=True, hide_index=True, height=300)
+        st.dataframe(df_display, width="stretch", hide_index=True, height=300)
         
         csv_export = df_embalses.to_csv(index=False).encode('utf-8-sig')
         st.download_button(
@@ -655,7 +655,7 @@ with tab4:
             hovertemplate="<b>%{label}</b><br>Impacto: %{percent}<br>Equivale a: %{customdata[0]}<br>Abastecería a: %{customdata[1]}<extra></extra>"
         )])
         fig_pie.update_layout(margin=dict(t=10, b=10, l=0, r=0), height=300)
-        st.plotly_chart(fig_pie, use_container_width=True)
+        st.plotly_chart(fig_pie, width="stretch")
         st.caption(f"💡 **Costo Social Anual:** La evaporación impulsada por radiación equivaldría al abastecimiento anual de **{personas_rad:,.0f} personas**. La evaporación por viento al de **{personas_aero:,.0f} personas**.")
 
     with col_der:
@@ -688,7 +688,7 @@ with tab4:
             formato_texto = '.2s' if "Absolutas" in tipo_grafico else '.3f'
             fig_bar = px.bar(df_reg, x=eje_x_title, y='Embalse', orientation='h', text_auto=formato_texto, color=eje_x_title, color_continuous_scale='Reds')
             fig_bar.update_layout(margin=dict(t=10, b=0, l=0, r=0), height=310, coloraxis_showscale=False)
-            st.plotly_chart(fig_bar, use_container_width=True)
+            st.plotly_chart(fig_bar, width="stretch")
         else:
             st.info("Carga la base de datos para ver la comparativa regional.")
 
@@ -721,7 +721,7 @@ with tab4:
             margin=dict(t=30, b=10, l=0, r=0), 
             legend=dict(orientation="h", yanchor="top", y=1.1, xanchor="center", x=0.5)
         )
-        st.plotly_chart(fig_anual, use_container_width=True)
+        st.plotly_chart(fig_anual, width="stretch")
 
     with c_mitig:
         st.markdown("#### 4. Evaluación de Alternativas de Mitigación")
@@ -741,7 +741,7 @@ with tab4:
         fig_scatter = px.scatter(df_mit, x='Índice de Costo', y='Agua Salvada (m³)', color='Tecnología', size='Agua Salvada (m³)', text='Tecnología', size_max=40)
         fig_scatter.update_traces(textposition='bottom center')
         fig_scatter.update_layout(height=320, margin=dict(t=30, b=10, l=0, r=0), showlegend=False, xaxis=dict(range=[0, 6], title="Costo Relativo (1=Bajo, 5=Muy Alto)"))
-        st.plotly_chart(fig_scatter, use_container_width=True)
+        st.plotly_chart(fig_scatter, width="stretch")
 
 # -----------------------------------------
 # PESTAÑA 5: Telemetría XM (Últimos 3 Meses)
@@ -889,7 +889,7 @@ with tab5:
                                                      annotation_text=f"Captación", 
                                                      annotation_position="top left", secondary_y=False)
 
-                                st.plotly_chart(fig_xm, use_container_width=True)
+                                st.plotly_chart(fig_xm, width="stretch")
                                 
                                 ultimo_vol_final = df_filtrado['Vol_Total_m3'].iloc[-1]
                                 ultima_fecha = df_filtrado[col_date].iloc[-1].strftime('%Y-%m-%d')
@@ -1016,6 +1016,6 @@ with tab6:
     with col_datos:
         if not df_embalses.empty:
             # Ajustamos la altura para que coincida con el mapa
-            st.dataframe(df_embalses.astype(str), use_container_width=True, hide_index=True, height=500)
+            st.dataframe(df_embalses.astype(str), width="stretch", hide_index=True, height=500)
         else:
             st.warning("⚠️ Base de datos maestra no encontrada.")

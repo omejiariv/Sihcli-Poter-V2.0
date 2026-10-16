@@ -36,7 +36,7 @@ def muro_de_acceso_beta():
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             clave_beta = st.text_input("Credencial de Acceso:", type="password")
-            if st.button("Ingresar al Gemelo Digital", type="primary", use_container_width=True):
+            if st.button("Ingresar al Gemelo Digital", type="primary", width="stretch"):
                 # 💡 La contraseña por defecto es "AdminPoter"
                 if clave_beta == st.secrets.get("CLAVE_BETA", "AdminPoter"):
                     st.session_state["beta_unlocked"] = True
@@ -345,13 +345,13 @@ with tab4:
                 
                 col_info1, col_info2 = st.columns([1, 2.5])
                 with col_info1:
-                    st.dataframe(df_info, use_container_width=True)
+                    st.dataframe(df_info, width="stretch")
                 
                 with col_info2:
                     st.markdown("**Vista Previa de los Datos (Primeras 5 filas):**")
                     # Mostrar el dataframe sin la columna geometry para que sea ligero visualmente
                     df_vista = pd.DataFrame(gdf_in.drop(columns='geometry'))
-                    st.dataframe(df_vista.head(), use_container_width=True)
+                    st.dataframe(df_vista.head(), width="stretch")
                 
                 # 3. Conversión a Shapefile empaquetado en ZIP
                 st.markdown("---")
@@ -405,7 +405,7 @@ with tab4:
             st.caption("Debe tener columnas: `codigo_vereda`, `NOMB_MPIO`, `NOMBRE_VER`")
 
         if file_dane and file_gis:
-            if st.button("🚀 Generar Diccionario de Homologación", type="primary", use_container_width=True):
+            if st.button("🚀 Generar Diccionario de Homologación", type="primary", width="stretch"):
                 with st.spinner("Realizando exorcismo de datos y cruzando bases..."):
                     try:
                         # 🛡️ LECTOR MEGA-BLINDADO (Anti-BOM y Anti-Punto y Coma)
@@ -470,7 +470,7 @@ with tab4:
                         df_final = df_rebeldes[['ID_TABLA', 'ID_MAPA']].drop_duplicates()
 
                         st.success(f"✅ ¡Éxito Total! Se cruzaron los datos y se detectaron {len(df_final)} discrepancias territoriales.")
-                        st.dataframe(df_final, use_container_width=True)
+                        st.dataframe(df_final, width="stretch")
 
                         # Botón de descarga
                         csv_dict = df_final.to_csv(index=False).encode('utf-8')
@@ -517,7 +517,7 @@ with tab6:
         
     # Exigimos los 3 archivos terrestres como mínimo para encender el motor
     if file_maestro and file_parche_1 and file_auto_ideam:
-        if st.button("🔄 Ejecutar Fusión e Imputación Maestra", type="primary", use_container_width=True):
+        if st.button("🔄 Ejecutar Fusión e Imputación Maestra", type="primary", width="stretch"):
             with st.spinner("1. Tejiendo la red del IDEAM (Histórica + Transición + Automática)..."):
                 try:
                     # ----------------------------------------------------------
@@ -714,7 +714,7 @@ with tab6:
         st.markdown("---")
         st.success("✅ ¡Súper-Matriz Unificada Generada con Éxito!")
         st.info(st.session_state['fusion_resumen'])
-        st.dataframe(st.session_state['fusion_preview'], use_container_width=True)
+        st.dataframe(st.session_state['fusion_preview'], width="stretch")
         
         st.download_button(
             label="📥 Descargar Matriz Definitiva Total (Apta para Supabase)",
@@ -722,7 +722,7 @@ with tab6:
             file_name="DatosPptnmes_Maestro_Integral.csv",
             mime="text/csv",
             type="primary",
-            use_container_width=True
+            width="stretch"
         )
         
 # Extraer datos del IDEAM

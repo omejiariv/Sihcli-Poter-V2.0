@@ -180,7 +180,7 @@ with tab_diag:
         )
         fig_emb.update_traces(texttemplate='%{text} Mm³', textposition='outside')
         fig_emb.update_layout(height=270, showlegend=False, margin=dict(t=40, b=10, l=10, r=40), xaxis_range=[0, 160])
-        st.plotly_chart(fig_emb, use_container_width=True)
+        st.plotly_chart(fig_emb, width="stretch")
         st.caption("📌 *Piedras Blancas es de uso exclusivo para acueducto (no reporta telemetría energética a XM), exigiendo monitoreo hidrometeorológico propio de alta precisión.*")
 
     with col_fact:
@@ -298,7 +298,7 @@ with tab_fisica:
             "⭐ Descartada para el espejo principal"
         ]
     })
-    st.dataframe(df_tech, use_container_width=True, hide_index=True)
+    st.dataframe(df_tech, width="stretch", hide_index=True)
 
 # -----------------------------------------
 # TAB 3: Simulador del Proyecto Piloto y Caso de Negocio
@@ -386,7 +386,7 @@ with tab_piloto:
             yaxis_title="Volumen de Agua (m³)", height=340, margin=dict(t=45, b=20, l=20, r=20),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
-        st.plotly_chart(fig_bal, use_container_width=True)
+        st.plotly_chart(fig_bal, width="stretch")
 
     with col_g2:
         fig_pm = go.Figure(data=[
@@ -400,7 +400,7 @@ with tab_piloto:
             title=f"Partición Termodinámica Penman-Monteith ({evap_dia_mm:.2f} mm/día a {patm:.1f} kPa)",
             height=340, margin=dict(t=45, b=20, l=20, r=20), showlegend=False
         )
-        st.plotly_chart(fig_pm, use_container_width=True)
+        st.plotly_chart(fig_pm, width="stretch")
 
     st.subheader("Comparativa Ejecutiva de las 3 Opciones de Configuración (Base 8.0 ha = 40% del Espejo)")
     op1, op2, op3 = st.columns(3)

@@ -144,7 +144,7 @@ with tab_opt:
                     ))
                     
                 fig_opt.update_layout(title=f"Proyecciones: {territorio_sel}", xaxis_title="Año", yaxis_title="Habitantes", hovermode="x unified", height=500)
-                st.plotly_chart(fig_opt, use_container_width=True)
+                st.plotly_chart(fig_opt, width="stretch")
 
                 # ---------------------------------------------------
                 # 💾 PANEL DE ADMINISTRADOR: RE-FORJA UNITARIA Y MASIVA
@@ -156,7 +156,7 @@ with tab_opt:
                     with col_adm1:
                         st.markdown("##### 🎯 1. Guardar Territorio Actual")
                         st.caption(f"Actualiza únicamente **{territorio_sel}** en Supabase.")
-                        if st.button("💾 Guardar Territorio Actual", use_container_width=True):
+                        if st.button("💾 Guardar Territorio Actual", width="stretch"):
                             try:
                                 from sqlalchemy import text
                                 from modules.db_manager import get_engine
@@ -191,7 +191,7 @@ with tab_opt:
                     with col_adm2:
                         st.markdown("##### ⚡ 2. Re-Forja Global (Todos los Territorios)")
                         st.caption("Corrige la corrupción de decimales en las 5,383 filas de Supabase en un solo paso.")
-                        if st.button("🚀 Reparar Toda la Matriz en Supabase", type="primary", use_container_width=True):
+                        if st.button("🚀 Reparar Toda la Matriz en Supabase", type="primary", width="stretch"):
                             try:
                                 from sqlalchemy import text
                                 from modules.db_manager import get_engine
@@ -267,7 +267,7 @@ with tab_opt:
                     st.markdown("---")
                     st.markdown("##### 🧩 3. Forjar Niveles Subregionales y CARs en Matrices Maestras (Demografía + Pecuaria)")
                     st.caption("Construye e inyecta las ecuaciones de las 9 Subregiones y las 4 CARs en Supabase aplicando la jurisdicción estricta: AMVA (10 áreas urbanas, 0 rural, 0 ganado) y CORANTIOQUIA (80 municipios: 70 completos + 10 áreas rurales y pecuarias del Valle de Aburrá).")
-                    if st.button("🏛️ Inyectar Subregiones y CARs en Supabase (Jurisdicción Exacta)", type="primary", use_container_width=True):
+                    if st.button("🏛️ Inyectar Subregiones y CARs en Supabase (Jurisdicción Exacta)", type="primary", width="stretch"):
                         try:
                             from sqlalchemy import text
                             from modules.db_manager import get_engine
@@ -558,7 +558,7 @@ with tab_modelos:
         
         fig_main.add_trace(go.Scatter(x=datos_modelo['hist_anios'], y=datos_modelo['hist_pob'], mode='markers', name='Censo DANE', marker=dict(color='#ef4444', size=8)))
         fig_main.update_layout(hovermode="x unified", template="plotly_white", height=350)
-        st.plotly_chart(fig_main, use_container_width=True)
+        st.plotly_chart(fig_main, width="stretch")
 
         st.markdown("---")
         st.subheader("⚖️ Análisis Comparativo de Estructura Poblacional")
@@ -593,7 +593,7 @@ with tab_modelos:
                 fig_p.add_trace(go.Bar(y=df_pyr_h['Rango'], x=-df_pyr_h['Valor'], name='Hombres', orientation='h', marker_color='#3498db'))
                 fig_p.add_trace(go.Bar(y=df_pyr_m['Rango'], x=df_pyr_m['Valor'], name='Mujeres', orientation='h', marker_color='#e74c3c'))
                 fig_p.update_layout(barmode='relative', height=400, margin=dict(l=0,r=0,t=0,b=0))
-                st.plotly_chart(fig_p, use_container_width=True)
+                st.plotly_chart(fig_p, width="stretch")
             else:
                 st.warning(f"No hay pirámide disponible para el año {año_sel}.")
 
@@ -629,7 +629,7 @@ with tab_modelos:
                     fig_p2.add_trace(go.Bar(y=df_pyr_cm['Rango'], x=df_pyr_cm['Valor'], name='Mujeres', orientation='h', marker_color='#e74c3c'))
                     fig_p2.update_layout(barmode='relative', height=400, margin=dict(l=0,r=0,t=0,b=0), showlegend=False)
                     
-                    st.plotly_chart(fig_p2, use_container_width=True)
+                    st.plotly_chart(fig_p2, width="stretch")
                 else:
                     st.warning(f"No hay datos de proyección matemática disponibles para el año {año_comp}.")
             except Exception as e:
@@ -836,7 +836,7 @@ with tab_mapas:
                     )
                     fig_m.update_traces(marker_line_width=0.3, marker_line_color='rgba(255,255,255,0.25)')
                     fig_m.update_layout(margin={"r":0,"t":50,"l":0,"b":0}, height=650, title=f"Distribución Dasimétrica ({filtro.title()}) - Total: {df_mapa['Población'].sum():,.0f} hab.")
-                    st.plotly_chart(fig_m, use_container_width=True)
+                    st.plotly_chart(fig_m, width="stretch")
 
             elif resp_map.status_code == 404:
                 st.warning(f"⚠️ El visor web rechazó cargar {territorio_sel}: {resp_map.json().get('detail', 'No encontrado en PostGIS')}")
@@ -962,7 +962,7 @@ with tab_dinamica:
                         zoom=9 if nivel_backend == "MUNICIPAL" else 7, opacity=0.75
                     )
                     fig_t.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=600)
-                    st.plotly_chart(fig_t, use_container_width=True)
+                    st.plotly_chart(fig_t, width="stretch")
                 else:
                     st.error("Error cargando la geometría. Asegúrate de que el backend de mapas funcione.")
             except Exception as e:

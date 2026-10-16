@@ -671,7 +671,7 @@ with tab_factura:
             showlegend = False, plot_bgcolor="rgba(0,0,0,0)", yaxis_title="Millones de Dólares (USD)", margin=dict(l=20, r=20, t=40, b=20)
         )
         
-        st.plotly_chart(fig_waterfall, use_container_width=True)
+        st.plotly_chart(fig_waterfall, width="stretch")
 
     st.success(f"🌱 **El Mensaje para los Tomadores de Decisiones:** Proteger las cuencas y los bosques que abastecen a estos **{poblacion:,.0f} habitantes** le ahorra al Estado y a la sociedad **${costo_total_naturaleza / 1e6:,.1f} millones de dólares anuales** en infraestructura artificial. La conservación es la inversión más rentable.")
 
@@ -745,7 +745,7 @@ with tab_mapa:
             fig.add_trace(go.Scattermapbox(lon=gdf_bio['lon'], lat=gdf_bio['lat'], mode='markers', marker=dict(size=7, color='rgb(0, 200, 100)'), text=hover_text, name='Biodiversidad'))
 
         fig.update_layout(mapbox_style="carto-positron", mapbox=dict(center=dict(lat=center_lat, lon=center_lon), zoom=10), margin={"r":0,"t":0,"l":0,"b":0}, height=600, legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor="rgba(255, 255, 255, 0.8)"))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         
         if not gdf_bio.empty:
             st.download_button("💾 Descargar Datos (CSV)", save_to_csv(gdf_bio.drop(columns='geometry', errors='ignore')), f"biodiv_{nombre_seleccion}.csv", "text/csv")
@@ -762,7 +762,7 @@ with tab_taxonomia:
             if 'Reino' in gdf_bio.columns and 'Familia' in gdf_bio.columns:
                 df_chart = gdf_bio.fillna("Sin Dato")
                 fig_sun = px.sunburst(df_chart, path=['Reino', 'Clase', 'Orden', 'Familia'], height=600)
-                st.plotly_chart(fig_sun, use_container_width=True)
+                st.plotly_chart(fig_sun, width="stretch")
             else: st.warning("Datos taxonómicos insuficientes.")
         with c2:
             st.markdown("##### Especies Amenazadas")
@@ -819,11 +819,11 @@ with tab_forestal:
     if df_diagnostico is not None and not df_diagnostico.empty:
         st.markdown("##### 📊 Distribución de Coberturas por Zona de Vida")
         fig_diag = px.bar(df_diagnostico, x='Hectareas', y='Zona_Vida', color='Cobertura', orientation='h', title="Hectáreas por Cobertura y Clima", color_discrete_sequence=px.colors.qualitative.Prism, height=400)
-        st.plotly_chart(fig_diag, use_container_width=True)
+        st.plotly_chart(fig_diag, width="stretch")
         
         with st.expander("Ver Tabla de Datos Detallada (Hectáreas)"):
             pivot_diag = df_diagnostico.pivot_table(index='Cobertura', columns='Zona_Vida', values='Hectareas', aggfunc='sum', fill_value=0)
-            st.dataframe(pivot_diag.style.format("{:,.1f}"), use_container_width=True)
+            st.dataframe(pivot_diag.style.format("{:,.1f}"), width="stretch")
             
         st.divider()
 
@@ -955,7 +955,7 @@ with tab_forestal:
             m3.metric("Valor Potencial", f"${(total_c_bosque * precio_usd):,.0f} USD")
             
             fig = px.area(df_bosque, x='Año', y='Proyecto_tCO2e_Acumulado', title=f"Dinámica - {carbon_calculator.ESCENARIOS_CRECIMIENTO[estrategia]['nombre']}", color_discrete_sequence=['#2ecc71'])
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
             
             with st.expander("📊 Ver Tabla Financiera y Descargar Reporte"):
                 df_fin_bosque = df_bosque.copy()
@@ -1158,7 +1158,7 @@ with tab_afolu:
             fig.add_trace(go.Scatter(x=df_bal['Año'], y=df_bal['Balance_Neto_tCO2e'], mode='lines', name='Balance Neto Real', line=dict(color='black', width=4, dash='dot')))
         
         fig.update_layout(xaxis_title="Año", yaxis_title="Acumulado (tCO2e)", hovermode="x unified", height=500)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 # ==============================================================================
 # TAB 6: COMPARADOR DE ESCENARIOS (NUEVO)
@@ -1202,11 +1202,11 @@ with tab_comparador:
                 title=f"Proyección Comparativa ({area_comp} ha)",
                 labels={'Proyecto_tCO2e_Acumulado': 'Acumulado (tCO2e)'}, line_shape='spline'
             )
-            st.plotly_chart(fig_comp, use_container_width=True)
+            st.plotly_chart(fig_comp, width="stretch")
             
             st.subheader("Resumen Financiero y Ambiental")
             df_resumen = pd.DataFrame(resumen_final).set_index("Escenario")
-            st.dataframe(df_resumen.style.format({"Total CO2e": "{:,.0f}", "Valor (USD)": "${:,.0f}"}).background_gradient(cmap="Greens", subset=["Total CO2e"]), use_container_width=True)
+            st.dataframe(df_resumen.style.format({"Total CO2e": "{:,.0f}", "Valor (USD)": "${:,.0f}"}).background_gradient(cmap="Greens", subset=["Total CO2e"]), width="stretch")
         else: st.warning("Selecciona al menos un modelo para comparar.")
 
 # =========================================================================
@@ -1466,7 +1466,7 @@ with tab_ret_dosel:
         fig_vol.add_trace(go.Bar(x=["Impacto Volumétrico del Evento"], y=[volumen_escurre_m3], name="Volumen que golpea el suelo (m³)", marker_color="#e74c3c", text=f"{volumen_escurre_m3:,.0f} m³", textposition='auto'))
         
         fig_vol.update_layout(barmode='stack', title=f"Balance Hídrico del Evento en {hectareas} ha", height=300, margin=dict(l=20, r=20, t=40, b=20), yaxis_title="Metros Cúbicos (m³)")
-        st.plotly_chart(fig_vol, use_container_width=True)
+        st.plotly_chart(fig_vol, width="stretch")
 
         if eficiencia_retencion_pct > 15: st.success(f"🌿 **Alta Regulación:** El ecosistema actuó como un escudo, absorbiendo {volumen_retenido_m3:,.0f} toneladas de agua que, de otro modo, habrían alimentado directamente la creciente del río.")
         else: st.error(f"⚠️ **Riesgo de Avalancha:** El dosel está saturado o degradado. La mayor parte de la energía de la tormenta ({volumen_escurre_m3:,.0f} m³) está golpeando el suelo directamente.")
@@ -1512,7 +1512,7 @@ with tab_micro:
             angulo_grados = st.slider("Ángulo de Ramificación (°):", 10, 90, 25)
             escala = st.slider("Factor de Reducción (Escala):", 0.5, 0.85, 0.75, step=0.05)
             velocidad = st.slider("⏱️ Velocidad de Animación (seg/nivel):", 0.05, 1.5, 0.25, 0.05)
-            animar = st.button("🌱 Animar Crecimiento", use_container_width=True)
+            animar = st.button("🌱 Animar Crecimiento", width="stretch")
             
         with col_frac2:
             import math, time
@@ -1541,10 +1541,10 @@ with tab_micro:
 
             if animar:
                 for p in range(1, profundidad + 1):
-                    espacio_fractal.plotly_chart(generar_figura_fractal_optimizada(p, angulo_grados, escala), use_container_width=True)
+                    espacio_fractal.plotly_chart(generar_figura_fractal_optimizada(p, angulo_grados, escala), width="stretch")
                     time.sleep(velocidad)
             else: 
-                espacio_fractal.plotly_chart(generar_figura_fractal_optimizada(profundidad, angulo_grados, escala), use_container_width=True)
+                espacio_fractal.plotly_chart(generar_figura_fractal_optimizada(profundidad, angulo_grados, escala), width="stretch")
 
     with st.expander("🪵 1. & 2. Arquitectura del Árbol y Microingeniería Foliar", expanded=False):
         col_anat, col_hoja, col_graf = st.columns([1.2, 1.2, 2])
@@ -1612,7 +1612,7 @@ with tab_micro:
                 hole=0.4, marker_colors=["#2ecc71", "#8e44ad", "#3498db"], textinfo="percent", insidetextorientation='radial'
             ))
             fig_p.update_layout(title="Distribución del Destino de la Lluvia", showlegend=True, legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5), height=320, margin=dict(t=30, b=80, l=10, r=10))
-            st.plotly_chart(fig_p, use_container_width=True)
+            st.plotly_chart(fig_p, width="stretch")
             
     with st.expander("🌧️ 3. Balística de la Gota y Control de Erosión", expanded=False):
         col_gota1, col_gota2 = st.columns(2)
@@ -1680,7 +1680,7 @@ with tab_micro:
             
             fig_s = go.Figure(data=[go.Bar(name='Cielo Abierto', x=['Kg/m²'], y=[suelo_p_n_kg], marker_color='#e67e22', text=[f"{suelo_p_n_kg:.1f} Kg"], textposition='auto'), go.Bar(name='Bajo Dosel', x=['Kg/m²'], y=[suelo_p_a_kg], marker_color='#27ae60', text=[f"{suelo_p_a_kg:.1f} Kg"], textposition='auto')])
             fig_s.update_layout(barmode='group', height=300, margin=dict(t=30, b=0, l=10, r=10), plot_bgcolor='rgba(0,0,0,0)', legend=dict(orientation="h", y=-0.2))
-            st.plotly_chart(fig_s, use_container_width=True)
+            st.plotly_chart(fig_s, width="stretch")
             
     with st.expander("🌊 5. El Viaje del Lodo: Transporte de Sedimentos", expanded=False):
         st.info("La tierra arrancada por el impacto de la gota necesita un vehículo para llegar al río: La Escorrentía. Usa la física hidráulica de Manning para calcular cuánto sedimento es retenido por el sotobosque.")
@@ -1725,7 +1725,7 @@ with tab_micro:
                 totals = {"marker": {"color":"#8e44ad"}}
             ))
             fig_viaje.update_layout(title="Balance de Transporte", height=320, margin=dict(l=20, r=20, t=40, b=30), plot_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig_viaje, use_container_width=True)
+            st.plotly_chart(fig_viaje, width="stretch")
 
     with st.expander(f"🛑 6. Limnología Integral: Uniformismo y Catastrofismo en {nombre_seleccion}", expanded=False):
         col_lim1, col_lim2 = st.columns([1, 1.5])
@@ -1883,7 +1883,7 @@ with tab_micro:
     if lodo_total_m3 <= 0 or s_total <= 0:
         st.warning("⚠️ **Atención:** Algunos valores están en CERO. Asegúrate de configurar la severidad de la Tormenta (Módulo 6) y los costos de la Planta PTAP (Módulo 7) arriba antes de sincronizar.")
 
-    if st.button("🔌 Sincronizar Impacto con el Sistema Territorial (Pág 08 y 09)", type="primary", use_container_width=True):
+    if st.button("🔌 Sincronizar Impacto con el Sistema Territorial (Pág 08 y 09)", type="primary", width="stretch"):
     
         st.session_state['eco_lodo_total_m3'] = float(lodo_total_m3)
         st.session_state['eco_lodo_colas_m3'] = float(lodo_colas_m3)

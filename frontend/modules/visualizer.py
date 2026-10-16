@@ -441,7 +441,7 @@ def _plot_panel_regional(rng, meth, col, tag, u_loc, df_long, gdf_stations):
                 margin=dict(l=0, r=0, b=0, t=30),
                 height=350,
             )
-            col.plotly_chart(fig, use_container_width=True)
+            col.plotly_chart(fig, width="stretch")
 
             # Mapa Interactivo (Folium)
             with col.expander(
@@ -506,13 +506,13 @@ def _plot_panel_regional(rng, meth, col, tag, u_loc, df_long, gdf_stations):
                 # 2. Botón de Geolocalización (El ícono que pediste)
                 LocateControl(auto_start=False).add_to(m)
                 st_folium(
-                    m, height=350, use_container_width=True, key=f"folium_comp_{tag}"
+                    m, height=350, width="stretch", key=f"folium_comp_{tag}"
                 )
 
                 # Botón GPS Nativo
                 LocateControl(auto_start=False).add_to(m)
                 st_folium(
-                    m, height=350, use_container_width=True, key=f"fol_comp_{tag}"
+                    m, height=350, width="stretch", key=f"fol_comp_{tag}"
                 )
 
 @st.cache_data(ttl=3600)
@@ -928,7 +928,7 @@ def display_iri_forecast_tab():
             template="plotly_white",
             legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     # GRÁFICO 2: PROBABILIDADES
     with tab_prob:
@@ -956,7 +956,7 @@ def display_iri_forecast_tab():
             yaxis=dict(range=[0, 105]),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
         )
-        st.plotly_chart(fig_bar, use_container_width=True)
+        st.plotly_chart(fig_bar, width="stretch")
         
         with st.expander("📋 Ver Tabla de Datos"):
             st.dataframe(df_probs.set_index("Trimestre").style.background_gradient(cmap="Blues", axis=0))
@@ -1123,7 +1123,7 @@ def display_realtime_dashboard(df_long, gdf_stations, gdf_filtered, **kwargs):
                     fig_atm.update_yaxes(
                         title_text="hPa", secondary_y=True, showgrid=False
                     )
-                    st.plotly_chart(fig_atm, use_container_width=True)
+                    st.plotly_chart(fig_atm, width="stretch")
 
                 with col_g2:
                     # Energía y Agua (Radiación + ET0)
@@ -1156,7 +1156,7 @@ def display_realtime_dashboard(df_long, gdf_stations, gdf_filtered, **kwargs):
                     fig_nrg.update_yaxes(
                         title_text="mm", secondary_y=True, showgrid=False
                     )
-                    st.plotly_chart(fig_nrg, use_container_width=True)
+                    st.plotly_chart(fig_nrg, width="stretch")
 
                 # 4. TABLA DETALLADA
                 with st.expander("Ver Tabla de Datos Completa"):
@@ -1169,7 +1169,7 @@ def display_realtime_dashboard(df_long, gdf_stations, gdf_filtered, **kwargs):
     # --- SUB-PESTAÑA 2: RADAR Y OBSERVACIÓN 3D (WINDY) ---
     with tab_sat:
         st.info("🛰️ El Radar Satelital ha sido promovido a su propio Centro de Comando.")
-        st.page_link("pages/17_🛰️_Radar_Meteorologico.py", label="Ir al Centro de Observación Atmosférica", icon="🚀", use_container_width=True)
+        st.page_link("pages/17_🛰️_Radar_Meteorologico.py", label="Ir al Centro de Observación Atmosférica", icon="🚀", width="stretch")
             
     # --- SUB-PESTAÑA 3: ALERTAS ---
     with tab_alert:
@@ -1514,7 +1514,7 @@ def display_spatial_distribution_tab(
                             fig.add_trace(go.Scatter(x=fc['Fecha'], y=fc['T. Máx (°C)'], name="Máx", line=dict(color='red')), secondary_y=False)
                             fig.add_trace(go.Scatter(x=fc['Fecha'], y=fc['T. Mín (°C)'], name="Mín", line=dict(color='cyan'), fill='tonexty'), secondary_y=False)
                             fig.update_layout(title="Temperatura y Precipitación", height=350, hovermode="x unified")
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, width="stretch")
 
                             # 2. Atmósfera y Energía
                             c_g1, c_g2 = st.columns(2)
@@ -1524,14 +1524,14 @@ def display_spatial_distribution_tab(
                                 fig_atm.add_trace(go.Scatter(x=fc["Fecha"], y=fc["HR Media (%)"], name="Humedad %", line=dict(color="teal")), secondary_y=False)
                                 fig_atm.add_trace(go.Scatter(x=fc["Fecha"], y=fc["Presión (hPa)"], name="Presión", line=dict(color="purple", dash="dot")), secondary_y=True)
                                 fig_atm.update_layout(title="Atmósfera", height=300, hovermode="x unified")
-                                st.plotly_chart(fig_atm, use_container_width=True)
+                                st.plotly_chart(fig_atm, width="stretch")
 
                             with c_g2: # Energía
                                 fig_nrg = make_subplots(specs=[[{"secondary_y": True}]])
                                 fig_nrg.add_trace(go.Bar(x=fc["Fecha"], y=fc["Radiación SW (MJ/m²)"], name="Radiación", marker_color="orange"), secondary_y=False)
                                 fig_nrg.add_trace(go.Scatter(x=fc["Fecha"], y=fc["ET₀ (mm)"], name="ET₀", line=dict(color="green")), secondary_y=True)
                                 fig_nrg.update_layout(title="Energía", height=300, hovermode="x unified")
-                                st.plotly_chart(fig_nrg, use_container_width=True)
+                                st.plotly_chart(fig_nrg, width="stretch")
 
                         # C. TABLA
                         with st.expander("📋 Ver Tabla de Datos", expanded=False):
@@ -1600,7 +1600,7 @@ def display_spatial_distribution_tab(
                 height=max(400, len(all_stations) * 20),
             )
             fig_avail.update_layout(xaxis_title="Año", yaxis_title="Estación", coloraxis_colorbar=dict(title="Meses"), xaxis=dict(dtick=1), yaxis=dict(dtick=1))
-            st.plotly_chart(fig_avail, use_container_width=True)
+            st.plotly_chart(fig_avail, width="stretch")
 
             # ==========================================================
             # 📊 MÉTRICAS BLINDADAS
@@ -1649,7 +1649,7 @@ def display_spatial_distribution_tab(
                 color=Config.STATION_NAME_COL,
                 title="Precipitación Anual por Estación"
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
             
             with st.expander("Ver Datos en Tabla"):
                 pivot_anual = df_anual_melted.pivot(
@@ -1705,7 +1705,7 @@ def display_graphs_tab(
         st.markdown("##### Precipitación Total Anual")
         if df_anual_melted is not None:
             fig_anual = ce.plot_serie_anual(df_anual_melted, col_anio, col_valor, col_estacion)
-            st.plotly_chart(fig_anual, use_container_width=True)
+            st.plotly_chart(fig_anual, width="stretch")
             st.download_button("📥 CSV Anual", df_anual_melted.to_csv(index=False).encode("utf-8"), "anual.csv")
 
     # --- TAB 2: RANKING MULTIANUAL ---
@@ -1719,7 +1719,7 @@ def display_graphs_tab(
             with c_sort: sort_opt = st.radio("Ordenar:", ["Mayor a Menor", "Menor a Mayor", "Alfabético"], horizontal=True)
 
             fig_rank = ce.plot_ranking_multianual(avg_ppt, col_estacion, "Precipitación Media (mm)", sort_opt)
-            st.plotly_chart(fig_rank, use_container_width=True)
+            st.plotly_chart(fig_rank, width="stretch")
 
     # --- TAB 3: SERIE MENSUAL ---
     with tabs[2]:
@@ -1731,7 +1731,7 @@ def display_graphs_tab(
 
         with col_chart:
             fig_mensual = ce.plot_serie_mensual(df_monthly_filtered, show_markers, show_regional)
-            st.plotly_chart(fig_mensual, use_container_width=True)
+            st.plotly_chart(fig_mensual, width="stretch")
 
     # --- TAB 4: CICLO ANUAL ---
     with tabs[3]:
@@ -1740,7 +1740,7 @@ def display_graphs_tab(
         year_comp = st.selectbox("Comparar con Año específico:", [None] + years_avail, key="ciclo_year_comp")
 
         fig_ciclo = ce.plot_ciclo_anual(df_monthly_filtered, year_comp)
-        st.plotly_chart(fig_ciclo, use_container_width=True)
+        st.plotly_chart(fig_ciclo, width="stretch")
 
     # --- TAB 5: DISTRIBUCIÓN ---
     with tabs[4]:
@@ -1753,7 +1753,7 @@ def display_graphs_tab(
         df_plot = df_anual_melted if "Anual" in data_src else df_monthly_filtered
         
         fig_dist = ce.plot_distribucion_estadistica(df_plot, col_estacion, col_valor, chart_typ, sort_ord)
-        st.plotly_chart(fig_dist, use_container_width=True)
+        st.plotly_chart(fig_dist, width="stretch")
 
     # --- TAB 6: ANÁLISIS ESTACIONAL DETALLADO ---
     with tabs[5]:
@@ -1774,10 +1774,10 @@ def display_graphs_tab(
 
             if chart_mode == "Líneas (Spaghetti)":
                 fig_multi = ce.plot_spaghetti_estacional(df_st, c_anio_local, col_valor, hl_year)
-                st.plotly_chart(fig_multi, use_container_width=True)
+                st.plotly_chart(fig_multi, width="stretch")
             else: 
                 fig_box = ce.plot_cajas_estacional(df_st, col_valor)
-                st.plotly_chart(fig_box, use_container_width=True)
+                st.plotly_chart(fig_box, width="stretch")
 
             # Tabla comparativa (Mantenida en UI porque es tabla, no gráfico)
             if hl_year:
@@ -2163,7 +2163,7 @@ def display_climate_forecast_tab(df_enso, **kwargs):
                         try:
                             # Asumimos que create_enso_chart está definida arriba
                             fig = create_enso_chart(d) 
-                            st.plotly_chart(fig, use_container_width=True, key="chart_oni_hist")
+                            st.plotly_chart(fig, width="stretch", key="chart_oni_hist")
                         except Exception as e:
                             st.line_chart(d.set_index(Config.DATE_COL)[idx_sel])
                     
@@ -2176,7 +2176,7 @@ def display_climate_forecast_tab(df_enso, **kwargs):
                         fig_simple.add_hline(y=0, line_width=1, line_color="red", line_dash="dash", opacity=0.7)
                         fig_simple.update_layout(hovermode="x unified")
                         
-                        st.plotly_chart(fig_simple, use_container_width=True, key=f"chart_{idx_sel}_hist")
+                        st.plotly_chart(fig_simple, width="stretch", key=f"chart_{idx_sel}_hist")
             else:
                 st.warning(f"La columna '{idx_sel}' existe pero no tiene datos válidos.")
                 
@@ -2196,7 +2196,7 @@ def display_climate_forecast_tab(df_enso, **kwargs):
                     color = 'red' if val == 'Niño' else 'blue' if val == 'Niña' else 'gray'
                     return f'color: {color}; font-weight: bold'
 
-                st.dataframe(df_mostrar.head(24).style.map(color_fase, subset=['fase_enso']), use_container_width=True)
+                st.dataframe(df_mostrar.head(24).style.map(color_fase, subset=['fase_enso']), width="stretch")
 
         else:
             st.info("ℹ️ **No hay datos históricos cargados.** Sube el archivo `indices.csv` desde el Panel de Administración.")
@@ -2231,7 +2231,7 @@ def display_climate_forecast_tab(df_enso, **kwargs):
                     legend=dict(orientation="h", y=-0.15, xanchor="center", x=0.5),
                     margin=dict(t=50, b=20, l=20, r=20)
                 )
-                st.plotly_chart(fig_enso_noaa, use_container_width=True)
+                st.plotly_chart(fig_enso_noaa, width="stretch")
                 
                 # --- CAJA DESPLEGABLE DE METODOLOGÍA ---
                 st.markdown("<br>", unsafe_allow_html=True)
@@ -2435,7 +2435,7 @@ def display_climate_forecast_tab(df_enso, **kwargs):
                                 # 🚀 FIX ARQUITECTÓNICO: Guardar la proyección del ONI en el Aleph
                                 if "oni" in selected_label.lower():
                                     st.session_state['aleph_xgb_oni'] = df_proy[['Fecha', 'Proyección']].set_index('Fecha')
-                                st.plotly_chart(fig_ml, use_container_width=True)
+                                st.plotly_chart(fig_ml, width="stretch")
                                 st.success(f"✅ Proyección generada hasta {df_proy['Fecha'].max().strftime('%Y-%m')}. El motor XGBoost procesó {lags_memoria} meses de memoria no lineal profunda.")
 
                         except ImportError:
@@ -2624,7 +2624,7 @@ def display_trends_and_forecast_tab(**kwargs):
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
             
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
             with st.expander("🔍 Ver detalles estadísticos técnicos"):
                 st.write({
@@ -2729,7 +2729,7 @@ def display_trends_and_forecast_tab(**kwargs):
                                 name="Confianza 95%",
                             )
                         )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
                     st.session_state["sarima_res"] = fc
                 except Exception as e:
                     st.error(f"Error SARIMA: {e}")
@@ -2794,7 +2794,7 @@ def display_trends_and_forecast_tab(**kwargs):
                             name="Confianza",
                         )
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
                     st.session_state["prophet_res"] = fc[["ds", "yhat"]].set_index("ds")["yhat"]
                 except Exception as e:
                     st.error(f"Error Prophet: {e}")
@@ -2854,7 +2854,7 @@ def display_trends_and_forecast_tab(**kwargs):
                     range=[fecha_inicio_zoom, fecha_fin_zoom]
                 )
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         else:
             st.info("💡 Ejecute ambos modelos matemáticos (SARIMA y Prophet) en sus respectivas pestañas para habilitar el motor de comparación cruzada.")
 
@@ -3068,7 +3068,7 @@ def display_anomalies_tab(
                     fig_enso.add_hline(
                         y=0, line_width=1, line_color="black", line_dash="dot"
                     )
-                    st.plotly_chart(fig_enso, use_container_width=True)
+                    st.plotly_chart(fig_enso, width="stretch")
                 else:
                     st.warning("No hay datos coincidentes.")
             else:
@@ -3204,7 +3204,7 @@ def display_stats_tab(df_long, df_anual_melted, gdf_stations, **kwargs):
                 aspect="auto",
             )
             fig_matrix.update_layout(height=600)
-            st.plotly_chart(fig_matrix, use_container_width=True)
+            st.plotly_chart(fig_matrix, width="stretch")
             
         except Exception as e:
             st.warning(f"No se pudo generar la matriz: {e}")
@@ -3402,7 +3402,7 @@ def display_correlation_tab(**kwargs):
                     title="Mapa de Calor de Correlaciones",
                 )
                 fig_corr.update_layout(height=700)
-                st.plotly_chart(fig_corr, use_container_width=True)
+                st.plotly_chart(fig_corr, width="stretch")
 
                 # 4. Botón de Descarga (CSV)
                 csv_corr = corr_matrix.to_csv().encode("utf-8")
@@ -3504,7 +3504,7 @@ def display_life_zones_tab(df_long, gdf_stations, gdf_subcuencas=None, user_loc=
         if use_mask and (basin_geom is None or basin_geom.empty):
             st.warning("⚠️ No se ha detectado una cuenca seleccionada en el menú principal para recortar.")
 
-        if st.button("🚀 Ejecutar Simulación de Zonas de Vida", use_container_width=True):
+        if st.button("🚀 Ejecutar Simulación de Zonas de Vida", width="stretch"):
             if not dem_file or not ppt_file:
                 st.error("❌ Faltan los mapas raster base (DEM / Lluvia).")
             else:
@@ -3574,7 +3574,7 @@ def display_life_zones_tab(df_long, gdf_stations, gdf_subcuencas=None, user_loc=
                                         ))
                                 
                                 fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=650, legend=dict(orientation="h", yanchor="bottom", y=-0.15, xanchor="center", x=0.5))
-                                st.plotly_chart(fig, use_container_width=True)
+                                st.plotly_chart(fig, width="stretch")
 
                                 # 4. 🧮 CRUCE ESPACIAL COMPARATIVO (ESCENARIO VS LÍNEA BASE)
                                 gdf_poly['Area_ha'] = gdf_poly.to_crs(3116).area / 10000.0  
@@ -3633,7 +3633,7 @@ def display_life_zones_tab(df_long, gdf_stations, gdf_subcuencas=None, user_loc=
                                         'Simulado (ha)': '{:,.1f}', 
                                         'Variación Neta (ha)': lambda x: f"+{x:,.1f}" if x > 0 else f"{x:,.1f}", 
                                         '% Ocupación': '{:.1f}%'
-                                    }), use_container_width=True)
+                                    }), width="stretch")
                                 
                                 with c_tab2:
                                     if extraer_estaciones:
@@ -3659,9 +3659,9 @@ def display_life_zones_tab(df_long, gdf_stations, gdf_subcuencas=None, user_loc=
                                             
                                             # 3. 🚨 Mostrar datos SIN el .dropna() para evitar que una estación nula borre toda la tabla
                                             if cols_m:
-                                                st.dataframe(estaciones_alt[cols_m], use_container_width=True)
+                                                st.dataframe(estaciones_alt[cols_m], width="stretch")
                                             else:
-                                                st.dataframe(estaciones_alt, use_container_width=True)
+                                                st.dataframe(estaciones_alt, width="stretch")
                                         else:
                                             st.warning("No hay estaciones cargadas para este territorio.")
                             else:
@@ -3693,7 +3693,7 @@ def display_life_zones_tab(df_long, gdf_stations, gdf_subcuencas=None, user_loc=
         use_mask_c = st.checkbox("✂️ Recortar por Cuenca y mostrar Divisoria", value=True, key="mask_comp")
         basin_geom_c = gdf_zona_activa if use_mask_c else None
 
-        if st.button("🚀 Renderizar Mapas Gemelos", use_container_width=True, key="btn_comp"):
+        if st.button("🚀 Renderizar Mapas Gemelos", width="stretch", key="btn_comp"):
             if not dem_file or not ppt_file:
                 st.error("❌ Faltan los mapas raster base (DEM / Lluvia).")
             else:
@@ -3756,9 +3756,9 @@ def display_life_zones_tab(df_long, gdf_stations, gdf_subcuencas=None, user_loc=
                             st.markdown("---")
                             map_col1, map_col2 = st.columns(2)
                             with map_col1:
-                                st.plotly_chart(build_dual_map(gdf_base, "Línea Base (Histórica)"), use_container_width=True)
+                                st.plotly_chart(build_dual_map(gdf_base, "Línea Base (Histórica)"), width="stretch")
                             with map_col2:
-                                st.plotly_chart(build_dual_map(gdf_sim, f"Simulado (ΔT: +{delta_t_c}°C, ΔP: {delta_p_c}%)"), use_container_width=True)
+                                st.plotly_chart(build_dual_map(gdf_sim, f"Simulado (ΔT: +{delta_t_c}°C, ΔP: {delta_p_c}%)"), width="stretch")
 
                             # 4. 🧮 TABLA COMPARATIVA
                             gdf_base['Area_ha'] = gdf_base.to_crs(3116).area / 10000.0
@@ -3777,7 +3777,7 @@ def display_life_zones_tab(df_long, gdf_stations, gdf_subcuencas=None, user_loc=
                                 'Línea Base (ha)': '{:,.1f}', 'Escenario Simulado (ha)': '{:,.1f}', 
                                 'Variación Neta (ha)': lambda x: f"+{x:,.1f}" if x > 0 else f"{x:,.1f}", 
                                 '% Ocupación Actual': '{:.1f}%'
-                            }), use_container_width=True)
+                            }), width="stretch")
 
                         else:
                             st.warning("La simulación no arrojó geometrías válidas en uno de los escenarios.")
@@ -3905,7 +3905,7 @@ def display_life_zones_tab(df_long, gdf_stations, gdf_subcuencas=None, user_loc=
                             name="Tu Ubicación"
                         ))
 
-                    st.plotly_chart(fig_map, use_container_width=True)
+                    st.plotly_chart(fig_map, width="stretch")
 
                     # Tabla de Resumen
                     cols_table = [Config.STATION_NAME_COL, "Zona de Vida", Config.PRECIPITATION_COL, Config.ALTITUDE_COL]
@@ -4054,7 +4054,7 @@ def display_drought_analysis_tab(df_long, gdf_stations, **kwargs):
                 fig.add_trace(go.Bar(x=df_vis.index, y=df_vis["Val"], marker_color=df_vis["Color"], name=idx_type))
                 fig.add_hline(y=-1.5, line_dash="dash", line_color="red")
                 fig.update_layout(title=f"Evolución {idx_type}-{scale} ({selected_station})", height=400)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
             else:
                 st.warning("Datos insuficientes.")
         except Exception as e: st.error(f"Error: {e}")
@@ -4084,7 +4084,7 @@ def display_drought_analysis_tab(df_long, gdf_stations, **kwargs):
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=tr, y=ppt_plot, name="Gumbel", line=dict(color="red")))
                 fig.update_layout(xaxis_title="Período Retorno", yaxis_title="Ppt Máx (mm)", xaxis_type="log", height=400)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
         else: st.warning("Datos insuficientes (min 10 años).")
 
     # --- TAB 3: UMBRALES ---
@@ -4100,7 +4100,7 @@ def display_drought_analysis_tab(df_long, gdf_stations, **kwargs):
         fig.add_trace(go.Scatter(x=months, y=clim["high"], name=f"P{p_h}", line=dict(color="blue")))
         fig.add_trace(go.Scatter(x=months, y=clim["median"], name="Mediana", line=dict(color="green", dash="dot")))
         fig.add_trace(go.Scatter(x=months, y=clim["low"], name=f"P{p_l}", line=dict(color="red")))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     # ==============================================================================
     # TAB 4: VULNERABILIDAD CLIMÁTICA (IVC) - ACTUALIZADO Y PERSISTENTE
@@ -4284,7 +4284,7 @@ def display_drought_analysis_tab(df_long, gdf_stations, **kwargs):
                 marker=dict(color='black', size=4), name='Estaciones'
             ))
             fig_map.update_layout(title=title, height=550, margin=dict(l=20, r=20, t=40, b=20))
-            st.plotly_chart(fig_map, use_container_width=True)
+            st.plotly_chart(fig_map, width="stretch")
 
             # Descarga del Mapa (Solicitud #3)
             if st.button(f"⬇️ Preparar Descarga de {layer}"):
@@ -4361,7 +4361,7 @@ def display_climate_scenarios_tab(**kwargs):
 
         st.markdown("<br>", unsafe_allow_html=True)
         
-        if st.button("🚀 Compilar Escenario de Vulnerabilidad Espacial", use_container_width=True):
+        if st.button("🚀 Compilar Escenario de Vulnerabilidad Espacial", width="stretch"):
             with st.spinner(f"Sincronizando estaciones (internas + buffer) vía {interp_method}..."):
                 trend_data = []
                 if df_anual is not None:
@@ -4595,7 +4595,7 @@ def display_climate_scenarios_tab(**kwargs):
                             plot_bgcolor='#e8f4f8'
                         )
 
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
                     # --- CONSOLA DE DESCARGAS MULTIFORMATO ---
                     st.success(f"Análisis geoestadístico completado con éxito para {len(trend_data)} estaciones.")
@@ -4604,14 +4604,14 @@ def display_climate_scenarios_tab(**kwargs):
                         st.download_button(
                             "📥 Exportar Tendencias (JSON)", 
                             df_trend.to_json(orient="records"), 
-                            "vulnerabilidad_puntos.json", "application/json", use_container_width=True
+                            "vulnerabilidad_puntos.json", "application/json", width="stretch"
                         )
                     with cd2:
                         df_grid = pd.DataFrame({"lon": grid_x.flatten(), "lat": grid_y.flatten(), "slope": grid_z.flatten()}).dropna()
                         st.download_button(
                             "📥 Exportar Capa Raster (CSV)", 
                             df_grid.to_csv(index=False), 
-                            "vulnerabilidad_espacial.csv", "text/csv", use_container_width=True
+                            "vulnerabilidad_espacial.csv", "text/csv", width="stretch"
                         )
                 else:
                     st.error("⚠️ Se requieren al menos 4 estaciones con series históricas para interpolar el espacio.")
@@ -4817,7 +4817,7 @@ def display_climate_scenarios_tab(**kwargs):
                     orientation="h",
                 )
                 fig_ppt.add_vline(x=0, line_width=1, line_color="black")
-                st.plotly_chart(fig_ppt, use_container_width=True)
+                st.plotly_chart(fig_ppt, width="stretch")
             with c_g2:
                 fig_temp = px.bar(
                     df_sim,
@@ -4829,7 +4829,7 @@ def display_climate_scenarios_tab(**kwargs):
                     text_auto=".1f",
                     orientation="h",
                 )
-                st.plotly_chart(fig_temp, use_container_width=True)
+                st.plotly_chart(fig_temp, width="stretch")
 
             st.markdown("##### 📋 Detalles de Escenarios")
             st.dataframe(
@@ -5060,7 +5060,7 @@ def display_land_cover_analysis_tab(df_long, gdf_stations, **kwargs):
                 folium.LayerControl().add_to(m)
                 
                 from streamlit_folium import st_folium
-                st_folium(m, height=600, use_container_width=True, key="map_lc_2026")
+                st_folium(m, height=600, width="stretch", key="map_lc_2026")
                 
                 if show_legend:
                     st.markdown("#### 🎨 Leyenda de Ecosistemas")
@@ -5136,7 +5136,7 @@ def display_land_cover_analysis_tab(df_long, gdf_stations, **kwargs):
                     st.dataframe(df_comp.style.format({
                         'Escenario 2026 (km²)': '{:,.2f}', 'Línea Base 2020 (km²)': '{:,.2f}', 
                         'Variación Neta (km²)': lambda x: f"+{x:,.2f}" if x > 0 else f"{x:,.2f}"
-                    }), use_container_width=True)
+                    }), width="stretch")
 
                     st.markdown("### 🧠 Diagnóstico Ecosistémico Automatizado")
                     cat_naturales = ['Bosque', 'Vegetación Herbácea / Arbustiva', 'Humedales', 'Agua / Cuerpos de Agua']
@@ -5199,7 +5199,7 @@ def display_land_cover_analysis_tab(df_long, gdf_stations, **kwargs):
                                 st.dataframe(df_comp_predios.style.format({
                                     'Escenario 2026 (km²)': '{:,.4f}', 'Línea Base 2020 (km²)': '{:,.4f}', 
                                     'Variación Neta (km²)': lambda x: f"+{x:,.4f}" if x > 0 else f"{x:,.4f}"
-                                }), use_container_width=True)
+                                }), width="stretch")
                                 
                                 bosque_predios = df_comp_predios[df_comp_predios['Ecosistema'] == 'Bosque']
                                 delta_b_predios = bosque_predios['Variación Neta (km²)'].values[0] if not bosque_predios.empty else 0
@@ -5309,7 +5309,7 @@ def display_land_cover_analysis_tab(df_long, gdf_stations, **kwargs):
                             go.Bar(name="Proyectado", x=["Escorrentía Anual"], y=[vol_sim], marker_color="#2ca02c", text=f"{vol_sim:.1f} Mm³", textposition="auto")
                         ])
                         fig_sim.update_layout(barmode='group', title="Comparativa de Volúmenes de Escorrentía (Millones de m³)")
-                        st.plotly_chart(fig_sim, use_container_width=True)
+                        st.plotly_chart(fig_sim, width="stretch")
                         
                         # 🚀 FIX 3: CAJA INTELIGENTE DE OBSERVACIÓN HÍDRICA
                         if 'data_2020' in locals() and data_2020 is None:
@@ -5672,7 +5672,7 @@ def display_bias_correction_tab(df_long, gdf_stations, gdf_filtered, **kwargs):
                         title="Fondo: Satélite | Puntos: Estaciones (Posición Real)",
                         height=500,
                     )
-                    st.plotly_chart(fig_map, use_container_width=True)
+                    st.plotly_chart(fig_map, width="stretch")
                 except Exception as e:
                     st.warning(f"No se pudo interpolar: {e}")
                     st.map(map_agg)
@@ -6722,15 +6722,15 @@ def display_enso_system_dynamics_tab(df_monthly_filtered, nombre_zona, gdf_zona=
                 st.markdown("### 🌿 Escenario A: Línea Base (Proyección Estadística)")
                 st.caption("Tendencia natural esperada basada en historia, asumiendo ONI Neutral.")
                 fig_h_base, fig_i_base = plot_escenario_dinamico(df_base, "Base")
-                st.plotly_chart(fig_h_base, use_container_width=True)
-                st.plotly_chart(fig_i_base, use_container_width=True)
+                st.plotly_chart(fig_h_base, width="stretch")
+                st.plotly_chart(fig_i_base, width="stretch")
             
             with col_der:
                 st.markdown("### 🌪️ Escenario B: Estrés ENSO Proyectado")
                 st.caption("Respuesta del territorio proyectada bajo la anomalía oceánica seleccionada.")
                 fig_h_sim, fig_i_sim = plot_escenario_dinamico(df_sim, "Proyectado")
-                st.plotly_chart(fig_h_sim, use_container_width=True)
-                st.plotly_chart(fig_i_sim, use_container_width=True)
+                st.plotly_chart(fig_h_sim, width="stretch")
+                st.plotly_chart(fig_i_sim, width="stretch")
 
         # ==================================================================
         # 🌲 ANÁLISIS FORENSE DE BIODIVERSIDAD (NEXO SATELITAL)
@@ -6840,7 +6840,7 @@ def display_enso_system_dynamics_tab(df_monthly_filtered, nombre_zona, gdf_zona=
                 yaxis_title="Variación de Volumen (Hm³)"
             )
             
-            st.plotly_chart(fig_waterfall, use_container_width=True)
+            st.plotly_chart(fig_waterfall, width="stretch")
             st.caption("🔴 **Barras Rojas:** El embalse pierde volumen (Aportes < Demanda). | 🟢 **Barras Verdes:** El embalse se recupera (Aportes > Demanda).")
         
         with st.expander("📊 Ver Tablas de Datos y Exportar"):
@@ -6848,9 +6848,9 @@ def display_enso_system_dynamics_tab(df_monthly_filtered, nombre_zona, gdf_zona=
             formato_columnas = {'ONI': '{:.2f}', 'Precipitación (mm)': '{:.1f}', 'Temperatura (°C)': '{:.1f}'}
             
             with tab_base: 
-                st.dataframe(df_base.style.format(formato_columnas), use_container_width=True)
+                st.dataframe(df_base.style.format(formato_columnas), width="stretch")
             with tab_esc: 
-                st.dataframe(df_sim.style.format(formato_columnas).background_gradient(cmap="Reds", subset=['Riesgo Incendios (0-100)', 'Desabastecimiento (0-100)', 'Pérdida Recarga (mm)']), use_container_width=True)
+                st.dataframe(df_sim.style.format(formato_columnas).background_gradient(cmap="Reds", subset=['Riesgo Incendios (0-100)', 'Desabastecimiento (0-100)', 'Pérdida Recarga (mm)']), width="stretch")
             
             csv_export = df_sim.copy()
             csv_export['Fecha'] = csv_export['Fecha'].dt.strftime('%Y-%m')

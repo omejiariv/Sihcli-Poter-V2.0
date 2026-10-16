@@ -187,7 +187,7 @@ with st.expander("🛠️ Herramientas de Sincronización y Extracción de Datos
             file_name="DatosPptnmes_Delta_2021_HOY.csv",
             mime="text/csv",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             key="btn_download_copernicus"
         )
         
@@ -307,7 +307,7 @@ def editor_tabla_gis(nombre_tabla, key_editor):
         st.info(f"Mostrando primeros 1000 registros de **{nombre_tabla}**. ({len(df.columns)} campos)")
         
         # KEY ÚNICA AQUÍ TAMBIÉN
-        df_editado = st.data_editor(df, key=key_editor, use_container_width=True, num_rows="dynamic")
+        df_editado = st.data_editor(df, key=key_editor, width="stretch", num_rows="dynamic")
         
         if st.button(f"💾 Guardar Cambios en {nombre_tabla}", key=f"btn_{key_editor}"):
             st.warning("⚠️ Edición directa deshabilitada por seguridad en esta versión. Use la carga de archivos para cambios masivos.")
@@ -342,7 +342,7 @@ with tabs[0]:
             
         try:
             df_est_db = pd.read_sql("SELECT id_estacion, nombre, municipio, departamento, latitud, longitud, altitud FROM estaciones ORDER BY id_estacion", engine)
-            st.dataframe(df_est_db, use_container_width=True)
+            st.dataframe(df_est_db, width="stretch")
         except Exception as e:
             st.warning(f"No se pudo cargar la tabla de estaciones: {e}")
 
@@ -696,7 +696,7 @@ with tabs[2]:
                         df_indices = df_indices.sort_values(col_fecha, ascending=False)
                     except: pass
                 
-                st.dataframe(df_indices, use_container_width=True)
+                st.dataframe(df_indices, width="stretch")
                 
         except Exception as e:
             st.info("ℹ️ No hay datos de índices. Usa la pestaña de carga.")
@@ -746,7 +746,7 @@ with tabs[3]:
             df_predios = pd.read_sql(f"SELECT {cols_sql} FROM predios", engine)
             
             st.success(f"✅ Se encontraron {len(df_predios)} predios en la base de datos.")
-            st.dataframe(df_predios, use_container_width=True)
+            st.dataframe(df_predios, width="stretch")
             
         except Exception as e:
             st.warning("No se pudo leer la tabla 'predios'. Posiblemente aún no se ha cargado correctamente.")
@@ -811,7 +811,7 @@ with tabs[4]:
                 cols_str = ", ".join([f'"{c}"' for c in cols_bd])
                 df_c = pd.read_sql(f"SELECT {cols_str} FROM cuencas LIMIT 500", engine)
                 st.markdown(f"**Muestra (500 registros):** | **Columnas BD:** {cols_bd}")
-                st.dataframe(df_c, use_container_width=True)
+                st.dataframe(df_c, width="stretch")
             else:
                 st.info("La tabla 'cuencas' existe pero no tiene columnas legibles.")
         except: 
@@ -892,7 +892,7 @@ with tabs[5]:
             df_m_edit = st.data_editor(
                 df_m, 
                 key="editor_municipios", 
-                use_container_width=True,
+                width="stretch",
                 height=500
             )
             
@@ -1156,7 +1156,7 @@ with tabs[11]: # Índice 10 porque es la pestaña número 11 (0-10)
             "Campos Clave": st.column_config.TextColumn("Campos / Columnas", width="large"),
         },
         hide_index=True,
-        use_container_width=True
+        width="stretch"
     )
 
 # ==============================================================================
@@ -1295,9 +1295,9 @@ with tabs[14]:
                 st.success(f"✅ Archivo leído correctamente: {len(df_nuevo):,} registros detectados.")
                 
                 with st.expander("👁️ Vista Previa Rápida"):
-                    st.dataframe(df_nuevo.head(5), use_container_width=True)
+                    st.dataframe(df_nuevo.head(5), width="stretch")
                 
-                if st.button("🚀 Subir a Supabase Storage", type="primary", use_container_width=True):
+                if st.button("🚀 Subir a Supabase Storage", type="primary", width="stretch"):
                     with st.spinner("Conectando con Supabase y transfiriendo el archivo..."):
                         try:
                             nombre_bucket = "sihcli_maestros" # <-- ¡Asegúrate de que este es tu bucket!
@@ -1504,7 +1504,7 @@ with tabs[15]:
             with col_dan:
                 file_dan = st.file_uploader("3. Sectores Rurales", type=['geojson', 'json'], help="Sube: MGN_ANM_DANE1.json")
 
-            if st.button("⚡ Ejecutar Fusión a Base de Datos", type="primary", use_container_width=True):
+            if st.button("⚡ Ejecutar Fusión a Base de Datos", type="primary", width="stretch"):
                 if not (file_cab and file_cen and file_dan):
                     st.warning("⚠️ Por favor, carga los tres archivos maestros para ejecutar la operación.")
                 else:
@@ -1560,7 +1560,7 @@ with tabs[15]:
         with st.expander("🛠️ Abrir Panel de Migración CSV", expanded=False):
             file_ver = st.file_uploader("Sube el archivo de Veredas", type=['csv'], help="Sube: veredas_Antioquia.csv")
             
-            if st.button("⚡ Ejecutar Inyección de Veredas a BD", type="primary", use_container_width=True):
+            if st.button("⚡ Ejecutar Inyección de Veredas a BD", type="primary", width="stretch"):
                 if file_ver:
                     import pandas as pd
                     from modules.db_manager import get_engine
@@ -1607,7 +1607,7 @@ with tabs[15]:
         with st.expander("🛠️ Abrir Panel de Migración GeoJSON Veredal", expanded=False):
             file_geo_ver = st.file_uploader("Sube la geometría de Veredas", type=['geojson', 'json'], help="Veredas_Antioquia_TOTAL_UrbanoyRural.geojson")
             
-            if st.button("⚡ Ejecutar Inyección a PostGIS", type="primary", use_container_width=True):
+            if st.button("⚡ Ejecutar Inyección a PostGIS", type="primary", width="stretch"):
                 if file_geo_ver:
                     import geopandas as gpd
                     from modules.db_manager import get_engine
@@ -1647,7 +1647,7 @@ with tabs[15]:
         with st.expander("🛠️ Abrir Panel de Migración GeoJSON Municipal", expanded=False):
             file_geo_mun = st.file_uploader("Sube la geometría de Municipios", type=['geojson', 'json'], help="mgn_municipios_optimizado.geojson")
             
-            if st.button("⚡ Ejecutar Inyección Municipal a PostGIS", type="primary", use_container_width=True):
+            if st.button("⚡ Ejecutar Inyección Municipal a PostGIS", type="primary", width="stretch"):
                 if file_geo_mun:
                     import geopandas as gpd
                     from modules.db_manager import get_engine
@@ -1755,7 +1755,7 @@ with tabs[16]:
     with col_u:
         st.subheader("📤 Carga Directa")
         f = st.file_uploader("Subir activo hídrico/espacial", type=['tif', 'geojson', 'csv', 'parquet'], key="cloud_up_final")
-        if f and st.button("🚀 Enviar a la Nube", use_container_width=True):
+        if f and st.button("🚀 Enviar a la Nube", width="stretch"):
             content_type = "image/tiff" if f.name.endswith('.tif') else "application/json"
             try:
                 res = cliente_supabase.storage.from_(bucket_selector).upload(
@@ -1780,7 +1780,7 @@ with tabs[16]:
                 if not df_cloud.empty and 'created_at' in df_cloud.columns:
                     # Formatear la fecha para que sea legible
                     df_cloud['created_at'] = pd.to_datetime(df_cloud['created_at']).dt.strftime('%Y-%m-%d %H:%M')
-                    st.dataframe(df_cloud[['name', 'created_at']], use_container_width=True, hide_index=True)
+                    st.dataframe(df_cloud[['name', 'created_at']], width="stretch", hide_index=True)
                 else:
                     st.info("No hay archivos válidos en este depósito.")
             else:

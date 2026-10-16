@@ -998,7 +998,7 @@ with tab_demanda:
             fig_sub = px.bar(df_chart, x="Categoría", y="Caudal (L/s)", color="Componente", color_discrete_map={"Consumo Neto": "#2980b9", "Pérdidas de Acueducto": "#e67e22", "Concesión Superficial": "#3498db", "Concesión Subterránea": "#2ecc71"}, title="Demanda Bruta vs Permisos Otorgados (Sector Doméstico)")
             fig_sub.update_layout(height=350, margin=dict(t=40, b=0, l=0, r=0))
             fig_sub.add_hline(y=q_efectivo_dom, line_dash="dash", line_color="red", annotation_text="Límite Extracción Bruta")
-            st.plotly_chart(fig_sub, use_container_width=True)
+            st.plotly_chart(fig_sub, width="stretch")
             
         with c_form2:
             st.markdown("<br>", unsafe_allow_html=True)
@@ -1024,7 +1024,7 @@ with tab_demanda:
                     df_view_usos = df_usos_detalle.head(1000).astype(str)
                 else:
                     df_view_usos = df_usos_detalle.astype(str)
-                st.dataframe(df_view_usos, use_container_width=True)
+                st.dataframe(df_view_usos, width="stretch")
             with c2:
                 csv = df_usos_detalle.to_csv(index=False).encode('utf-8')
                 st.download_button("📥 Descargar Desglose Completo (CSV)", data=csv, file_name=f'Usos_{nombre_seleccion}.csv', mime='text/csv')
@@ -1046,7 +1046,7 @@ with tab_demanda:
         
         col_btn1, col_btn2 = st.columns([1, 2])
         with col_btn1:
-            if st.button("🚀 Exportar Huella Total al Modelo WRI", use_container_width=True):
+            if st.button("🚀 Exportar Huella Total al Modelo WRI", width="stretch"):
                 st.session_state['demanda_total_m3s'] = caudal_total_m3_s
                 st.success("✅ ¡Dato inyectado en la Memoria Global! Dirígete a 'Sistemas Hídricos' o 'Toma de Decisiones'.")
         with col_btn2:
@@ -1276,7 +1276,7 @@ with tab_fuentes:
             })
             carga_hoy_total = df_cargas_hoy['DBO_kg_dia'].sum()
             fig_bar = px.bar(df_cargas_hoy, x="DBO_kg_dia", y="Fuente", orientation='h', title=f"Aportes de DBO5 ({carga_hoy_total:,.1f} kg/día)", color="Fuente", color_discrete_sequence=px.colors.qualitative.Bold)
-            st.plotly_chart(fig_bar, use_container_width=True)
+            st.plotly_chart(fig_bar, width="stretch")
             
         with col_g2:
             st.caption(f"**Metabolismo Futuro Dinámico (hasta {anio_limite})**")
@@ -1294,7 +1294,7 @@ with tab_fuentes:
                 xaxis_title="Año", yaxis_title="DBO5 (kg/día)", hovermode="x unified",
                 legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5)
             )
-            st.plotly_chart(fig_stack, use_container_width=True)
+            st.plotly_chart(fig_stack, width="stretch")
             
     else:
         st.warning("⚠️ **Base de Datos Vacía:** Las tablas maestras no tienen datos en Supabase. Forja los modelos en el módulo 06.")
@@ -1309,7 +1309,7 @@ with tab_fuentes:
         col_g1, col_g2 = st.columns(2)
         with col_g1:
             fig_cargas = px.bar(df_cargas, x="DBO_kg_dia", y="Fuente", orientation='h', title=f"Aportes de DBO5 ({carga_total_dbo_dia:,.1f} kg/día)", color="Fuente", color_discrete_sequence=px.colors.qualitative.Bold)
-            st.plotly_chart(fig_cargas, use_container_width=True)
+            st.plotly_chart(fig_cargas, width="stretch")
         with col_g2:
             st.subheader("📈 Evolución de Carga Orgánica (Proyectada)")
             # Fallback seguro por si anios_evo y factor_evo no vienen de arriba
@@ -1322,7 +1322,7 @@ with tab_fuentes:
             
             fig_dbo_evo = go.Figure()
             fig_dbo_evo.add_trace(go.Scatter(x=anios_evo_seguros, y=dbo_evo, mode='lines', fill='tozeroy', name='Carga DBO (kg/d)', line=dict(color='#e74c3c', width=3)))
-            st.plotly_chart(fig_dbo_evo, use_container_width=True)
+            st.plotly_chart(fig_dbo_evo, width="stretch")
         
 # =====================================================================
 # 🌊 MÓDULO AVANZADO: ASIMILACIÓN Y CURVA DE OXÍGENO (STREETER-PHELPS)
@@ -1576,7 +1576,7 @@ with st.expander(f"🏭 Presión Antrópica y Vertimiento Hipotético en {nombre
     df_portafolio = st.data_editor(
         df_descargas_base, 
         num_rows="dynamic", 
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "Activo": st.column_config.CheckboxColumn("Activo", default=True),
@@ -1710,7 +1710,7 @@ estado_rio = "⚠️ Riesgo Ecológico" if od_minimo < 4.0 else "✅ Saludable"
 m_r2.metric("OD Mínimo Crítico", f"{od_minimo:.1f} mg/L", delta=estado_rio, delta_color="inverse" if od_minimo < 4.0 else "normal")
 m_r3.metric("Ubicación del Impacto", f"Km {km_critico:.1f}")
 
-st.plotly_chart(fig_sag, use_container_width=True)
+st.plotly_chart(fig_sag, width="stretch")
 
 # ==========================================================
 # 🧠 ACTUALIZACIÓN DEL ALEPH (Sincronización Total)
@@ -1803,7 +1803,7 @@ with tab_mitigacion:
             "Valor": [_q_efec_dom, _carga_base_dia, q_efectivo_esc, carga_total_esc]
         })
         fig_esc = px.bar(df_esc, x="Variable", y="Valor", color="Escenario", barmode="group", title="Impacto Integral del Proyecto", color_discrete_sequence=["#e74c3c", "#2ecc71"])
-        st.plotly_chart(fig_esc, use_container_width=True)
+        st.plotly_chart(fig_esc, width="stretch")
 
     # -------------------------------------------------------------------------
     # PORTAFOLIO DE INVERSIÓN (SANEAMIENTO Y SbN) EN CALIDAD
@@ -1947,7 +1947,7 @@ with tab_mapa:
                     fig_tree = px.treemap(df_agg, path=[px.Constant(nombre_seleccion), 'municipio'], values='Valor', color='Valor', color_continuous_scale='Reds', title="Carga Orgánica DBO (kg/día) aportada por Municipio")
                     
                 fig_tree.update_traces(textinfo="label+value")
-                st.plotly_chart(fig_tree, use_container_width=True)
+                st.plotly_chart(fig_tree, width="stretch")
             else:
                 st.warning("⚠️ No hay intersección poblacional calculable. (Los registros están vacíos o fuera del alcance).")
         else:
@@ -2081,7 +2081,7 @@ with tab_mapa:
                     title=f"Distribución Espacial en {nombre_seleccion}",
                     hovermode="closest"
                 )
-                st.plotly_chart(fig_dens, use_container_width=True, config={'scrollZoom': True})
+                st.plotly_chart(fig_dens, width="stretch", config={'scrollZoom': True})
             else:
                 st.warning(f"⚠️ No hay registros de concesiones RURH (o cayeron fuera) dentro del polígono de {nombre_seleccion}.")
         else:
@@ -2109,7 +2109,7 @@ with tab_sirena:
             else:
                 df_view_exp = df_exp.astype(str)
                 
-            st.dataframe(df_view_exp, use_container_width=True)
+            st.dataframe(df_view_exp, width="stretch")
             
         with c_exp2:
             if df_exp['caudal_lps'].sum() > 0:
@@ -2118,7 +2118,7 @@ with tab_sirena:
                 import plotly.express as px
                 fig_exp = px.pie(df_agg[df_agg['caudal_lps']>0], values='caudal_lps', names=agrupador, hole=0.4, title=f"Total: {df_agg['caudal_lps'].sum():,.1f} L/s")
                 fig_exp.update_traces(textposition='inside', textinfo='value+label')
-                st.plotly_chart(fig_exp, use_container_width=True)
+                st.plotly_chart(fig_exp, width="stretch")
     else:
         st.warning("⚠️ No hay registros espaciales o semánticos válidos en la zona seleccionada.")
 
@@ -2205,7 +2205,7 @@ with tab_extern:
         
         fig_co2 = px.pie(df_co2e, values="tCO2e_año", names="Sector", hole=0.4, title="Distribución de la Huella de Carbono")
         fig_co2.update_traces(textposition='inside', textinfo='percent+label')
-        st.plotly_chart(fig_co2, use_container_width=True)
+        st.plotly_chart(fig_co2, width="stretch")
         
     with col_ext2:
         st.subheader("Balance de Nutrientes (Eutrofización)")
@@ -2253,7 +2253,7 @@ with tab_extern:
         
         st.dataframe(df_view_pivot.style.format({
             "Nitrógeno (N)": "{:,.1f}", "Fósforo (P)": "{:,.1f}", "Potasio (K)": "{:,.1f}", "Huella_Carbono (tCO2e/año)": "{:,.0f}"
-        }), use_container_width=True)
+        }), width="stretch")
         
     with col_t2:
         csv_ext = df_pivot.to_csv(index=False).encode('utf-8')
@@ -2296,7 +2296,7 @@ with tab_lactosuero:
         })
         fig_suero = px.pie(df_suero, values="Volumen (L/día)", names="Destino", hole=0.5, color_discrete_sequence=["#f1c40f", "#e67e22"])
         fig_suero.update_traces(textposition='inside', textinfo='percent+label')
-        st.plotly_chart(fig_suero, use_container_width=True)
+        st.plotly_chart(fig_suero, width="stretch")
 
     with col_l2:
         st.subheader("🔄 Potencial Tecnológico (Transformación a WPC)")

@@ -722,7 +722,7 @@ with st.expander(f"🌐 Inteligencia Territorial WRI: {nodo_seleccionado}", expa
             est, color_txt = evaluar_indice(item["val"], item["u_r"], item["u_v"], item["inv"])
             
             # Renderizamos el velocímetro optimizado (ahora con números visibles)
-            st.plotly_chart(crear_velocimetro(item["val"], item["tit"], item["col"], item["u_r"], item["u_v"], item["inv"]), use_container_width=True)
+            st.plotly_chart(crear_velocimetro(item["val"], item["tit"], item["col"], item["u_r"], item["u_v"], item["inv"]), width="stretch")
             
             # Subtítulos de Estado y Leyenda con contraste mejorado
             st.markdown(f"<p style='text-align: center; color: {color_txt}; font-weight: bold; margin-top:-35px; font-size: 16px;'>{est}</p>", unsafe_allow_html=True)
@@ -1086,7 +1086,7 @@ with st.expander(f"📈 Proyección Dinámica de Seguridad Hídrica {nodo_selecc
         fig_line1.add_hrect(y0=0, y1=40, fillcolor="red", opacity=0.05, layer="below", annotation_text="  Zona Crítica (<40%)")
         fig_line1.add_hrect(y0=40, y1=70, fillcolor="orange", opacity=0.05, layer="below", annotation_text="  Zona Vulnerable (40-70%)")
         fig_line1.update_layout(height=400, hovermode="x unified", yaxis_range=[0, 105])
-        st.plotly_chart(fig_line1, use_container_width=True)
+        st.plotly_chart(fig_line1, width="stretch")
 
     with tab_escenarios:
         st.markdown("Analiza la dispersión de futuros posibles para un solo indicador bajo intensidades climáticas sostenidas.")
@@ -1158,7 +1158,7 @@ with st.expander(f"📈 Proyección Dinámica de Seguridad Hídrica {nodo_selecc
             fig_esc.add_hrect(y0=0, y1=40, fillcolor="red", opacity=0.05, layer="below", annotation_text="Colapso / Crítico (<40%)")
             fig_esc.add_hrect(y0=40, y1=70, fillcolor="orange", opacity=0.05, layer="below", annotation_text="Vulnerable (40-70%)")
             fig_esc.update_layout(height=450, hovermode="x unified", yaxis_range=[0, 105], legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5))
-            st.plotly_chart(fig_esc, use_container_width=True)
+            st.plotly_chart(fig_esc, width="stretch")
             
 # =========================================================================
 # 6. METABOLISMO TERRITORIAL: PRIORIDAD DE CENSO REAL (SINCRONIZADO)
@@ -1237,7 +1237,7 @@ with st.expander(f"💧 Metabolismo Hídrico y Material: {nodo_seleccionado}", e
         st.metric("☣️ Carga Orgánica al Río (DBO5)", f"{carga_total_ton:,.0f} Ton/año")
         st.metric("🗑️ Residuos Sólidos Totales", f"{rs_total_ton_ano:,.0f} Ton/año", f"{rs_org_ton_ano:,.0f} Ton Orgánicas")
         
-        if st.button("🚀 Actualizar Dinámica del Embalse", use_container_width=True, key=f"btn_act_{nodo_seleccionado}"):
+        if st.button("🚀 Actualizar Dinámica del Embalse", width="stretch", key=f"btn_act_{nodo_seleccionado}"):
             st.success("✅ Extracción y metabolismo guardados en el Aleph.")
 
     with c_res2:
@@ -1255,7 +1255,7 @@ with st.expander(f"💧 Metabolismo Hídrico y Material: {nodo_seleccionado}", e
                               title="Distribución del Metabolismo Material",
                               color='Categoria', color_discrete_sequence=px.colors.qualitative.Pastel)
         fig_sun.update_layout(height=400, margin=dict(t=40, b=0, l=0, r=0))
-        st.plotly_chart(fig_sun, use_container_width=True)
+        st.plotly_chart(fig_sun, width="stretch")
         
 # =========================================================================
 # 8. HUELLA HÍDRICA TERRITORIAL (CONECTADA AL GEMELO DIGITAL)
@@ -1494,7 +1494,7 @@ with contenedor_sankey.container():
             font=dict(size=12, family="Arial, sans-serif", color="#1f2937"), 
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)"
         )
-        st.plotly_chart(fig_sankey1, use_container_width=True)
+        st.plotly_chart(fig_sankey1, width="stretch")
 
     # ---------------------------------------------------------
     # ♻️ DIAGRAMA 2: RUTA DEL AGUA Y ECONOMÍA CIRCULAR (CON BUCLE)
@@ -1626,7 +1626,7 @@ with contenedor_sankey.container():
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)"
     )
     
-    st.plotly_chart(fig_sankey_circ, use_container_width=True)
+    st.plotly_chart(fig_sankey_circ, width="stretch")
         
 # =========================================================================
 # 8. MATEMÁTICA Y CIENCIA

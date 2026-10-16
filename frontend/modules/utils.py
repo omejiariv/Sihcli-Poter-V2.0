@@ -447,4 +447,4 @@ def renderizar_radar_espacial(gdf_base, gdf_activo, titulo="Ubicación Relativa"
         title=dict(text=titulo, font=dict(color="#94a3b8", size=12))
     )
     
-    st.plotly_chart(fig, use_container_width=True, config={'staticPlot': True, 'displayModeBar': False})
+    st.plotly_chart(fig, width="stretch", config={'staticPlot': True, 'displayModeBar': False})

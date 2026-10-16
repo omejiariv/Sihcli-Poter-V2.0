@@ -494,7 +494,7 @@ else:
                 fig.update_yaxes(title_text="Caudal (m³/s)", secondary_y=True, showgrid=False)
                 
                 with st.expander(f"📊 Ver Gráfico Hidro-Climático", expanded=True):
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
                 lluvia_total = sum(precip_media)
                 etp_total = sum(etp_cota)
@@ -683,7 +683,7 @@ else:
                 fig_w.update_yaxes(range=[0, techo_y if techo_y > 0 else 1.0], title_text="Caudal Extraíble (m³/s)", secondary_y=False)
                 fig_w.update_yaxes(title_text="Lámina Climática (mm)", secondary_y=True, showgrid=False)
                 fig_w.update_layout(hovermode="x unified", template="plotly_white", margin=dict(l=20, r=50, t=20, b=20), height=500, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5))
-                st.plotly_chart(fig_w, use_container_width=True)
+                st.plotly_chart(fig_w, width="stretch")
 
                 # 🛡️ 5. Diagnóstico Clínico, Oráculo y Matriz Expandida
                 df_weap = pd.DataFrame({
@@ -759,8 +759,8 @@ else:
                 with wc_matriz:
                     st.markdown("##### 📋 Matriz de Balances Total")
                     csv_weap = df_weap.to_csv(index=False).encode('utf-8')
-                    st.download_button("📥 Descargar Matriz Expandida (CSV)", data=csv_weap, file_name=f"Matriz_WEAP_{territorio_str}.csv", mime="text/csv", use_container_width=True)
-                    st.dataframe(df_weap.style.format(precision=2), use_container_width=True, height=550)
+                    st.download_button("📥 Descargar Matriz Expandida (CSV)", data=csv_weap, file_name=f"Matriz_WEAP_{territorio_str}.csv", mime="text/csv", width="stretch")
+                    st.dataframe(df_weap.style.format(precision=2), width="stretch", height=550)
 
         except Exception as e:
             st.error(f"🔌 Error de procesamiento: {e}")

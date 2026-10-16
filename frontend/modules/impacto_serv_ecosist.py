@@ -96,7 +96,7 @@ def render_sigacal_analysis(gdf_predios=None):
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
     
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     # --- ANÁLISIS DE IMPACTO ---
     col1, col2 = st.columns([2, 1])
@@ -106,7 +106,7 @@ def render_sigacal_analysis(gdf_predios=None):
         if all(col in df_siga.columns for col in ['AreaAcu_ha', 'Dk_sedimentos_tru_acum']):
             fig2.add_trace(go.Scatter(x=df_siga['AreaAcu_ha'], y=df_siga['Dk_sedimentos_tru_acum'], name="Retención Sedimentos", line=dict(color='brown', width=3)))
         fig2.update_layout(title="<b>Curva de Eficiencia: Retención de Sedimentos</b>", template="plotly_white")
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width="stretch")
 
     with col2:
         st.write("#### 🛡️ Diagnóstico de la Cuenca")

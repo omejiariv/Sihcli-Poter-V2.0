@@ -44,7 +44,7 @@ try:
     """)
     
     df_esquema = pd.read_sql(q, engine_sql)
-    st.dataframe(df_esquema, use_container_width=True)
+    st.dataframe(df_esquema, width="stretch")
     
 except Exception as e:
     st.error(f"Error conectando a la BD: {e}")
@@ -68,7 +68,7 @@ def muro_de_acceso_beta():
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             clave_beta = st.text_input("Credencial de Acceso:", type="password")
-            if st.button("Ingresar al Gemelo Digital", type="primary", use_container_width=True):
+            if st.button("Ingresar al Gemelo Digital", type="primary", width="stretch"):
                 if clave_beta == st.secrets.get("CLAVE_BETA", "AdminPoter"):
                     st.session_state["beta_unlocked"] = True
                     st.rerun() 
@@ -103,7 +103,7 @@ with tab_sonda:
     st.header("🩻 Escáner Profundo de Matrices SQL")
     st.info("Esta sonda analiza directamente Supabase para verificar si las tablas existen y si tienen las columnas correctas (como LLAVE_UNIVERSAL).")
     
-    if st.button("🚀 Iniciar Sonda de Diagnóstico", type="primary", use_container_width=True):
+    if st.button("🚀 Iniciar Sonda de Diagnóstico", type="primary", width="stretch"):
         with st.spinner("Conectando con Supabase e interrogando las tablas..."):
             try:
                 with engine.connect() as conn:

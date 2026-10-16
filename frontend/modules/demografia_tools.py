@@ -58,7 +58,7 @@ def render_motor_demografico(lugar_defecto="Antioquia"):
         
     with col_btn2:
         st.write("") 
-        if st.button("👥 Sincronizar Población Real", use_container_width=True, key=f"db_{lugar_defecto}"):
+        if st.button("👥 Sincronizar Población Real", width="stretch", key=f"db_{lugar_defecto}"):
             with st.spinner("Consultando Matriz SQL..."):
                 pob_calculada = obtener_poblacion_matriz(lugar_defecto, anio_proyeccion)
                 

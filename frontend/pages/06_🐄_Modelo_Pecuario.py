@@ -283,7 +283,7 @@ if 'df_matriz_pecuaria' in st.session_state:
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                     )
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
                     st.success(f"📈 Proyección **{anio_destino}**: **{int(valor_futuro):,}** {especie.lower()}.")
                     
                 with c_info:
@@ -311,7 +311,7 @@ if 'df_matriz_pecuaria' in st.session_state:
                                 df_tabla = df_tabla[cols_ordenadas]
                     
                     st.markdown("#### 📄 Datos de Proyección")
-                    st.dataframe(df_tabla, use_container_width=True, hide_index=True, height=200)
+                    st.dataframe(df_tabla, width="stretch", hide_index=True, height=200)
                     
                     csv = df_tabla.to_csv(index=False).encode('utf-8')
                     st.download_button(f"📥 Descargar CSV ({especie})", csv, f"proyeccion_{especie.lower()}.csv", "text/csv", key=f"btn_{especie}")
@@ -673,11 +673,11 @@ with st.expander("🛠️ Entrenador de Modelos Pecuarios (Forja Automática a S
                     file_name="Matriz_Maestra_Pecuaria.csv",
                     mime="text/csv",
                     type="primary",
-                    use_container_width=True
+                    width="stretch"
                 )
             
             with col_b2:
-                if st.button("🚀 2. Inyectar a Base de Datos SQL (Supabase)", use_container_width=True):
+                if st.button("🚀 2. Inyectar a Base de Datos SQL (Supabase)", width="stretch"):
                     with st.spinner("Inyectando datos con Modo Autocommit activado..."):
                         try:
                             from modules.db_manager import get_engine
@@ -748,7 +748,7 @@ with st.spinner(f"Renderizando inteligencia espacial para {especie_mapa}..."):
                 fig_mapa1.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
                 
                 with tab_mapa1:
-                    st.plotly_chart(fig_mapa1, use_container_width=True)
+                    st.plotly_chart(fig_mapa1, width="stretch")
 
             # ==========================================
             # MAPA 2: TENDENCIAS DE CRECIMIENTO
@@ -822,7 +822,7 @@ with st.spinner(f"Renderizando inteligencia espacial para {especie_mapa}..."):
                                 )
                                 fig_mapa2.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
                                 
-                                st.plotly_chart(fig_mapa2, use_container_width=True)
+                                st.plotly_chart(fig_mapa2, width="stretch")
                             else:
                                 st.warning("⚠️ No se logró sincronizar la geometría con las predicciones. Intenta recargar la página.")
                         else:

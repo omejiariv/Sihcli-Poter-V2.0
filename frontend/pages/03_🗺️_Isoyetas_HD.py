@@ -736,7 +736,7 @@ with tab_mapa:
                         ))
                         
                         fig.update_layout(title=tit, height=650, margin=dict(l=0,r=0,t=40,b=0), xaxis=dict(visible=False, scaleanchor="y", scaleratio=1), yaxis=dict(visible=False), plot_bgcolor='white', dragmode='pan')
-                        st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
+                        st.plotly_chart(fig, width="stretch", config={'scrollZoom': True})
                         
                         # 🚀 FIX: Capturar el estado del sidebar y calcular el área
                         txt_var = f" (Variograma: {modelo_var_seleccionado})" if "Kriging" in metodo_seleccionado else ""
@@ -782,7 +782,7 @@ with tab_datos:
     if 'df_final' in locals() and not df_final.empty:
         st.subheader("💾 Descargas GIS")
         cols_show = [c for c in [col_id, col_nom, col_cuenca, 'valor'] if c in df_final.columns]
-        st.dataframe(df_final[cols_show].head(50) if cols_show else df_final.head(50), use_container_width=True)
+        st.dataframe(df_final[cols_show].head(50) if cols_show else df_final.head(50), width="stretch")
         
         c1, c2, c3 = st.columns(3)
         gdf_out = gpd.GeoDataFrame(df_final, geometry=gpd.points_from_xy(df_final.lon_calc, df_final.lat_calc), crs="EPSG:4326")

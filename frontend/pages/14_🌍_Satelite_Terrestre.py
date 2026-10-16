@@ -382,7 +382,7 @@ if iniciar_conexion_gee():
                     c_graf, c_tabla = st.columns([2, 1])
                     
                     with c_tabla:
-                        st.dataframe(df_coberturas.style.format({"Área (ha)": "{:,.1f}"}), use_container_width=True)
+                        st.dataframe(df_coberturas.style.format({"Área (ha)": "{:,.1f}"}), width="stretch")
                         
                     with c_graf:
                         fig_pie = px.pie(
@@ -394,7 +394,7 @@ if iniciar_conexion_gee():
                             }
                         )
                         fig_pie.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=350)
-                        st.plotly_chart(fig_pie, use_container_width=True)
+                        st.plotly_chart(fig_pie, width="stretch")
                         
             except Exception as e:
                 st.warning(f"Error procesando estadísticas satelitales: {e}")

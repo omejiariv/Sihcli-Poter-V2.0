@@ -12,7 +12,7 @@ def renderizar_inyeccion_rurh():
 
     url_excel = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/sihcli_maestros/Concesiones_SP_Metabolismo_Maestro.xls"
     
-    if st.button("🚀 Ejecutar Join Espacial y Consolidar (ETL)", type="primary", use_container_width=True):
+    if st.button("🚀 Ejecutar Join Espacial y Consolidar (ETL)", type="primary", width="stretch"):
         try:
             with st.spinner("1. Descargando matriz de puntos (RURH) desde Supabase..."):
                 response = requests.get(url_excel)
@@ -113,7 +113,7 @@ def renderizar_inyeccion_rurh():
                 df_consolidado.rename(columns={'Caudal_m3s': 'Presion_Total_RURH_m3s'}, inplace=True)
 
                 with st.expander("👁️ Vista Previa del Consolidado Final"):
-                    st.dataframe(df_consolidado.sort_values(by='Presion_Total_RURH_m3s', ascending=False).head(15), use_container_width=True)
+                    st.dataframe(df_consolidado.sort_values(by='Presion_Total_RURH_m3s', ascending=False).head(15), width="stretch")
 
             with st.spinner("5. Inyectando base de datos final a PostgreSQL... (Enviando en paquetes seguros)"):
                 with engine.begin() as conn:

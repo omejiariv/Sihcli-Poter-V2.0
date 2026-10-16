@@ -19,7 +19,7 @@ def muro_de_acceso_beta():
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             clave_beta = st.text_input("Credencial de Acceso:", type="password")
-            if st.button("Ingresar al Gemelo Digital", type="primary", use_container_width=True):
+            if st.button("Ingresar al Gemelo Digital", type="primary", width="stretch"):
                 # 💡 La contraseña por defecto es "Agua2026"
                 if clave_beta == st.secrets.get("CLAVE_BETA", "Agua2026"):
                     st.session_state["beta_unlocked"] = True

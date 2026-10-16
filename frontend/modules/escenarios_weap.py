@@ -281,7 +281,7 @@ def renderizar_motor_escenarios_weap(territorio, gdf_zona, pob_base_sugerida, an
     fig.update_layout(title="Dinámica Hidrosocial Completa (Clima, Oferta y Demanda)", hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5), height=600)
     fig.update_yaxes(title_text="Caudal Extraíble (m³/s)", secondary_y=False)
     fig.update_yaxes(title_text="Lámina Climática (mm)", secondary_y=True, showgrid=False)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     # =====================================================================
     # 🩺 FASE 6 Y 7: DIAGNÓSTICO CLÍNICO, ORÁCULO Y MATRIZ TOTAL
@@ -366,6 +366,6 @@ def renderizar_motor_escenarios_weap(territorio, gdf_zona, pob_base_sugerida, an
 
     with colB:
         st.subheader("📋 Matriz de Balances Total")
-        st.dataframe(df_weap.style.format(precision=2), use_container_width=True)
+        st.dataframe(df_weap.style.format(precision=2), width="stretch")
         csv = df_weap.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Descargar Matriz Expandida (CSV)", data=csv, file_name=f"Simulador_WEAP_{nombre_puro}.csv", mime="text/csv", use_container_width=True)
+        st.download_button("📥 Descargar Matriz Expandida (CSV)", data=csv, file_name=f"Simulador_WEAP_{nombre_puro}.csv", mime="text/csv", width="stretch")
