@@ -231,8 +231,8 @@ def renderizar_menu_navegacion(pagina_actual):
             "💧 Cuencas Hidrográficas": "CUENCA"
         }
         
-        # 2. El radio button tomará por defecto el primer elemento (Departamental)
-        escala_sel = st.radio("Escala de Análisis:", list(niveles.keys()), key="menu_escala_aleph")
+        # 2. El radio button tomará por defecto el elemento Municipal (índice 1)
+        escala_sel = st.radio("Escala de Análisis:", list(niveles.keys()), index=1, key="menu_escala_aleph")
         nivel_backend = niveles[escala_sel]
         
         # 3. Inicializamos la variable vacía para que se defina dentro del enrutador
@@ -515,4 +515,4 @@ def render_cabezote_sintesis_body(nombre_zona):
 # ====================================================================
 def cargar_atributos_cuencas(): return pd.DataFrame()
 def cargar_atributos_municipios(): return pd.DataFrame()
-def render_selector_espacial(modo_firma="clasica"): return [], "Antioquia", 1500.0, None, "Departamento"
+def render_selector_espacial(modo_firma="clasica"): return [], "MEDELLIN", 1500.0, None, "Municipal"

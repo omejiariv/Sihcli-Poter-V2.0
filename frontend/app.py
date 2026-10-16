@@ -1,14 +1,8 @@
 # frontend/app.py
 
 import os
-import pyproj
-
-# 🚀 PARCHE UNIVERSAL DE COORDENADAS (WINDOWS)
-# Esto fuerza a la aplicación a usar su propia base de datos EPSG y no la de QGIS
-if os.name == 'nt':
-    os.environ['PROJ_LIB'] = pyproj.datadir.get_data_dir()
-
 import sys
+import pyproj
 import streamlit as st
 import plotly.express as px
 import pandas as pd
@@ -20,6 +14,16 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# 🚀 PARCHE UNIVERSAL DE COORDENADAS (WINDOWS & LINUX/CLOUD)
+# El sistema detecta automáticamente dónde se está ejecutando para aplicar el parche correcto
+if os.name == 'nt':
+    # En Windows: Fuerza a la app a usar su propia BD EPSG (evita conflictos con QGIS local)
+    os.environ['PROJ_LIB'] = pyproj.datadir.get_data_dir()
+else:
+    # En Linux/Streamlit Cloud: Fuerza a Python a usar el motor moderno del sistema operativo
+    os.environ["PROJ_LIB"] = "/usr/share/proj"
+    os.environ["PROJ_DATA"] = "/usr/share/proj"    
 
 # --- 📂 IMPORTACIÓN ROBUSTA DE MÓDULOS ---
 try:

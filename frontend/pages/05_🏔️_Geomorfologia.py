@@ -252,8 +252,8 @@ def cargar_y_cortar_dem(ruta_dem, _gdf_corte, zona_id):
 st.title("🏔️ Análisis Geomorfológico y Terreno 3D")
 st.markdown("Esta herramienta utiliza el **Modelo Digital de Elevación (DEM)** para modelar el terreno, calcular pendientes, extraer vectores de drenaje y realizar diagnósticos hidrológicos automáticos.")
 
-nombre_zona = st.session_state.get('aleph_lugar', 'ANTIOQUIA')
-nivel_jerarquico = st.session_state.get('aleph_escala', 'DEPARTAMENTAL')
+nombre_zona = st.session_state.get('aleph_lugar', 'MEDELLIN')
+nivel_jerarquico = st.session_state.get('aleph_escala', 'Municipal')
 gdf_zona_seleccionada = None
 
 try:
