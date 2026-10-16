@@ -2291,7 +2291,8 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
     c_rep1, c_rep2 = st.columns([2, 1])
     with c_rep1:
         st.markdown("### ⚙️ Configuración del Documento")
-        titulo_plan = st.text_input("Título del Manifiesto:", f"Plan de Seguridad Hídrica - {nombre_zona}", key="rep_tit")
+        # 🚀 FIX: Convertimos la 'key' en una llave dinámica amarrada al nombre de la zona
+        titulo_plan = st.text_input("Título del Manifiesto:", f"Plan de Seguridad Hídrica - {nombre_zona}", key=f"rep_tit_{nombre_zona}")
         director = st.text_input("Firma Autorizada:", "Dirección Técnica - CuencaVerde", key="rep_dir")
     with c_rep2:
         st.markdown("### 🧐 Estructura Multidimensión")
