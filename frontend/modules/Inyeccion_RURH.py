@@ -45,12 +45,36 @@ def renderizar_inyeccion_rurh():
                 df_puntos = df.dropna(subset=['x_coord', 'y_coord']).copy()
                 
                 # Convertimos el DataFrame a un GeoDataFrame (Asumimos EPSG:4326 - WGS84 como base)
-                gdf_puntos = gpd.GeoDataFrame(
-                    df_puntos, 
-                    geometry=gpd.points_from_xy(df_puntos['x_coord'], df_puntos['y_coord']),
+                # Ajuste técnico para Colombia: Si la longitud "Longitud_W" viene positiva, la volvemos negativa para WGS84
+                df['x_coord'] = df['x_coord'].apply(lambda x: -x if pd.notnull(x) and 0 < x < 100 else x)
+                df_puntos = df.dropna(subset=['x_coord', 'y_coord']).copy()
+                
+                # 🛡️ INTERCEPTOR MAGNA-SIRGAS VS WGS84
+                # Si el número es mayor a 10,000, es imposible que sean grados, debe ser MAGNA-SIRGAS (metros)
+                mask_magna = (df_puntos['x_coord'].abs() > 10000) | (df_puntos['y_coord'].abs() > 10000)
+                
+                # 1. Puntos normales en Grados (WGS84 - EPSG:4326)
+                gdf_wgs84 = gpd.GeoDataFrame(
+                    df_puntos[~mask_magna], 
+                    geometry=gpd.points_from_xy(df_puntos[~mask_magna]['x_coord'], df_puntos[~mask_magna]['y_coord']),
                     crs="EPSG:4326"
                 )
-                st.success(f"✅ Geometrías creadas: {len(gdf_puntos)} puntos de captación/vertimiento listos.")
+                
+                # 2. Puntos planos en Metros (MAGNA-SIRGAS Origen Bogotá - EPSG:3116)
+                gdf_magna = gpd.GeoDataFrame(
+                    df_puntos[mask_magna], 
+                    geometry=gpd.points_from_xy(df_puntos[mask_magna]['x_coord'], df_puntos[mask_magna]['y_coord']),
+                    crs="EPSG:3116"
+                )
+                
+                # 3. Convertir los MAGNA-SIRGAS a WGS84 (Sin el "if not empty", para que cambie la etiqueta CRS en ambos casos)
+                gdf_magna = gdf_magna.to_crs("EPSG:4326")
+                
+                # 4. Unir todo re-empaquetando como GeoDataFrame puro (SIN volver a importar pandas)
+                df_unido = pd.concat([gdf_wgs84, gdf_magna], ignore_index=True)
+                gdf_puntos = gpd.GeoDataFrame(df_unido, geometry='geometry', crs="EPSG:4326")
+                
+                st.success(f"✅ Geometrías creadas: {len(gdf_puntos)} puntos unificados (incluyendo conversiones MAGNA-SIRGAS).")
 
             with st.spinner("3. Ejecutando Join Espacial contra polígonos de Cuencas en PostgreSQL..."):
                 engine = get_engine()

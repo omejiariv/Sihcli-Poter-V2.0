@@ -359,3 +359,92 @@ def cargar_capa_espacial_cache(query_sql, _arg2=None, geom_col="geometry", **kwa
             sql_a_ejecutar = text(query_sql) if isinstance(query_sql, str) else query_sql
             return gpd.read_postgis(sql_a_ejecutar, conn, geom_col=geom_col)
     except Exception as e: return None
+
+import plotly.express as px
+import pandas as pd
+import geopandas as gpd
+import streamlit as st
+
+# ==============================================================================
+# 🗺️ RENDERIZADOR DE MINIMAPA RADAR (Contexto Espacial Inercial)
+# ==============================================================================
+def renderizar_radar_espacial(gdf_base, gdf_activo, titulo="Ubicación Relativa"):
+    import plotly.express as px
+    import streamlit as st
+    import pandas as pd
+    
+    # 1. Asegurar proyección WGS84 para Mapbox
+    if gdf_base is not None and not (isinstance(gdf_base, pd.DataFrame) and gdf_base.empty):
+        try:
+            if gdf_base.crs != "EPSG:4326": gdf_base = gdf_base.to_crs(epsg=4326)
+            gdf_base['geometry'] = gdf_base['geometry'].simplify(0.01)
+        except Exception:
+            gdf_base = None
+            
+    if gdf_activo is not None and not (isinstance(gdf_activo, pd.DataFrame) and gdf_activo.empty):
+        try:
+            if gdf_activo.crs != "EPSG:4326": gdf_activo = gdf_activo.to_crs(epsg=4326)
+            gdf_activo['geometry'] = gdf_activo['geometry'].simplify(0.005)
+        except Exception:
+            gdf_activo = None
+
+    # 2. Construir la figura
+    fig = None
+    
+    # Si tenemos base, la dibujamos de fondo
+    if gdf_base is not None:
+        fig = px.choropleth_mapbox(
+            gdf_base, 
+            geojson=gdf_base.geometry, 
+            locations=gdf_base.index,
+            color_discrete_sequence=["rgba(30, 41, 59, 0.4)"],
+            mapbox_style="carto-darkmatter"
+        )
+        
+    # Si tenemos el polígono activo, lo pintamos de cian
+    if gdf_activo is not None:
+        fig_activo = px.choropleth_mapbox(
+            gdf_activo, 
+            geojson=gdf_activo.geometry, 
+            locations=gdf_activo.index,
+            color_discrete_sequence=["#38bdf8"]
+        )
+        if fig is not None and len(fig.data) > 0:
+            fig.add_trace(fig_activo.data[0])
+        else:
+            fig = fig_activo
+            fig.update_layout(mapbox_style="carto-darkmatter")
+
+    # Si por alguna razón ambos fallaron, lanzamos un mapa vacío oscuro
+    if fig is None:
+        fig = px.choropleth_mapbox(mapbox_style="carto-darkmatter")
+
+    # 3. Centrar el mapa (Zoom inercial)
+    centro_lat, centro_lon = 6.2, -75.5
+    zoom_level = 5.5
+    
+    if gdf_activo is not None:
+        bounds = gdf_activo.total_bounds
+        centro_lon = (bounds[0] + bounds[2]) / 2
+        centro_lat = (bounds[1] + bounds[3]) / 2
+        diff_lon = bounds[2] - bounds[0]
+        if diff_lon < 0.2: zoom_level = 9.0
+        elif diff_lon < 0.5: zoom_level = 8.0
+        elif diff_lon < 1.0: zoom_level = 6.5
+        else: zoom_level = 5.2
+    elif gdf_base is not None:
+        bounds = gdf_base.total_bounds
+        centro_lon = (bounds[0] + bounds[2]) / 2
+        centro_lat = (bounds[1] + bounds[3]) / 2
+
+    fig.update_layout(
+        margin={"r":0,"t":25,"l":0,"b":0},
+        mapbox=dict(center=dict(lat=centro_lat, lon=centro_lon), zoom=zoom_level),
+        showlegend=False,
+        height=220,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        title=dict(text=titulo, font=dict(color="#94a3b8", size=12))
+    )
+    
+    st.plotly_chart(fig, use_container_width=True, config={'staticPlot': True, 'displayModeBar': False})

@@ -764,3 +764,209 @@ else:
 
         except Exception as e:
             st.error(f"🔌 Error de procesamiento: {e}")
+
+# ==============================================================================
+# 🗺 EL LIENZO TERRITORIAL (CONTEXTO GEOGRÁFICO Y SATELITAL)
+# ==============================================================================
+st.markdown("---")
+
+# 🕵️‍♂️ 1. RESCATE BLINDADO DE VARIABLES (Nombre y Polígono Geoespacial)
+lugar_activo = locals().get('lugar_original', locals().get('nombre_seleccion', st.session_state.get('aleph_lugar', 'la zona seleccionada')))
+
+gdf_mapa = None
+if 'gdf_zona' in locals() and locals()['gdf_zona'] is not None and not locals()['gdf_zona'].empty:
+    gdf_mapa = locals()['gdf_zona'].copy()
+elif st.session_state.get('aleph_gdf_zona') is not None and not st.session_state['aleph_gdf_zona'].empty:
+    gdf_mapa = st.session_state['aleph_gdf_zona'].copy()
+elif st.session_state.get('aleph_gdf') is not None and not st.session_state['aleph_gdf'].empty:
+    gdf_mapa = st.session_state['aleph_gdf'].copy()
+
+st.markdown(f"## 📍 CONTEXTO GEOGRÁFICO: El Lienzo Territorial de {lugar_activo}")
+st.info("Observemos la realidad física del territorio: coberturas de suelo, relieve y presión antrópica monitoreada por satélite.")
+
+# 2. Función de descarga predial 
+@st.cache_data(ttl=3600, show_spinner=False)
+def obtener_predios_y_hectareas(_gdf_poligono, nombre_zona_txt):
+    import requests, tempfile
+    import pandas as pd
+    import geopandas as gpd
+    ha_calc, info_debug, gdf_predios_final = 0.0, "Descargando predios...", None 
+    try:
+        url_predios = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PrediosEjecutados.geojson"
+        res = requests.get(url_predios)
+        if res.status_code == 200:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".geojson") as tmp:
+                tmp.write(res.content)
+                tmp_path = tmp.name
+            gdf_p = gpd.read_file(tmp_path)
+            if not gdf_p.empty:
+                gdf_p.set_crs(epsg=4326, allow_override=True, inplace=True)
+                gdf_p_3116, gdf_z_3116 = gdf_p.to_crs(epsg=3116), _gdf_poligono.to_crs(epsg=3116)
+                gdf_p_3116['geometry'] = gdf_p_3116.geometry.make_valid().buffer(0)
+                gdf_z_3116['geometry'] = gdf_z_3116.geometry.make_valid().buffer(0)
+                recorte_exacto = gpd.clip(gdf_p_3116, gdf_z_3116)
+                if not recorte_exacto.empty:
+                    ha_calc = recorte_exacto.area.sum() / 10000.0
+                    info_debug = f"✅ CORTE EXACTO: {len(recorte_exacto)} fragmentos de predios operan físicamente en la zona."
+                    gdf_predios_final = recorte_exacto.to_crs(epsg=4326)
+                else: 
+                    info_debug = f"ℹ️ ZONA VIRGEN: Ningún predio cae dentro de {nombre_zona_txt}."
+    except Exception as e: 
+        info_debug = f"❌ ERROR: {e}"
+    return ha_calc, info_debug, gdf_predios_final
+
+with st.spinner("Sincronizando inventario predial de Supabase..."):
+    if gdf_mapa is not None and not gdf_mapa.empty:
+        ha_reales_sig, info_debug, gdf_predios_mapa = obtener_predios_y_hectareas(gdf_mapa, lugar_activo)
+    else:
+        gdf_predios_mapa = None
+
+# 🗺️ 3. EL MAPA SATELITAL
+with st.expander(f"🛰️ EXPLORADOR ESPACIAL Y COBERTURAS (Google Earth Engine): {lugar_activo}", expanded=True):
+    import folium
+    
+    if gdf_mapa is not None and not gdf_mapa.empty:
+        bounds = gdf_mapa.total_bounds
+        centro_x, centro_y = (bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0
+    else:
+        centro_y, centro_x = 6.2442, -75.5812 # Default Medellín
+
+    m = folium.Map(location=[centro_y, centro_x], zoom_start=11, tiles="CartoDB positron")
+    folium.TileLayer(tiles='https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', attr='Google', name='Google Satellite', overlay=False, control=True).add_to(m)
+    
+    # Dibujar contorno de la cuenca/municipio
+    if gdf_mapa is not None and not gdf_mapa.empty:
+        gdf_zona_limpio = gdf_mapa.dropna(subset=['geometry']).copy()
+        if not gdf_zona_limpio.empty:
+            if gdf_zona_limpio.crs is None:
+                gdf_zona_limpio.set_crs(epsg=4326, inplace=True)
+            elif str(gdf_zona_limpio.crs).upper() != "EPSG:4326":
+                gdf_zona_limpio = gdf_zona_limpio.to_crs(epsg=4326)
+
+            for col in gdf_zona_limpio.select_dtypes(include=['datetime64', 'datetimetz']).columns:
+                gdf_zona_limpio[col] = gdf_zona_limpio[col].astype(str)
+
+            folium.GeoJson(
+                gdf_zona_limpio,
+                name=f"Límite {lugar_activo}",
+                style_function=lambda x: {'fillColor': 'none', 'color': '#1E88E5', 'weight': 3}
+            ).add_to(m)
+
+    # Dibujar predios de restauración
+    if gdf_predios_mapa is not None and not gdf_predios_mapa.empty:
+        gdf_predios_limpio = gdf_predios_mapa.dropna(subset=['geometry']).copy()
+        if not gdf_predios_limpio.empty:
+            if gdf_predios_limpio.crs is None:
+                gdf_predios_limpio.set_crs(epsg=4326, inplace=True)
+            elif str(gdf_predios_limpio.crs).upper() != "EPSG:4326":
+                gdf_predios_limpio = gdf_predios_limpio.to_crs(epsg=4326)
+                
+            for col in gdf_predios_limpio.select_dtypes(include=['datetime64', 'datetimetz']).columns:
+                gdf_predios_limpio[col] = gdf_predios_limpio[col].astype(str)
+                
+            folium.GeoJson(
+                gdf_predios_limpio, 
+                name="🟢 Áreas Restauradas (CV)", 
+                style_function=lambda x: {'fillColor': '#00ff00', 'color': '#003300', 'weight': 1, 'fillOpacity': 0.7}
+            ).add_to(m)
+
+    # Cargar capas de Google Earth Engine y calcular áreas
+    areas_data = []
+    try:
+        import ee
+        import pandas as pd
+        credenciales_dict = dict(st.secrets["gcp_service_account"])
+        credentials = ee.ServiceAccountCredentials(email=credenciales_dict["client_email"], key_data=credenciales_dict["private_key"])
+        ee.Initialize(credentials)
+        
+        def add_ee_layer(self, ee_image_object, vis_params, name, show=True):
+            map_id_dict = ee.Image(ee_image_object).getMapId(vis_params)
+            folium.raster_layers.TileLayer(tiles=map_id_dict['tile_fetcher'].url_format, attr='Google Earth Engine', name=name, overlay=True, control=True, show=show).add_to(self)
+        
+        folium.Map.add_ee_layer = add_ee_layer
+        
+        with st.spinner("Optimizando memoria visual satelital y calculando coberturas..."):
+            if gdf_mapa is not None and not gdf_mapa.empty:
+                from shapely.geometry import box
+                minx, miny, maxx, maxy = gdf_mapa.total_bounds
+                roi_ee = ee.Geometry(box(minx, miny, maxx, maxy).__geo_interface__)
+                
+                dw_coleccion = ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1').filterBounds(roi_ee).filterDate('2023-01-01', '2024-01-01')
+                dw_imagen = dw_coleccion.select('label').mode().clip(roi_ee)
+                dw_vis = {'min': 0, 'max': 8, 'palette': ['#419BDF', '#397D49', '#88B053', '#7A87C6', '#E49635', '#DFC35A', '#C4281B', '#A59B8F', '#B39FE1']}
+                
+                m.add_ee_layer(dw_imagen, dw_vis, '🛰️ Uso de Suelo (Satélite IA)')
+                
+                dem = ee.Image("NASA/NASADEM_HGT/001").select('elevation').clip(roi_ee)
+                slope, hillshade = ee.Terrain.slope(dem), ee.Terrain.hillshade(dem, azimuth=315, elevation=45)
+                m.add_ee_layer(hillshade, {'min': 0, 'max': 255}, '⛰️ Relieve (Hillshade)', show=False)
+                m.add_ee_layer(dem, {'min': 1000, 'max': 3000, 'palette': ['#006600', '#002200', '#fff700', '#ab7634', '#c4d0ff', '#ffffff']}, '🆙 Elevación (Hipsometría)', show=False)
+                m.add_ee_layer(slope, {'min': 0, 'max': 45, 'palette': ['white', 'red']}, '⚠️ Mapa de Pendientes', show=False)
+
+                # Cálculo de hectáreas exactas
+                area_image = ee.Image.pixelArea().addBands(dw_imagen)
+                roi_math = ee.Geometry(gdf_mapa.geometry.make_valid().buffer(0).simplify(0.01).unary_union.__geo_interface__)
+                areas_ee = area_image.reduceRegion(reducer=ee.Reducer.sum().group(groupField=1, groupName='clase'), geometry=roi_math, scale=50, maxPixels=1e10).getInfo()
+
+                nombres_clases = {0: "💧 Agua", 1: "🌳 Bosque", 2: "🌾 Pastos", 4: "🚜 Cultivos", 5: "🌿 Matorrales", 6: "🏙️ Urbano", 7: "🟫 Desnudo"}
+                if 'groups' in areas_ee:
+                    for grupo in areas_ee['groups']:
+                        if int(grupo['clase']) in nombres_clases:
+                            areas_data.append({"Cobertura": nombres_clases[int(grupo['clase'])], "Área (Ha)": grupo['sum'] / 10000.0})
+
+    except Exception as e:
+        st.warning(f"Aviso de Satélite: Modo local activado. No se cargaron capas GEE ni métricas de área. ({e})")
+
+    # ==========================================
+    # MOSTRAR MÉTRICAS: NATURAL VS GESTIONADO
+    # ==========================================
+    st.markdown("### 🌍 Balance de Coberturas: Capital Natural vs. Capital Gestionado")
+    
+    # Ajustamos las columnas para incluir el Área Total (3.5 vs 1)
+    c_met1, c_met2 = st.columns([3.5, 1])
+    
+    with c_met1:
+        if areas_data:
+            df_areas = pd.DataFrame(areas_data).sort_values(by="Área (Ha)", ascending=False).reset_index(drop=True)
+            
+            # 1. Calculamos el área total
+            total_area_ha = df_areas['Área (Ha)'].sum()
+            
+            # 2. Creamos (N + 1) columnas para incluir el Área Total a la izquierda
+            cols = st.columns(len(df_areas) + 1)
+            
+            # 3. Imprimimos el Área Total en la primera columna
+            cols[0].metric(label="📐 Área Total", value=f"{total_area_ha:,.0f} ha")
+            
+            # 4. Imprimimos el resto de coberturas desplazadas una columna
+            for idx, row in df_areas.iterrows(): 
+                nombre_limpio = row['Cobertura'].split(' ')[1] if ' ' in row['Cobertura'] else row['Cobertura']
+                cols[idx + 1].metric(label=f"🛰️ {nombre_limpio}", value=f"{row['Área (Ha)']:,.0f}")
+        else:
+            st.info("Métricas satelitales no disponibles para la zona actual.")
+    
+    with c_met2:
+        ha_historicas = float(ha_reales_sig) if 'ha_reales_sig' in locals() else 0.0
+        st.markdown(f"""
+        <div style="background-color: #e8f8f5; padding: 10px; border-radius: 8px; border: 2px solid #2ecc71; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+            <div style="font-size: 0.85rem; color: #27ae60; margin-bottom: 5px;">🟢 Inversión Histórica (SIG)</div>
+            <div style="font-size: 1.4rem; font-weight: bold; color: #1e8449;">{ha_historicas:,.1f} ha</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # 🗺️ RENDERIZAR MAPA
+    import folium
+    from folium import plugins
+    import streamlit.components.v1 as components
+
+    folium.LayerControl(position='topright').add_to(m)
+    plugins.Fullscreen(position='topright', title='Pantalla Completa', title_cancel='Salir').add_to(m)
+    components.html(m._repr_html_(), height=550)
+
+    # 🏷️ LEYENDA ESTILIZADA EN STREAMLIT (Nativa, Robusta y Elegante)
+    # 🏷️ LEYENDA ESTILIZADA EN STREAMLIT (Nativa, Robusta y Elegante - En 1 sola línea)
+    leyenda_html = "<div style='background-color: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; display: flex; justify-content: space-between; gap: 20px; font-size: 0.85rem; margin-top: 5px;'><div style='flex: 2;'><strong style='color: #1e293b;'>🛰️ Coberturas (Dynamic World 10m):</strong><br><div style='margin-top: 5px; display: flex; flex-wrap: wrap; gap: 10px; color: #475569;'><span><span style='color:#419BDF;'>🟦</span> Agua</span><span><span style='color:#397D49;'>🟩</span> Bosques</span><span><span style='color:#E49635;'>🟨</span> Pastos</span><span><span style='color:#C4281B;'>🟥</span> Urbano / Infra.</span><span><span style='color:#88B053;'>🟩</span> Matorrales</span><span><span style='color:#7A87C6;'>🟪</span> Cultivos</span><span><span style='color:#DFC35A;'>🟫</span> Suelo Desnudo</span></div></div><div style='flex: 1; border-left: 1px solid #cbd5e1; padding-left: 20px;'><strong style='color: #1e293b;'>🆙 Elevación (msnm):</strong><br><div style='margin-top: 5px; background: linear-gradient(to right, #006600, #002200, #fff700, #ab7634, #c4d0ff, #ffffff); height: 8px; border-radius: 4px; width: 100%;'></div><div style='display: flex; justify-content: space-between; font-size: 0.7rem; color: #64748b; margin-top: 2px;'><span>1,000m</span><span>>3,000m</span></div></div><div style='flex: 1; border-left: 1px solid #cbd5e1; padding-left: 20px;'><strong style='color: #1e293b;'>⚠️ Pendientes:</strong><br><div style='margin-top: 5px; background: linear-gradient(to right, white, #ffcccc, red); height: 8px; border-radius: 4px; width: 100%; border: 1px solid #e2e8f0;'></div><div style='display: flex; justify-content: space-between; font-size: 0.7rem; color: #64748b; margin-top: 2px;'><span>0° (Plano)</span><span>45° (Fuerte)</span></div></div></div>"
+    
+    st.markdown(leyenda_html, unsafe_allow_html=True)

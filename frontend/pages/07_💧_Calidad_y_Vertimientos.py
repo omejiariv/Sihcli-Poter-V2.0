@@ -295,7 +295,7 @@ anio_analisis = st.slider(
 st.session_state['anio_proyeccion_global'] = anio_analisis
 
 pob_urb_base, pob_rur_base, pob_total = 0.0, 0.0, 0.0
-total_bovinos, total_porcinos, total_aves = 0.0, 0.0, 0.0
+bovinos, porcinos, aves = 0.0, 0.0, 0.0
 origen_dato = "No Identificado"
 metodo_animal = "Sin Datos"
 
@@ -450,7 +450,9 @@ llave_busqueda = generar_llave_maestra(nivel_req, nombre_seleccion)
 terr_limpio = norm_alfanumerico(nombre_seleccion)
 es_amva_pec = (str(nombre_seleccion).upper().strip() == "AMVA") or ("AMVA" in str(nombre_seleccion).upper() and "CAR" in str(nivel_req).upper())
 
-total_bovinos, total_porcinos, total_aves = 0.0, 0.0, 0.0
+# Inicializamos las variables que usará el ciclo
+bovinos, porcinos, aves = 0.0, 0.0, 0.0
+lugar_original = str(nombre_seleccion)
 
 if es_amva_pec:
     metodo_animal = "Jurisdicción Urbana AMVA (0 Animales - Centralizados en Corantioquia)"
@@ -474,14 +476,14 @@ else:
             # 1. Intento exacto por LLAVE_UNIVERSAL
             df_pec = df_pec_full[df_pec_full['LLAVE_UNIVERSAL'].astype(str).str.upper() == llave_busqueda]
             
-            # 2. Rescate por código IDEAM de cuenca entre paréntesis: ej. (2701-02)
+            # 2. Rescate por código IDEAM de cuenca entre paréntesis
             if df_pec.empty and col_terr_p in df_pec_full.columns:
                 m_cod_p = re.search(r'\(([\d\-]+)\)\s*$', str(nombre_seleccion).strip())
                 if m_cod_p:
                     cod_p = m_cod_p.group(1).strip()
                     df_pec = df_pec_full[df_pec_full[col_terr_p].astype(str).str.contains(rf"\({re.escape(cod_p)}\)", case=False, na=False, regex=True)]
 
-            # 3. Fallback elástico por nombre alfanumérico limpio (sin '- NSS', tildes ni guiones)
+            # 3. Fallback elástico por nombre alfanumérico limpio
             if df_pec.empty and col_terr_p in df_pec_full.columns and terr_limpio:
                 mask_t = df_pec_full[col_terr_p].apply(norm_alfanumerico) == terr_limpio
                 df_pec = df_pec_full[mask_t]
@@ -496,28 +498,42 @@ else:
         st.error(f"🚨 Error en BD Pecuaria: {str(e)}")
         df_pec = pd.DataFrame()
 
+    # BLOQUE DE EXTRACCIÓN Y SUMATORIA
     if not df_pec.empty:
-        # Evitamos duplicar sumando una sola vez por especie
-        col_esp_name = next((c for c in df_pec.columns if c.lower() == 'especie'), 'Especie')
-        if col_esp_name in df_pec.columns:
-            df_pec = df_pec.drop_duplicates(subset=[col_esp_name], keep='first')
+        # 1. Filtro de Alta Precisión: Atrapar la cuenca exacta por su código
+        import re
+        m_cod = re.search(r'\(([\d\-]+)\)', str(lugar_original))
+        if m_cod:
+            cod_exacto = m_cod.group(1).strip()
+            df_pec_exacto = df_pec[df_pec['Territorio'].astype(str).str.contains(cod_exacto, na=False)]
+            if not df_pec_exacto.empty:
+                df_pec = df_pec_exacto
 
+        # 2. Sumatoria Acumulativa (+=)
+        # 🚀 FIX: Importamos tu función centralizada desde utils
+        from modules.utils import proyectar_modelo_sql 
+        
         for _, f in df_pec.iterrows():
-            val_final = max(0.0, proyectar_modelo_calidad(f, anio_analisis))
-
-            especie = str(f.get(col_esp_name, '')).upper().strip()
-            if 'BOVIN' in especie: total_bovinos += val_final
-            elif 'PORCIN' in especie: total_porcinos += val_final
-            elif 'AVE' in especie: total_aves += val_final
-                
+            esp = str(f.get('Especie', '')).upper()
+            
+            # Aseguramos que la proyección reciba el año 
+            anio_eval = anio_analisis if 'anio_analisis' in locals() else 2025 
+            val_final = max(0.0, proyectar_modelo_sql(f, anio_eval))
+            
+            if 'BOVINO' in esp: bovinos += val_final
+            if 'PORCINO' in esp: porcinos += val_final
+            if 'AVE' in esp: aves += val_final
+            
+        origen_pecu = True
         metodo_animal = f"Matriz SQL Exacta ({llave_busqueda})"
     else:
+        st.warning(f" ⚠️  La llave '{llave_busqueda}' no generó cruce en la Matriz Pecuaria.")
+        origen_pecu = False
         metodo_animal = f"Error: No hay animales para la llave ({llave_busqueda})"
 
-# 🧠 Sincronización con la Memoria Global para gráficas y simulación
-st.session_state['ica_bovinos_calc_met'] = total_bovinos
-st.session_state['ica_porcinos_calc_met'] = total_porcinos
-st.session_state['ica_aves_calc_met'] = total_aves
+st.session_state['ica_bovinos_calc_met'] = bovinos
+st.session_state['ica_porcinos_calc_met'] = porcinos
+st.session_state['ica_aves_calc_met'] = aves
 
 # ==============================================================================
 # 🎨 3. INTERFAZ DE SÍNTESIS Y CALIBRACIÓN DE CAMPO
@@ -544,7 +560,7 @@ with st.expander(f"📍 Contexto Demográfico Base ({anio_analisis}): {nombre_se
             step=1.0, 
             key=f"pob_u_{nombre_seleccion}_{anio_analisis}_{int(pob_urb_base)}"
         )
-        st.caption(f"Bovinos base ({anio_analisis}): {total_bovinos:,.0f}")
+        st.caption(f"Bovinos base ({anio_analisis}): {bovinos:,.0f}")
     with col_p2: 
         pob_rural = st.number_input(
             "Pob. Rural (Sistemas Individuales/Sépticos):", 
@@ -553,14 +569,14 @@ with st.expander(f"📍 Contexto Demográfico Base ({anio_analisis}): {nombre_se
             step=1.0, 
             key=f"pob_r_{nombre_seleccion}_{anio_analisis}_{int(pob_rur_base)}"
         )
-        st.caption(f"Porcinos base ({anio_analisis}): {total_porcinos:,.0f} | Aves base ({anio_analisis}): {total_aves:,.0f}")
+        st.caption(f"Porcinos base ({anio_analisis}): {porcinos:,.0f} | Aves base ({anio_analisis}): {aves:,.0f}")
     
     pob_total = pob_urbana + pob_rural
 
 st.success(
     f"📌 **SÍNTESIS ACTIVA |** 📍 Territorio: **{nombre_seleccion}** | "
     f"👥 Humanos: **{pob_total:,.0f}** *(🏙️ Urb: {pob_urbana:,.0f} | 🏡 Rur: {pob_rural:,.0f})* | "
-    f"🐄 Bov: **{total_bovinos:,.0f}** | 🐖 Porc: **{total_porcinos:,.0f}** | 🐔 Aves: **{total_aves:,.0f}**"
+    f"🐄 Bov: **{bovinos:,.0f}** | 🐖 Porc: **{porcinos:,.0f}** | 🐔 Aves: **{aves:,.0f}**"
 )
 
 # --- 🌉 ALIAS DE COMPATIBILIDAD ---
@@ -646,7 +662,7 @@ with st.spinner(f"Cruzando datos espacialmente con {nombre_seleccion}..."):
             "cornare": ["abejorral", "alejandria", "argelia", "el carmen de viboral", "carmen de viboral", "cocorna", "concepcion", "el penol", "penol", "el retiro", "retiro", "el santuario", "santuario", "granada", "guarne", "guatape", "la ceja", "la union", "marinilla", "narino", "rionegro", "san carlos", "san francisco", "san luis", "san rafael", "san vicente", "san vicente ferrer", "sonson", "san roque", "santo domingo", "puerto nare", "puerto triunfo"],
             "corpouraba": ["apartado", "arboletes", "carepa", "chigorodo", "murindo", "mutata", "necocli", "san juan de uraba", "san pedro de uraba", "turbo", "vigia del fuerte", "dabeiba", "frontino", "caicedo", "uramita", "peque", "abriaqui", "canasgordas", "giraldo", "urrao"],
             "corantioquia": ["caceres", "caucasia", "el bagre", "nechi", "taraza", "zaragoza", "caracoli", "maceo", "puerto berrio", "yondo", "amalfi", "anori", "cisneros", "remedios", "segovia", "vegachi", "yali", "yolombo", "angostura", "belmira", "briceno", "campamento", "carolina", "carolina del principe", "donmatias", "entrerrios", "gomez plata", "guadalupe", "ituango", "san andres de cuerquia", "san jose de la montana", "san pedro de los milagros", "santa rosa de osos", "toledo", "valdivia", "yarumal", "anza", "armenia", "buritica", "ebejico", "heliconia", "liborina", "olaya", "sabanalarga", "san jeronimo", "santafe de antioquia", "santa fe de antioquia", "sopetran", "amaga", "andes", "angelopolis", "betania", "betulia", "caramanta", "ciudad bolivar", "bolivar", "concordia", "fredonia", "hispania", "jardin", "jerico", "la pintada", "montebello", "pueblorrico", "pueblo rico", "salgar", "santa barbara", "tamesis", "tarso", "titiribi", "valparaiso", "venecia", "medellin", "bello", "itagui", "envigado", "sabaneta", "la estrella", "caldas", "copacabana", "girardota", "barbosa"],
-            "bajocauca": ["caucasia", "el bagre", "nechi", "taraza", "caceres", "zaragoza"],
+            "bajocauca": ["caucasia", "el bagre", "bagre", "nechi", "nech", "taraza", "taraz", "caceres", "cceres", "zaragoza"],
             "magdalenamedio": ["puerto berrio", "puerto nare", "puerto triunfo", "yondo", "caracoli", "maceo"],
             "nordeste": ["amalfi", "anori", "cisneros", "remedios", "san roque", "santo domingo", "segovia", "vegachi", "yali", "yolombo"],
             "norte": ["angostura", "belmira", "briceno", "campamento", "carolina", "carolina del principe", "donmatias", "entrerrios", "gomez plata", "guadalupe", "ituango", "san andres de cuerquia", "san jose de la montana", "san pedro de los milagros", "santa rosa de osos", "toledo", "valdivia", "yarumal"],
@@ -657,10 +673,14 @@ with st.spinner(f"Cruzando datos espacialmente con {nombre_seleccion}..."):
         }
 
         if 'municipio_norm' in df_in.columns:
-            serie_mpio = df_in['municipio_norm'].apply(normalizar_texto)
+            serie_mpio = df_in['municipio_norm'].astype(str).apply(normalizar_texto)
             if lugar_key in GRUPOS_TERRITORIALES:
-                mpios_grupo = {normalizar_texto(m) for m in GRUPOS_TERRITORIALES[lugar_key]}
-                df_out = df_in[serie_mpio.isin(mpios_grupo)].copy()
+                mpios_grupo = [normalizar_texto(m) for m in GRUPOS_TERRITORIALES[lugar_key]]
+                patron_grp = '|'.join([re.escape(m) for m in mpios_grupo if m])
+                mask_grp = serie_mpio.isin(mpios_grupo) | serie_mpio.str.contains(patron_grp, case=False, na=False)
+                if 'Territorio' in df_in.columns:
+                    mask_grp = mask_grp | df_in['Territorio'].astype(str).apply(normalizar_texto).str.contains(patron_grp, case=False, na=False)
+                df_out = df_in[mask_grp].copy()
                 if not df_out.empty: return df_out
             else:
                 df_out = df_in[serie_mpio == lugar_norm].copy()
@@ -1090,20 +1110,20 @@ with tab_fuentes:
     col_pec1, col_pec2, col_pec3 = st.columns(3)
     with col_pec1:
         st.subheader("Bovinos")
-        cab_bov = st.number_input("Cabezas:", min_value=0, value=int(total_bovinos), step=100, key=f"bov_{nombre_seleccion}")
+        cab_bov = st.number_input("Cabezas:", min_value=0, value=int(bovinos), step=100, key=f"bov_{nombre_seleccion}")
         sistema_bov = st.radio("Sistema Bovino:", ["Extensivo", "Estabulado"])
         f_vert_bov = 0.8 if "Estabulado" in sistema_bov else 0.15 
         factor_dbo_bov = (wq.DBO_VACA_ORDENO / 1000.0) * f_vert_bov
         
     with col_pec2:
         st.subheader("Porcinos")
-        cab_por = st.number_input("Cabezas:", min_value=0, value=int(total_porcinos), step=100, key=f"por_{nombre_seleccion}")
+        cab_por = st.number_input("Cabezas:", min_value=0, value=int(porcinos), step=100, key=f"por_{nombre_seleccion}")
         trat_porc = st.slider("Eficiencia Biodigestor %:", 0, 100, 20)
         factor_dbo_porc = (wq.DBO_CERDO_CONFINADO / 1000.0) * (1 - (trat_porc/100))
         
     with col_pec3:
         st.subheader("Aves")
-        cab_ave = st.number_input("Aves (Cabezas):", min_value=0, value=int(total_aves), step=1000, key=f"ave_{nombre_seleccion}")
+        cab_ave = st.number_input("Aves (Cabezas):", min_value=0, value=int(aves), step=1000, key=f"ave_{nombre_seleccion}")
         trat_ave = st.slider("Manejo Gallinaza %:", 0, 100, 75)
         factor_dbo_aves = 0.015 * (1 - (trat_ave/100))
 
@@ -1466,9 +1486,9 @@ with st.expander("⚙️ Características Físicas y Climáticas del Río", expa
 # 🚀 FIX ALEPH: Usamos las variables en vivo de la interfaz, NO la memoria global atrasada
 pob_u = pob_urbana
 pob_r = pob_rural
-bov = cab_bov if 'cab_bov' in locals() else total_bovinos
-por = cab_por if 'cab_por' in locals() else total_porcinos
-ave = cab_ave if 'cab_ave' in locals() else total_aves
+bov = cab_bov if 'cab_bov' in locals() else bovinos
+por = cab_por if 'cab_por' in locals() else porcinos
+ave = cab_ave if 'cab_ave' in locals() else aves
 
 # Sincronización oficial con las constantes de wq (Convertido a kg/día)
 dbo_hab_u = pob_u * (wq.DBO_HAB_URBANO / 1000.0)
@@ -1850,11 +1870,37 @@ with tab_mapa:
     if "Teórica" in var_mapa:
         st.caption("Mapa de calor jerárquico (Treemap) basado en cálculos poblacionales.")
         
-        # 🚀 FIX DEFINITIVO: Carga Obligatoria de Demografía
-        if df_mpios is None:
-            df_mpios = cargar_municipios()
+        # 🚀 FIX DEFINITIVO: Carga Obligatoria de Demografía desde PostgreSQL
+        try:
+            from sqlalchemy import text
+            from modules.db_manager import get_engine
+            import pandas as pd
+            import unicodedata
             
-        if df_mpios is not None and not df_mpios.empty:
+            with get_engine().connect() as conn:
+                # Traemos solo los municipios de la base de datos maestra
+                df_mpios = pd.read_sql(text("SELECT * FROM matriz_maestra_demografica WHERE UPPER(TRIM(\"Nivel\")) IN ('MUNICIPAL', 'MUNICIPIO')"), conn)
+            
+            # Mapeamos columnas para que el mapa Treemap las entienda
+            col_terr = next((c for c in df_mpios.columns if c.lower() in ['territorio', 'municipio', 'nombre']), 'Territorio')
+            df_mpios['municipio'] = df_mpios[col_terr]
+            
+            def norm_muni(x):
+                if pd.isna(x): return ""
+                return unicodedata.normalize('NFKD', str(x)).encode('ascii', 'ignore').decode('utf-8').upper().strip()
+            df_mpios['municipio_norm'] = df_mpios['municipio'].apply(norm_muni)
+            
+            col_pob = next((c for c in df_mpios.columns if c.lower() in ['pob_base', 'poblacion_base', 'poblacion', 'pob_total']), None)
+            if col_pob: 
+                df_mpios['Poblacion'] = pd.to_numeric(df_mpios[col_pob], errors='coerce').fillna(0)
+            else:
+                df_mpios['Poblacion'] = 0
+                
+        except Exception as e:
+            df_mpios = None
+            st.error(f"Error interno cargando demografía: {e}")
+            
+        if df_mpios is not None and not df_mpios.empty and 'Poblacion' in df_mpios.columns:
             df_agg = pd.DataFrame()
             col_anio = next((c for c in ['año', 'Año', 'anio', 'Anio', 'year', 'Year'] if c in df_mpios.columns), None)
             anio_mapa = anio_analisis if 'anio_analisis' in locals() else 2025
@@ -1910,115 +1956,137 @@ with tab_mapa:
     else:
         st.caption("Mapa analítico multicapa (Densidad, Puntos Individuales y Polígonos WGS84).")
         
-        # 🚀 RESTAURACIÓN DEL MAPA DE PUNTOS
-        df_map = df_c.copy() if "Concesión" in var_mapa else df_v.copy()
+        # 🚀 RESTAURACIÓN DEL MAPA DE PUNTOS (Corte Espacial "Point-in-Polygon")
+        import geopandas as gpd
+        from shapely.geometry import Point
+        from sqlalchemy import text
+        from modules.db_manager import get_engine
         
-        if not df_map.empty:
-            col_z = 'caudal_lps' if "Concesión" in var_mapa else 'caudal_vert_lps'
-            df_map['coordenada_x'] = pd.to_numeric(df_map['coordenada_x'], errors='coerce')
-            df_map['coordenada_y'] = pd.to_numeric(df_map['coordenada_y'], errors='coerce')
+        tabla_obj = "concesiones_maestras_rurh_raw" if "Concesión" in var_mapa else "matriz_vertimientos_raw"
+        col_z = 'Caudal_Lps' if "Concesión" in var_mapa else 'caudal_vert_lps'
+        col_x = 'x_coord' 
+        col_y = 'y_coord'
+        
+        # 1. Intentar leer desde PostgreSQL
+        df_map = pd.DataFrame()
+        try:
+            with get_engine().connect() as conn:
+                df_map = pd.read_sql(text(f"SELECT * FROM {tabla_obj}"), conn)
+        except Exception:
+            pass # Si la tabla no existe, seguimos en silencio
+            
+        # 2. Fallback a la memoria si PostgreSQL falla (Asegura que Vertimientos siga funcionando)
+        if df_map.empty:
+            if "Concesión" in var_mapa and 'df_c' in locals() and not df_c.empty:
+                df_map = df_c.copy()
+            elif "Vertimiento" in var_mapa and 'df_v' in locals() and not df_v.empty:
+                df_map = df_v.copy()
+        
+        # Compatibilidad hacia atrás (nombres de columnas antiguos)
+        if col_x not in df_map.columns and 'coordenada_x' in df_map.columns:
+            col_x, col_y = 'coordenada_x', 'coordenada_y'
+        if col_z not in df_map.columns:
+            col_z = next((c for c in df_map.columns if str(c).upper() == col_z.upper()), None)
+        
+        if not df_map.empty and col_x in df_map.columns and col_z in df_map.columns:
+            df_map[col_x] = pd.to_numeric(df_map[col_x], errors='coerce')
+            df_map[col_y] = pd.to_numeric(df_map[col_y], errors='coerce')
             df_map[col_z] = pd.to_numeric(df_map[col_z], errors='coerce')
-            df_map = df_map.dropna(subset=['coordenada_x', 'coordenada_y', col_z])
+            df_map = df_map.dropna(subset=[col_x, col_y, col_z])
             
-            LIMITE_PUNTOS = 2000
-            total_puntos_reales = len(df_map)
+            # --- INTERCEPTOR Y TRANSFORMADOR MAGNA-SIRGAS ---
+            mask_magna = (df_map[col_x].abs() > 10000)
             
-            if total_puntos_reales > LIMITE_PUNTOS:
-                df_map = df_map.sample(n=LIMITE_PUNTOS, random_state=42)
-                st.warning(f"🗺️ Optimización Visual Activada: Muestra de {LIMITE_PUNTOS} puntos aleatorios.")
+            gdf_wgs84 = gpd.GeoDataFrame(df_map[~mask_magna], geometry=gpd.points_from_xy(df_map[~mask_magna][col_x], df_map[~mask_magna][col_y]), crs="EPSG:4326")
+            gdf_magna = gpd.GeoDataFrame(df_map[mask_magna], geometry=gpd.points_from_xy(df_map[mask_magna][col_x], df_map[mask_magna][col_y]), crs="EPSG:3116")
             
-            # Filtro mixto (MAGNA-SIRGAS y WGS84)
-            mask_magna = (df_map['coordenada_x'] > 100000) & (df_map['coordenada_y'] > 100000)
-            mask_wgs84 = (df_map['coordenada_x'] < 0) & (df_map['coordenada_x'] > -85) & (df_map['coordenada_y'] > -5)
-            df_plot = df_map[mask_magna | mask_wgs84].copy()
+            # 🚀 FIX: Forzamos la conversión a WGS84 siempre, incluso si está vacío, para unificar etiquetas CRS
+            gdf_magna = gdf_magna.to_crs(epsg=4326)
+            
+            import pandas as pd
+            df_unido = pd.concat([gdf_wgs84, gdf_magna], ignore_index=True)
+            gdf_puntos_global = gpd.GeoDataFrame(df_unido, geometry='geometry', crs="EPSG:4326")
+            
+            # --- MAGIA GEOESPACIAL: RECORTAR PUNTOS DENTRO DEL POLÍGONO DE LA ZONA ---
+            if 'gdf_zona' in locals() and gdf_zona is not None and not gdf_zona.empty:
+                # Nos aseguramos de que el polígono esté en WGS84
+                if gdf_zona.crs is None or gdf_zona.crs != "EPSG:4326":
+                    gdf_z_4326 = gdf_zona.to_crs(epsg=4326)
+                else:
+                    gdf_z_4326 = gdf_zona
+                
+                # Curación topológica preventiva
+                gdf_z_4326['geometry'] = gdf_z_4326.geometry.make_valid().buffer(0)
+                
+                with st.spinner(f"Cruzando {len(gdf_puntos_global)} puntos espaciales contra la geometría de {nombre_seleccion}..."):
+                    # El sjoin (Spatial Join) captura solo los puntos que caen dentro del polígono
+                    df_plot = gpd.sjoin(gdf_puntos_global, gdf_z_4326, how="inner", predicate="intersects")
+            else:
+                df_plot = gdf_puntos_global # Si no hay polígono, asume que es el departamento completo
             
             if not df_plot.empty and df_plot[col_z].sum() > 0:
-                try:
-                    import pyproj
-                    import json
-                    transformer = pyproj.Transformer.from_crs("epsg:3116", "epsg:4326", always_xy=True)
-                    
-                    def to_wgs84(row):
-                        if row['coordenada_x'] > 100000:
-                            lon, lat = transformer.transform(row['coordenada_x'], row['coordenada_y'])
-                            return pd.Series({'lon': lon, 'lat': lat})
-                        else:
-                            return pd.Series({'lon': row['coordenada_x'], 'lat': row['coordenada_y']})
-                            
-                    with st.spinner("Proyectando coordenadas al espacio satelital..."):
-                        coords = df_plot.apply(to_wgs84, axis=1)
-                        df_plot['lon'] = coords['lon']
-                        df_plot['lat'] = coords['lat']
-                        # Filtro de seguridad para que los puntos caigan en Colombia
-                        df_plot = df_plot[(df_plot['lon'] >= -78) & (df_plot['lon'] <= -73) & (df_plot['lat'] >= 5) & (df_plot['lat'] <= 9)]
-                    
-                    if not df_plot.empty:
-                        c_capa1, c_capa2, c_capa3 = st.columns(3)
-                        mostrar_calor = c_capa1.checkbox("🔥 Mapa de Calor", value=True)
-                        mostrar_puntos = c_capa2.checkbox("📍 Puntos Individuales", value=True)
-                        mostrar_poli = c_capa3.checkbox("🗺️ Límite Cuenca", value=True)
-                        
-                        mapbox_layers = []
-                        if mostrar_poli and 'gdf_zona' in locals() and gdf_zona is not None and not gdf_zona.empty:
-                            try:
-                                gdf_wgs84 = gdf_zona.to_crs(epsg=4326)
-                                geojson_poly = json.loads(gdf_wgs84.to_json())
-                                mapbox_layers.append({
-                                    "sourcetype": "geojson",
-                                    "source": geojson_poly,
-                                    "type": "fill",
-                                    "color": "rgba(41, 128, 185, 0.15)"
-                                })
-                                mapbox_layers.append({
-                                    "sourcetype": "geojson",
-                                    "source": geojson_poly,
-                                    "type": "line",
-                                    "color": "#2980b9",
-                                    "line": {"width": 2}
-                                })
-                            except Exception:
-                                pass
+                # Extraemos coordenadas finales para Plotly
+                df_plot['lon'] = df_plot.geometry.x
+                df_plot['lat'] = df_plot.geometry.y
+                
+                # Optimización para navegadores
+                LIMITE_PUNTOS = 2000
+                total_puntos_reales = len(df_plot)
+                if total_puntos_reales > LIMITE_PUNTOS:
+                    df_plot = df_plot.sample(n=LIMITE_PUNTOS, random_state=42)
+                    st.warning(f"🗺️ Optimización Visual Activada: Muestra de {LIMITE_PUNTOS} puntos de {total_puntos_reales}.")
 
-                        import plotly.graph_objects as go
-                        fig_dens = go.Figure()
+                c_capa1, c_capa2, c_capa3 = st.columns(3)
+                mostrar_calor = c_capa1.checkbox("🔥 Mapa de Calor", value=True)
+                mostrar_puntos = c_capa2.checkbox("📍 Puntos Individuales", value=True)
+                mostrar_poli = c_capa3.checkbox("🗺️ Límite Geográfico", value=True)
+                
+                mapbox_layers = []
+                if mostrar_poli and 'gdf_zona' in locals() and gdf_zona is not None and not gdf_zona.empty:
+                    try:
+                        import json
+                        geojson_poly = json.loads(gdf_z_4326.to_json())
+                        mapbox_layers.append({"sourcetype": "geojson", "source": geojson_poly, "type": "fill", "color": "rgba(41, 128, 185, 0.15)"})
+                        mapbox_layers.append({"sourcetype": "geojson", "source": geojson_poly, "type": "line", "color": "#2980b9", "line": {"width": 2}})
+                    except Exception:
+                        pass
 
-                        if mostrar_calor:
-                            fig_dens.add_trace(go.Densitymapbox(
-                                lat=df_plot['lat'], lon=df_plot['lon'], z=df_plot[col_z],
-                                radius=15, colorscale="Viridis", name="Densidad", showscale=True
-                            ))
+                import plotly.graph_objects as go
+                fig_dens = go.Figure()
 
-                        if mostrar_puntos:
-                            col_info = 'Sector_Sihcli' if 'Sector_Sihcli' in df_plot.columns else 'tipo_vertimiento'
-                            if col_info not in df_plot.columns: df_plot[col_info] = "Desconocido"
-                            etiquetas = df_plot[col_info].astype(str) + "<br>Caudal: " + df_plot[col_z].round(2).astype(str) + " L/s"
-                            fig_dens.add_trace(go.Scattermapbox(
-                                lat=df_plot['lat'], lon=df_plot['lon'], mode='markers',
-                                marker=dict(size=8, color='#e74c3c', opacity=0.8),
-                                text=etiquetas, hoverinfo="text", name="Registros"
-                            ))
+                if mostrar_calor:
+                    fig_dens.add_trace(go.Densitymapbox(
+                        lat=df_plot['lat'], lon=df_plot['lon'], z=df_plot[col_z],
+                        radius=15, colorscale="Viridis", name="Densidad", showscale=True
+                    ))
 
-                        fig_dens.update_layout(
-                            mapbox=dict(
-                                style="carto-positron",
-                                center=dict(lat=df_plot['lat'].mean(), lon=df_plot['lon'].mean()),
-                                zoom=9 if total_puntos_reales > 500 else 11,
-                                layers=mapbox_layers
-                            ),
-                            margin={"r":0,"t":40,"l":0,"b":0},
-                            title=f"Distribución Espacial en {nombre_seleccion}",
-                            hovermode="closest"
-                        )
-                        st.plotly_chart(fig_dens, use_container_width=True, config={'scrollZoom': True})
-                        
-                    else:
-                        st.warning("⚠️ Coordenadas cayeron fuera del territorio tras la proyección satelital.")
-                except Exception as e:
-                    st.error(f"Error renderizando mapa: {e}")
+                if mostrar_puntos:
+                    col_info = 'Sector_Sihcli' if 'Sector_Sihcli' in df_plot.columns else 'Uso_Agua' if 'Uso_Agua' in df_plot.columns else None
+                    if not col_info: col_info = df_plot.columns[0] # Fallback
+                    etiquetas = df_plot[col_info].fillna("Desconocido").astype(str) + "<br>Caudal: " + df_plot[col_z].round(2).astype(str) + " L/s"
+                    fig_dens.add_trace(go.Scattermapbox(
+                        lat=df_plot['lat'], lon=df_plot['lon'], mode='markers',
+                        marker=dict(size=8, color='#e74c3c', opacity=0.8),
+                        text=etiquetas, hoverinfo="text", name="Registros"
+                    ))
+
+                fig_dens.update_layout(
+                    mapbox=dict(
+                        style="carto-positron",
+                        center=dict(lat=df_plot['lat'].mean(), lon=df_plot['lon'].mean()),
+                        zoom=9 if total_puntos_reales > 500 else 10.5,
+                        layers=mapbox_layers
+                    ),
+                    margin={"r":0,"t":40,"l":0,"b":0},
+                    title=f"Distribución Espacial en {nombre_seleccion}",
+                    hovermode="closest"
+                )
+                st.plotly_chart(fig_dens, use_container_width=True, config={'scrollZoom': True})
             else:
-                st.warning("⚠️ No hay suficientes coordenadas válidas (mayores a 0) para generar un mapa.")
+                st.warning(f"⚠️ No hay registros de concesiones RURH (o cayeron fuera) dentro del polígono de {nombre_seleccion}.")
         else:
-            st.warning("⚠️ No hay base de datos disponible en la zona seleccionada.")
+            tipo_bd = "Concesiones" if "Concesión" in var_mapa else "Vertimientos"
+            st.warning(f"⚠️ La base de datos de {tipo_bd} aún no ha sido inyectada o no tiene coordenadas válidas.")
 
 # ------------------------------------------------------------------------------
 # TAB 6: EXPLORADOR SIRENA Y VERTIMIENTOS

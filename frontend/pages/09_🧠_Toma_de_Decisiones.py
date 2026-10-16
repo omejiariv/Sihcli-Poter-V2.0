@@ -407,6 +407,14 @@ if gdf_zona is not None and not gdf_zona.empty:
         nivel_demo = "Departamental"
 
     # ---------------------------------------------------------
+    # RENDERIZADO VISUAL: CEREBROS ENLAZADOS Y RADAR ESPACIAL
+    # ---------------------------------------------------------
+    from modules.utils import renderizar_radar_espacial
+    import geopandas as gpd
+
+    st.markdown("<br>", unsafe_allow_html=True)
+  
+    # ---------------------------------------------------------
     # 1. CONEXIÓN DEMOGRÁFICA (Sincronizada 1:1 con Calidad y Vertimientos)
     # ---------------------------------------------------------
     from modules.demografia_tools import calcular_poblacion_al_vuelo
@@ -547,22 +555,37 @@ if gdf_zona is not None and not gdf_zona.empty:
                 pass
 
         if not df_pec.empty:
+            # 1. Filtro de Alta Precisión: Atrapar la cuenca exacta por su código
+            import re
+            m_cod = re.search(r'\(([\d\-]+)\)', str(lugar_original))
+            if m_cod:
+                cod_exacto = m_cod.group(1).strip()
+                df_pec_exacto = df_pec[df_pec['Territorio'].astype(str).str.contains(cod_exacto, na=False)]
+                if not df_pec_exacto.empty:
+                    df_pec = df_pec_exacto
+
+            # 2. Sumatoria Acumulativa (+=)
             for _, f in df_pec.iterrows():
                 esp = str(f.get('Especie', '')).upper()
                 val_final = max(0.0, proyectar_modelo_sql(f, anio_actual))
-                if 'BOVINO' in esp: bovinos = val_final
-                if 'PORCINO' in esp: porcinos = val_final
-                if 'AVE' in esp: aves = val_final
                 
+                if 'BOVINO' in esp: bovinos += val_final
+                if 'PORCINO' in esp: porcinos += val_final
+                if 'AVE' in esp: aves += val_final
+                
+            # 🚀 FIX: Usamos st.success en lugar del antiguo col_cerebros
             st.success(f" 🐄  **Cerebro Pecuario Enlazado:** {bovinos:,.0f} Bov, {porcinos:,.0f} Por, {aves:,.0f} Aves.")
             origen_pecu = True
+            
+            metodo_animal = f"Matriz SQL Exacta ({llave_pec})"
         else:
             st.warning(f" ⚠️  La llave '{llave_pec}' no generó cruce en la Matriz Pecuaria.")
             origen_pecu = False
-            
-    st.session_state['ica_bovinos_calc_met'] = bovinos
-    st.session_state['ica_porcinos_calc_met'] = porcinos
-    st.session_state['ica_aves_calc_met'] = aves
+            metodo_animal = f"Error: No hay animales para la llave ({llave_pec})"
+
+        st.session_state['ica_bovinos_calc_met'] = bovinos
+        st.session_state['ica_porcinos_calc_met'] = porcinos
+        st.session_state['ica_aves_calc_met'] = aves
 
     # ---------------------------------------------------------
     # 3. CONEXIÓN HIDROLÓGICA (Inmune a tildes corruptas como 'Medelln')
@@ -594,13 +617,13 @@ if gdf_zona is not None and not gdf_zona.empty:
                     st.session_state['df_matriz_hidrologica'] = df_h_all
             
             if not df_h_all.empty and 'Territorio' in df_h_all.columns:
-                # A. Por código IDEAM entre paréntesis: ej. (2317-03-01-04) o (2702)
+                # A. Por código IDEAM entre paréntesis
                 m_cod = re.search(r'\(([\d\-]+)\)\s*$', str(lugar_original).strip())
                 if m_cod:
                     cod_id = m_cod.group(1).strip()
                     df_hidro = df_h_all[df_h_all['Territorio'].astype(str).str.contains(rf"\({re.escape(cod_id)}\)", case=False, na=False, regex=True)]
                 
-                # B. Por nombre limpio o patrón tolerante a vocales con tilde corrupta ('Medelln' vs 'MEDELLIN')
+                # B. Por nombre limpio
                 if df_hidro.empty:
                     nom_busq = _norm_h(re.split(r'\s*-\s*\([\d\-]+\)', str(lugar_original))[0].replace("- NSS -", "").replace("- NSS", ""))
                     if nom_busq:
@@ -608,7 +631,6 @@ if gdf_zona is not None and not gdf_zona.empty:
                             lambda x: _norm_h(re.split(r'\s*-\s*\([\d\-]+\)', str(x))[0].replace("- NSS -", "").replace("- NSS", ""))
                         )
                         df_hidro = df_h_all[serie_limpia == nom_busq]
-                        # Si la BD perdió la vocal acentuada (ej. MEDELLN en vez de MEDELLIN), quitamos vocales para comparar consonantes + estructura
                         if df_hidro.empty:
                             cons_busq = re.sub(r'[AEIOU]', '', nom_busq)
                             mask_cons = serie_limpia.apply(lambda x: re.sub(r'[AEIOU]', '', x) == cons_busq)

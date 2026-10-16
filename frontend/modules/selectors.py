@@ -200,30 +200,26 @@ def renderizar_menu_navegacion(pagina_actual):
         @st.cache_data(ttl=3600)
         def obtener_catalogo_cuencas():
             import pandas as pd
-            import os
-            import re
-            import unicodedata
-            ruta_exacta = os.path.join(os.path.dirname(__file__), '..', 'data', 'Cuencas_SP.xlsx')
-            df_c = pd.DataFrame()
-            if os.path.exists(ruta_exacta):
-                try:
-                    df_c = pd.read_excel(ruta_exacta, engine='openpyxl')
-                    df_c.columns = [str(c).lower().strip() for c in df_c.columns]
-                    def sanar_texto(t):
-                        if pd.isna(t): return ""
-                        txt = str(t)
-                        mojis = {"├¡": "í", "├▒": "ñ", "├│": "ó", "├í": "á", "├®": "é", "├║": "ú", 
-                                 "├ü": "Á", "├ë": "É", "├\x8d": "Í", "├ô": "Ó", "├Ü": "Ú", "├æ": "Ñ", "├⌐": "é"}
-                        for corrupto, sano in mojis.items(): txt = txt.replace(corrupto, sano)
-                        txt = re.sub(r'_x[0-9A-Fa-f]{4}_', '', txt)
-                        txt = re.sub(r'(?i)<null>.*', '', txt)
-                        txt = txt.replace(' - ()', '').replace('-()', '').strip()
-                        return txt if len(txt) > 2 and txt not in ["-", "", "()"] else ""
-                    cols_texto = ['nomah', 'nomzh', 'nom_szh', 'nom_nss1', 'nom_nss2', 'nom_nss3']
-                    for col in cols_texto:
-                        if col in df_c.columns: df_c[col] = df_c[col].apply(sanar_texto)
-                except Exception as e: print(f"Error cargando Cuencas: {e}")
-            return df_c
+            from sqlalchemy import text
+            from modules.db_manager import get_engine
+            
+            try:
+                # Conectamos directamente a la capa espacial completa en PostgreSQL
+                engine = get_engine()
+                query = text("""
+                    SELECT 
+                        nomah, nomzh, nom_szh, 
+                        nom_nss1, nss1, 
+                        nom_nss2, nss2, 
+                        nom_nss3, nss3 
+                    FROM cuencas
+                """)
+                df_c = pd.read_sql(query, engine)
+                return df_c
+            except Exception as e:
+                import streamlit as st
+                st.error(f"Error cargando catálogo desde PostgreSQL: {e}")
+                return pd.DataFrame()
 
         # 1. Comentamos la escala Nacional y reordenamos para que Departamental sea la primera
         niveles = {
