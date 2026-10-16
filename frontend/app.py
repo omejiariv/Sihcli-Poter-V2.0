@@ -2,12 +2,27 @@
 
 import os
 import sys
+
+# 🚀 FIX EXTREMO: Inyectar rutas ANTES de importar cualquier librería geoespacial
+if os.name != 'nt':
+    os.environ["PROJ_LIB"] = "/usr/share/proj"
+    os.environ["PROJ_DATA"] = "/usr/share/proj"
+
 import pyproj
+
+# 🚀 PARCHE UNIVERSAL DE COORDENADAS (WINDOWS & LINUX/CLOUD)
+if os.name == 'nt':
+    # En Windows: Fuerza a la app a usar su propia BD EPSG
+    os.environ['PROJ_LIB'] = pyproj.datadir.get_data_dir()
+else:
+    # En Linux/WSL/Cloud: Fuerza internamente a pyproj a soltar su BD vieja
+    pyproj.datadir.set_data_dir("/usr/share/proj")
+
 import streamlit as st
 import plotly.express as px
 import pandas as pd
 
-# --- 1. CONFIGURACIÓN DE PÁGINA (SIEMPRE DEBE IR PRIMERO) ---
+# --- 1. CONFIGURACIÓN DE PÁGINA (SIEMPRE DEBE IR PRIMERO EN STREAMLIT) ---
 st.set_page_config(
     page_title="SIHCLI-POTER | Centro de Comando",
     page_icon="💧",
@@ -15,21 +30,10 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 🚀 PARCHE UNIVERSAL DE COORDENADAS (WINDOWS & LINUX/CLOUD)
-# El sistema detecta automáticamente dónde se está ejecutando para aplicar el parche correcto
-if os.name == 'nt':
-    # En Windows: Fuerza a la app a usar su propia BD EPSG (evita conflictos con QGIS local)
-    os.environ['PROJ_LIB'] = pyproj.datadir.get_data_dir()
-else:
-    # En Linux/Streamlit Cloud: Fuerza a Python a usar el motor moderno del sistema operativo
-    os.environ["PROJ_LIB"] = "/usr/share/proj"
-    os.environ["PROJ_DATA"] = "/usr/share/proj"    
-
 # --- 📂 IMPORTACIÓN ROBUSTA DE MÓDULOS ---
 try:
     from modules import selectors
     # 🔴 NOTA V2.0: inicializar_torrente_sanguineo() fue eliminado de aquí. 
-    # El Frontend ya no carga matrices pesadas a la RAM.
 except ImportError:
     # Fallback de rutas
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
