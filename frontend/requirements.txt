@@ -25,3 +25,6 @@ openpyxl
 xlrd>=2.0.1
 fpdf2==2.7.8
 python-docx
+geopandas
+rasterio
+shapely

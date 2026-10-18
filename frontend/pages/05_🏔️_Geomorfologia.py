@@ -137,117 +137,41 @@ def descargar_dem_ee_como_tif(gdf_zona):
 
 # --- 2. CARGA DEL DEM (CONECTADO A LA NUBE Y EARTH ENGINE) ---
 
-@st.cache_data(show_spinner="Descargando y procesando terreno...", max_entries=1)
+import requests
+import json
+
+@st.cache_data(show_spinner="Calculando terreno en el servidor Backend...", max_entries=1)
 def cargar_y_cortar_dem(ruta_dem, _gdf_corte, zona_id):
     if _gdf_corte is None or _gdf_corte.empty: 
         return None, None, None
-    
-    safe_path = download_raster_secure(ruta_dem)
-    dem_array, out_meta, out_transform = None, None, None
-    falla_supabase = False
-    
-    if safe_path:
-        try:
-            geometria_valida = _gdf_corte.copy()
-            geometria_valida['geometry'] = geometria_valida.buffer(0).make_valid()
-
-            with rasterio.open(safe_path) as src:
-                from rasterio.windows import from_bounds
-                gdf_proy = geometria_valida.to_crs(src.crs)
-                
-                b_minx, b_miny, b_maxx, b_maxy = gdf_proy.total_bounds
-                x_buffer = (b_maxx - b_minx) * 0.1
-                y_buffer = (b_maxy - b_miny) * 0.1
-                minx, miny, maxx, maxy = b_minx - x_buffer, b_miny - y_buffer, b_maxx + x_buffer, b_maxy + y_buffer
-                
-                res = src.res[0]
-                min_size = res * 5 
-                if (maxx - minx) < min_size:
-                    center_x = (minx + maxx) / 2
-                    minx, maxx = center_x - (min_size / 2), center_x + (min_size / 2)
-                if (maxy - miny) < min_size:
-                    center_y = (miny + maxy) / 2
-                    miny, maxy = center_y - (min_size / 2), center_y + (min_size / 2)
-                
-                window = from_bounds(minx, miny, maxx, maxy, src.transform)
-                out_image = src.read(1, window=window)
-                
-                if out_image.size > 0:
-                    out_transform = src.window_transform(window)
-                    out_meta = src.meta.copy()
-                    out_meta.update({"driver": "GTiff", "height": out_image.shape[0], "width": out_image.shape[1], "transform": out_transform, "count": 1})
-                    
-                    from rasterio.features import geometry_mask
-                    mask_arr = geometry_mask(gdf_proy.geometry, out_shape=out_image.shape, transform=out_transform, invert=True)
-                    dem_array = np.where(mask_arr, out_image, np.nan)
-                    
-                    # 🔥 FIX: Limpieza estricta que respeta el nivel del mar (0)
-                    dem_array = np.where((dem_array == src.nodata) | (dem_array < -10), np.nan, dem_array)
-                    
-                    pixels_esperados = np.sum(mask_arr) 
-                    pixels_reales = np.sum(~np.isnan(dem_array)) 
-                    
-                    if pixels_esperados > 0:
-                        ratio_cobertura = pixels_reales / pixels_esperados
-                        if ratio_cobertura < 0.95:
-                            falla_supabase = True
-                            dem_array = None 
-                    else:
-                        falla_supabase = True
-                        dem_array = None
-                else:
-                    falla_supabase = True
-        except Exception:
-            falla_supabase = True
-    else:
-        falla_supabase = True
         
-    # 🔥 PARACAÍDAS SATELITAL (Earth Engine)
-    if falla_supabase or dem_array is None:
-        st.warning(f"⚠️ Cobertura local incompleta en '{zona_id}' (DEM parcial). Desplegando satélite Earth Engine...")
-        ee_path = descargar_dem_ee_como_tif(_gdf_corte)
-        if ee_path:
-            try:
-                with rasterio.open(ee_path) as src_ee:
-                    gdf_proy_ee = _gdf_corte.to_crs("EPSG:4326")
-                    out_image, out_transform_4326 = mask(src_ee, gdf_proy_ee.geometry.values, crop=True, nodata=-9999.0)
-                    
-                    dst_crs = 'EPSG:3116'
-                    from rasterio.warp import calculate_default_transform, reproject, Resampling
-                    transform_3116, width, height = calculate_default_transform(
-                        src_ee.crs, dst_crs, out_image.shape[2], out_image.shape[1], 
-                        *rasterio.transform.array_bounds(out_image.shape[1], out_image.shape[2], out_transform_4326)
-                    )
-                    
-                    dst_image = np.zeros((1, height, width), dtype=np.float32)
-                    reproject(source=out_image, destination=dst_image, src_transform=out_transform_4326, src_crs=src_ee.crs, dst_transform=transform_3116, dst_crs=dst_crs, resampling=Resampling.bilinear)
-                    
-                    out_meta = src_ee.meta.copy()
-                    out_meta.update({"driver": "GTiff", "height": height, "width": width, "transform": transform_3116, "crs": dst_crs, "count": 1})
-                    
-                    temp_arr_ee = dst_image[0].astype(float)
-                    gdf_proy_3116 = _gdf_corte.to_crs(dst_crs)
-                    
-                    from rasterio.features import geometry_mask
-                    mask_estricta_ee = geometry_mask(gdf_proy_3116.geometry, out_shape=temp_arr_ee.shape, transform=transform_3116, invert=True)
-                    temp_arr_ee = np.where(mask_estricta_ee, temp_arr_ee, np.nan)
-                    
-                    # 🔥 FIX: Respetar nivel del mar en Earth Engine
-                    temp_arr_ee = np.where((temp_arr_ee < -10) | (temp_arr_ee == -9999.0), np.nan, temp_arr_ee)
-                    
-                    if not np.isnan(temp_arr_ee).all():
-                        st.success("🛰️ Terreno satelital extraído exitosamente.")
-                        dem_array = temp_arr_ee
-                        out_transform = transform_3116 
-                        out_meta["EE_USED"] = True
-                    else: 
-                        return None, "EMPTY_DATA", None
-            except Exception as e: 
-                return None, f"EE_WARP_ERROR: {e}", None
-        else: 
-            return None, "EE_DOWNLOAD_FAILED", None
-
-    return dem_array, out_meta, out_transform
+    url_backend = "http://localhost:8000/api/geomorfologia/terreno_3d"
+    
+    # Preparamos el paquete de datos
+    payload = {
+        "geojson_str": _gdf_corte.to_crs("EPSG:4326").to_json(),
+        "ruta_dem": ruta_dem
+    }
+    
+    try:
+        # Hacemos la llamada al cerebro
+        respuesta = requests.post(url_backend, json=payload, timeout=60)
+        respuesta.raise_for_status()
+        datos = respuesta.json()
+        
+        # Reconstruimos la matriz a partir del JSON
+        arr_elevacion = np.array(datos["matriz_z"], dtype=float)
+        
+        # Para mantener compatibilidad con tus 1500 líneas, simulamos un meta y transform vacíos
+        # (Esto requerirá ir ajustando las pestañas que dependen del transform oficial poco a poco)
+        meta_simulada = {"crs": "EPSG:3116"} 
+        transform_simulado = None 
+        
+        return arr_elevacion, meta_simulada, transform_simulado
+        
+    except Exception as e:
+        st.error(f"Error de conexión con el Backend: {e}")
+        return None, "API_ERROR", None
 
 st.title("🏔️ Análisis Geomorfológico y Terreno 3D")
 st.markdown("Esta herramienta utiliza el **Modelo Digital de Elevación (DEM)** para modelar el terreno, calcular pendientes, extraer vectores de drenaje y realizar diagnósticos hidrológicos automáticos.")
