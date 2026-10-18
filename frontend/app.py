@@ -3,26 +3,34 @@
 import os
 import sys
 
-# 🚀 FIX EXTREMO: Inyectar rutas ANTES de importar cualquier librería geoespacial
-if os.name != 'nt':
-    os.environ["PROJ_LIB"] = "/usr/share/proj"
-    os.environ["PROJ_DATA"] = "/usr/share/proj"
-
-import pyproj
-
-# 🚀 PARCHE UNIVERSAL DE COORDENADAS (WINDOWS & LINUX/CLOUD)
-if os.name == 'nt':
-    # En Windows: Fuerza a la app a usar su propia BD EPSG
-    os.environ['PROJ_LIB'] = pyproj.datadir.get_data_dir()
-else:
-    # En Linux/WSL/Cloud: Fuerza internamente a pyproj a soltar su BD vieja
-    pyproj.datadir.set_data_dir("/usr/share/proj")
+# =====================================================================
+# 🚀 ÁRBITRO FORENSE: Sincronización del motor geoespacial (GDAL/PROJ)
+# =====================================================================
+try:
+    import rasterio
+    import pyproj
+    
+    # Buscamos la base de datos moderna incrustada en rasterio
+    rasterio_proj = os.path.join(os.path.dirname(rasterio.__file__), "proj_data")
+    pyproj_proj = pyproj.datadir.get_data_dir()
+    
+    # Obligamos a TODO el sistema a usar la base de datos moderna
+    if os.path.exists(rasterio_proj):
+        os.environ["PROJ_DATA"] = rasterio_proj  # Para PROJ >= 9.1
+        os.environ["PROJ_LIB"] = rasterio_proj   # Para PROJ < 9.1
+        pyproj.datadir.set_data_dir(rasterio_proj)
+    else:
+        os.environ["PROJ_DATA"] = pyproj_proj
+        os.environ["PROJ_LIB"] = pyproj_proj
+except Exception:
+    pass
+# =====================================================================
 
 import streamlit as st
 import plotly.express as px
 import pandas as pd
 
-# --- 1. CONFIGURACIÓN DE PÁGINA (SIEMPRE DEBE IR PRIMERO EN STREAMLIT) ---
+# --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
     page_title="SIHCLI-POTER | Centro de Comando",
     page_icon="💧",
@@ -33,9 +41,7 @@ st.set_page_config(
 # --- 📂 IMPORTACIÓN ROBUSTA DE MÓDULOS ---
 try:
     from modules import selectors
-    # 🔴 NOTA V2.0: inicializar_torrente_sanguineo() fue eliminado de aquí. 
 except ImportError:
-    # Fallback de rutas
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
     from modules import selectors
 
