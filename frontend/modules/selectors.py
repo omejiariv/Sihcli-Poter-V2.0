@@ -1,17 +1,18 @@
 # frontend/modules/selectors.py
 
 import streamlit as st
-import geopandas as gpd
 import pandas as pd
-from sqlalchemy import text
-from shapely.geometry import box
 import json
 import time
 import unicodedata
 import requests
+import os
 
-from modules import db_manager
 from modules.config import Config
+
+# 🚀 REFACTORIZACIÓN FRONTEND: 
+# Eliminamos geopandas, shapely y sqlalchemy de la cabecera.
+# El frontend ahora es un cliente ligero ("Thin Client").
 
 # ====================================================================
 # --- 1. REPARADOR DE TILDES (MOJIBAKE) ---
@@ -27,7 +28,6 @@ def decodificar_tildes(texto):
 
 def renderizar_telemetria_aleph():
     """Panel de control universal que monitorea las variables de estado en tiempo real."""
-    import streamlit as st
     import datetime
     
     st.sidebar.markdown("### 🧠 Telemetría del Aleph")
@@ -102,7 +102,6 @@ def renderizar_telemetria_aleph():
         enso_global = st.session_state.get('enso_fase', 'Desconocido ⚠️')
         enso_cat = st.session_state.get('aleph_enso_categoria', '')
         
-        # 🚀 FIX VISUAL: Alerta Crítica para "Súper Fuerte"
         if "Súper Fuerte" in enso_cat:
             cat_str = f"🔥 (¡{enso_cat}!)"
             st.error(f"⚠️ ALERTA CLIMÁTICA: Anomalía ONI clasificada como {enso_cat}. Se esperan impactos hidrológicos extremos.")
@@ -111,7 +110,6 @@ def renderizar_telemetria_aleph():
             
         color_enso = "#3498db" if "Niña" in enso_global else "#e74c3c" if "Niño" in enso_global else "#f39c12" if "Desconocido" in enso_global else "#2ecc71"
         
-        # Etiqueta HTML consolidada
         etiqueta_clima = f"<span style='color:{color_enso}; font-size:1.0em'><b>🌍 Clima ENSO: {enso_global} {cat_str}</b></span>"
         
         # --- PLUMA ACTUAL ---
@@ -157,7 +155,7 @@ def renderizar_telemetria_aleph():
         if tendencia: st.caption(f"📈 {tendencia}")
 
 # ====================================================================
-# 📂 NAVEGACIÓN GLOBAL Y EL ALEPH V2.5 (ESCALAS AVANZADAS RESTAURADAS)
+# 📂 NAVEGACIÓN GLOBAL Y EL ALEPH V2.5
 # ====================================================================
 def renderizar_menu_navegacion(pagina_actual):
     st.sidebar.markdown("### 🧭 Navegación | Actual:")
@@ -186,7 +184,6 @@ def renderizar_menu_navegacion(pagina_actual):
         st.page_link("pages/17_🛰️_Radar_Meteorologico.py", label="Radar Meteorológico", icon="🛰️")
         st.page_link("pages/16_🏭_Inyeccion_RURH.py", label="Inyección RURH", icon="🏭")
         
-    
     # -------------------------------------------------------------
     # 👁️ EL ALEPH (Selector Universal Multiescala Híbrido V5.2)
     # -------------------------------------------------------------
@@ -196,34 +193,30 @@ def renderizar_menu_navegacion(pagina_actual):
         LISTA_SUBREGIONES = ["Bajo Cauca", "Magdalena Medio", "Nordeste", "Norte", "Occidente", "Oriente", "Suroeste", "Urabá", "Valle De Aburrá"]
         LISTA_CARS = ["AMVA", "CORANTIOQUIA", "CORNARE", "CORPOURABA"]
 
-        # 3. Catálogo Cuencas (Sin cambios)
+        # 🚀 3. Catálogo Cuencas: REFACTORIZACIÓN A CLIENTE LIGERO
         @st.cache_data(ttl=3600)
         def obtener_catalogo_cuencas():
-            import pandas as pd
-            from sqlalchemy import text
-            from modules.db_manager import get_engine
-            
             try:
-                # Conectamos directamente a la capa espacial completa en PostgreSQL
-                engine = get_engine()
-                query = text("""
-                    SELECT 
-                        nomah, nomzh, nom_szh, 
-                        nom_nss1, nss1, 
-                        nom_nss2, nss2, 
-                        nom_nss3, nss3 
-                    FROM cuencas
-                """)
-                df_c = pd.read_sql(query, engine)
-                return df_c
+                # Usamos la API REST nativa de Supabase en lugar de SQLAlchemy directo
+                url_sb = st.secrets.get("SUPABASE_URL") or st.secrets.get("supabase", {}).get("SUPABASE_URL")
+                key_sb = st.secrets.get("SUPABASE_KEY") or st.secrets.get("supabase", {}).get("SUPABASE_KEY")
+                
+                if url_sb and key_sb:
+                    headers = {
+                        "apikey": key_sb,
+                        "Authorization": f"Bearer {key_sb}"
+                    }
+                    # Petición REST ultraligera solo por las columnas necesarias
+                    url_cuencas = f"{url_sb}/rest/v1/cuencas?select=nomah,nomzh,nom_szh,nom_nss1,nss1,nom_nss2,nss2,nom_nss3,nss3"
+                    respuesta = requests.get(url_cuencas, headers=headers, timeout=10)
+                    
+                    if respuesta.status_code == 200:
+                        return pd.DataFrame(respuesta.json())
             except Exception as e:
-                import streamlit as st
-                st.error(f"Error cargando catálogo desde PostgreSQL: {e}")
-                return pd.DataFrame()
+                st.error(f"Error conectando al catálogo REST de cuencas: {e}")
+            return pd.DataFrame()
 
-        # 1. Comentamos la escala Nacional y reordenamos para que Departamental sea la primera
         niveles = {
-        #   "🇨🇴 Nacional": "NACIONAL", # Oculto temporalmente
             "🏛️ Departamental": "DEPARTAMENTAL",
             "🏢 Municipal": "MUNICIPAL",
             "🧩 Regiones (Subregiones)": "REGIONAL",
@@ -231,13 +224,11 @@ def renderizar_menu_navegacion(pagina_actual):
             "💧 Cuencas Hidrográficas": "CUENCA"
         }
         
-        # 2. El radio button tomará por defecto el elemento Municipal (índice 1)
         escala_sel = st.radio("Escala de Análisis:", list(niveles.keys()), index=1, key="menu_escala_aleph")
         nivel_backend = niveles[escala_sel]
         
-        # 3. Inicializamos la variable vacía para que se defina dentro del enrutador
         territorio_final = ""
-        depto_filtro = "ANTIOQUIA"  # 🛟 FIX: Salvavidas para evitar el NameError
+        depto_filtro = "ANTIOQUIA" 
         
         # --- Enrutador de Escalas ---
         if nivel_backend == "DEPARTAMENTAL":
@@ -330,12 +321,10 @@ def renderizar_menu_navegacion(pagina_actual):
     import unicodedata
     import re
 
-    # 1. PURIFICACIÓN BÁSICA (Quitar tildes y sufijos GIS)
     lugar_limpio = ''.join(c for c in unicodedata.normalize('NFD', lugar_upper) if unicodedata.category(c) != 'Mn')
     lugar_puro = lugar_limpio.split(" - (")[0].strip()
     lugar_puro = re.sub(r'(?i)\s*-?\s*NSS\d*\b', '', lugar_puro).strip()
 
-    # 2. DICCIONARIO UNIVERSAL DE RESCATE (Homologación oficial DANE/ICA)
     dic_rescate = {
         "PUEBLO RICO": "PUEBLORRICO", "SAN VICENTE": "SAN VICENTE FERRER",
         "EL PENOL": "PENOL", "EL RETIRO": "RETIRO", "CAROLINA DEL PRINCIPE": "CAROLINA", 
@@ -344,51 +333,43 @@ def renderizar_menu_navegacion(pagina_actual):
     }
     lugar_maestro = dic_rescate.get(lugar_puro, lugar_puro)
 
-    # 3. FORJA DE LLAVE PECUARIA UNIVERSAL (Formato estricto: NIVEL_NOMBRE_TOTAL)
-    # Agrupamos todas las resoluciones hídricas bajo la etiqueta maestra "CUENCA"
     nivel_pecuario = "CUENCA" if nivel_upper in ["AH", "ZH", "SZH", "NSS1", "NSS2", "NSS3", "CUENCA"] else nivel_upper
     
-    # La llave no admite espacios ni puntos, solo guiones bajos
     texto_llave = re.sub(r'[^A-Z0-9]', '_', lugar_maestro)
     texto_llave = re.sub(r'_+', '_', texto_llave).strip('_')
     llave_pecuaria_universal = f"{nivel_pecuario}_{texto_llave}_TOTAL"
 
-    # 4. FORJA DE PARÁMETROS DEMOGRÁFICOS (DANE)
     nivel_demo = "REGIONAL" if lugar_puro == "AMVA" else nivel_pecuario
 
-    # 5. 🧠 INYECCIÓN AL CEREBRO CENTRAL (Disponibles para TODO el simulador)
-    st.session_state['aleph_lugar'] = lugar_original             # Ej: Bzlo. Canime - (2317-03-01-04)
-    st.session_state['aleph_escala'] = nivel_backend             # Ej: NSS3, MUNICIPAL
+    st.session_state['aleph_lugar'] = lugar_original             
+    st.session_state['aleph_escala'] = nivel_backend             
+    st.session_state['aleph_lugar_puro'] = lugar_puro            
+    st.session_state['aleph_lugar_maestro'] = lugar_maestro      
+    st.session_state['aleph_nivel_demo'] = nivel_demo            
+    st.session_state['aleph_llave_pecuaria'] = llave_pecuaria_universal 
     
-    st.session_state['aleph_lugar_puro'] = lugar_puro            # Ej: BZLO. CANIME
-    st.session_state['aleph_lugar_maestro'] = lugar_maestro      # Ej: VALLE DE ABURRA
-    st.session_state['aleph_nivel_demo'] = nivel_demo            # Ej: CUENCA, REGIONAL
-    st.session_state['aleph_llave_pecuaria'] = llave_pecuaria_universal # Ej: CUENCA_BZLO_CANIME_TOTAL
-    
-    # Jinete de Retrocompatibilidad V1 (Garantiza que Biodiversidad y otros no fallen)
     st.session_state['zona_activa_global'] = lugar_limpio
     st.session_state['nivel_activo_global'] = nivel_backend
 
-    # === LA CURA GLOBAL: PUENTE CARTOGRÁFICO PARA ANTIOQUIA ===
+    # === 🚀 REFACTORIZACIÓN FRONTEND: PUENTE CARTOGRÁFICO LIGERO ===
     if str(nivel_backend).strip().lower() == "departamental" and "antioquia" in str(lugar_original).lower():
-        import geopandas as gpd
         try:
             url_ant = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/Antioquia.geojson"
-            gdf_antioquia = gpd.read_file(url_ant)
-            gdf_antioquia['nombre_homologado'] = 'ANTIOQUIA'
-            st.session_state['aleph_poligono'] = gdf_antioquia
+            # Solicitud HTTP estándar ultraligera (1 segundo)
+            resp = requests.get(url_ant, timeout=10)
+            if resp.status_code == 200:
+                geojson_antioquia = resp.json()
+                geojson_antioquia['nombre_homologado'] = 'ANTIOQUIA'
+                st.session_state['aleph_poligono'] = geojson_antioquia
         except Exception as e:
             pass
     else:
-        # 🧹 PURGA DE FANTASMAS: Si la escala cambia a Cuenca o Municipio,
-        # vaciamos el mapa global para obligar a las páginas a extraer la geometría exacta.
         if 'aleph_poligono' in st.session_state:
             st.session_state['aleph_poligono'] = None
     # ==========================================================
 
     renderizar_telemetria_aleph()
     
-    # 🧹 BOTÓN DE PURGA MOVIDO A LA PARTE INFERIOR ABSOLUTA
     st.sidebar.markdown("<br>", unsafe_allow_html=True)
     if st.sidebar.button("🧹 Purgar Memoria y Caché", width="stretch", key="btn_purga_global_aleph"):
         st.session_state.clear()
@@ -396,7 +377,7 @@ def renderizar_menu_navegacion(pagina_actual):
         st.rerun()
 
 # ====================================================================
-# ☁️ CONEXIÓN A SUPABASE Y DEMÁS FUNCIONES ORIGINALES
+# ☁️ CONEXIÓN A SUPABASE Y DEMÁS FUNCIONES
 # ====================================================================
 @st.cache_resource
 def get_supabase_client():
@@ -410,87 +391,11 @@ def get_supabase_client():
     except Exception as e: return str(e)
 
 def renderizar_gestor_escenarios(lugar):
-    with st.sidebar.expander("📸 Gestor de Escenarios", expanded=False):
+    with st.sidebar.expander("📸 Gestor de Escenarios (Enlace API)", expanded=False):
         st.markdown(f"**Territorio:** `{lugar}`")
-        engine = db_manager.get_engine()
-        try:
-            with engine.begin() as conn:
-                conn.execute(text("""
-                    CREATE TABLE IF NOT EXISTS escenarios_sihcli (
-                        id SERIAL PRIMARY KEY,
-                        territorio TEXT NOT NULL,
-                        nombre_escenario TEXT NOT NULL,
-                        fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        datos JSONB,
-                        UNIQUE (territorio, nombre_escenario)
-                    )
-                """))
-        except Exception as e:
-            st.error(f"⚠️ Error verificando BD de escenarios: {e}")
-            return
-
-        nombre_nuevo = st.text_input("Nombre del Nuevo Escenario:", placeholder="Ej: Plan Resiliencia 2027")
-        if st.button("💾 Guardar Escenario Actual", width="stretch"):
-            if nombre_nuevo.strip():
-                estado_actual = {
-                    k: v for k, v in st.session_state.items() 
-                    if isinstance(v, (int, float, str, bool, list, dict)) 
-                    and not k.startswith("FormSubmitter")
-                    and not k.startswith("btn_")
-                }
-                try:
-                    query_insert = text("""
-                        INSERT INTO escenarios_sihcli (territorio, nombre_escenario, datos, fecha) 
-                        VALUES (:terr, :nom, :datos, CURRENT_TIMESTAMP)
-                        ON CONFLICT (territorio, nombre_escenario) 
-                        DO UPDATE SET datos = EXCLUDED.datos, fecha = CURRENT_TIMESTAMP
-                    """)
-                    with engine.begin() as conn:
-                        conn.execute(query_insert, {"terr": lugar, "nom": nombre_nuevo.strip(), "datos": json.dumps(estado_actual)})
-                    st.success(f"✅ Escenario '{nombre_nuevo}' blindado en Supabase.")
-                except Exception as e:
-                    st.error(f"❌ Error al guardar en la nube: {e}")
-            else:
-                st.warning("⚠️ Debes asignar un nombre al escenario.")
-
-        st.markdown("---")
-        try:
-            query_load = text("SELECT nombre_escenario FROM escenarios_sihcli WHERE territorio = :terr ORDER BY fecha DESC")
-            df_escenarios = pd.read_sql(query_load, engine, params={"terr": lugar})
-            opciones_guardadas = df_escenarios['nombre_escenario'].tolist() if not df_escenarios.empty else []
-        except Exception:
-            opciones_guardadas = []
-
-        if opciones_guardadas:
-            esc_sel = st.selectbox("📂 Escenarios en la Nube:", opciones_guardadas)
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                if st.button("🚀 Cargar", width="stretch"):
-                    try:
-                        q_fetch = text("SELECT datos FROM escenarios_sihcli WHERE territorio = :terr AND nombre_escenario = :nom")
-                        with engine.connect() as conn:
-                            resultado = conn.execute(q_fetch, {"terr": lugar, "nom": esc_sel}).fetchone()
-                            if resultado and resultado[0]:
-                                datos_recuperados = resultado[0] if isinstance(resultado[0], dict) else json.loads(resultado[0])
-                                for k, v in datos_recuperados.items():
-                                    if not k.startswith("btn_") and not k.startswith("FormSubmitter"):
-                                        try: st.session_state[k] = v
-                                        except Exception: pass
-                                st.success(f"Restaurando '{esc_sel}'...")
-                                time.sleep(0.5)
-                                st.rerun() 
-                    except Exception as e:
-                        st.error(f"Error restaurando: {e}")
-                        
-            with col2:
-                if st.button("🗑️", help="Eliminar este escenario"):
-                    try:
-                        q_del = text("DELETE FROM escenarios_sihcli WHERE territorio = :terr AND nombre_escenario = :nom")
-                        with engine.begin() as conn: conn.execute(q_del, {"terr": lugar, "nom": esc_sel})
-                        st.rerun()
-                    except Exception as e: st.error(f"Error: {e}")
-        else:
-            st.info("Sin escenarios guardados.")
+        st.info("🔄 Migrando el gestor de guardado al nuevo Cerebro Backend en Render. Próximamente en línea.")
+        # Nota: La lógica SQL directa fue pausada temporalmente para evitar que 
+        # el Frontend necesite las librerías pesadas de SQLAlchemy.
 
 @st.cache_data(show_spinner=False, ttl=86400)
 def obtener_matriz_maestra_csv(url):
@@ -510,9 +415,6 @@ def render_cabezote_sintesis_body(nombre_zona):
         if pob > 0 or bov > 0 or por > 0 or ave > 0:
             st.success(f"📌 **SÍNTESIS ACTIVA** | 📍 Territorio: {nombre_zona} \n\n 👥 Humanos: {pob:,} | 🐄 Bov: {bov:,} | 🐖 Porc: {por:,} | 🐔 Aves: {ave:,}")
 
-# ====================================================================
-# Funciones Legacy (Mantenidas para compatibilidad interna)
-# ====================================================================
 def cargar_atributos_cuencas(): return pd.DataFrame()
 def cargar_atributos_municipios(): return pd.DataFrame()
 def render_selector_espacial(modo_firma="clasica"): return [], "MEDELLIN", 1500.0, None, "Municipal"
