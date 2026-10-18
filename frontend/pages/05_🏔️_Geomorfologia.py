@@ -14,7 +14,6 @@ from rasterio.io import MemoryFile
 import plotly.express as px
 import plotly.graph_objects as go
 from shapely.geometry import shape, LineString, MultiLineString, Polygon
-import ee
 import tempfile
 import requests
 import importlib.util
@@ -102,38 +101,6 @@ def obtener_maestro():
     gdf = gpd.read_file(url_maestro)
     if gdf.crs is None: gdf.set_crs("EPSG:4326", inplace=True)
     return gdf
-
-def descargar_dem_ee_como_tif(gdf_zona):
-    """Puente inteligente para descargar el NASADEM de Earth Engine"""
-    try: 
-        ee.Initialize(project='ee-omejiariv')
-    except Exception as e: 
-        st.error(f"Error inicializando Earth Engine (Verifica tu entorno local): {e}")
-        return None
-        
-    try:
-        dem = ee.Image("NASA/NASADEM_HGT/001").select('elevation')
-        gdf_4326 = gdf_zona.to_crs("EPSG:4326")
-        minx, miny, maxx, maxy = gdf_4326.total_bounds
-        roi_ee = ee.Geometry.Rectangle([minx, miny, maxx, maxy])
-        
-        # 🔥 SCALING INTELIGENTE PARA ZONAS GIGANTES
-        area_km2 = gdf_zona.to_crs("EPSG:3116").area.sum() / 1e6
-        if area_km2 > 20000: escala_dinamica = 500  
-        elif area_km2 > 5000: escala_dinamica = 250 
-        else: escala_dinamica = 90                  
-        
-        url_descarga = dem.getDownloadURL({'scale': escala_dinamica, 'crs': 'EPSG:4326', 'region': roi_ee, 'format': 'GEO_TIFF'})
-        respuesta = requests.get(url_descarga)
-        respuesta.raise_for_status() 
-        
-        temp_file = tempfile.NamedTemporaryFile(suffix='.tif', delete=False)
-        with open(temp_file.name, 'wb') as f:
-            f.write(respuesta.content)
-        return temp_file.name
-    except Exception as e:
-        st.error(f"Error descargando satélite EE: {e}")
-        return None
 
 # --- 2. CARGA DEL DEM (CONECTADO A LA NUBE Y EARTH ENGINE) ---
 
