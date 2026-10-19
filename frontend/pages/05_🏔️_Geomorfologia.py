@@ -127,7 +127,7 @@ def cargar_y_cortar_dem(ruta_dem, _gdf_corte, zona_id):
         datos = respuesta.json()
         
         # Reconstruimos la matriz a partir del JSON
-        arr_elevacion = np.array(datos["matriz_z"], dtype=float)
+        arr_elevacion = np.array(datos["matriz_z"], dtype=np.float32) # Forzamos float32 para el TIF
         
         # 🚀 SOLUCIÓN AL TRANSFORM: Reconstruimos la cuadrícula espacial a partir del polígono
         import rasterio.transform
@@ -137,8 +137,16 @@ def cargar_y_cortar_dem(ruta_dem, _gdf_corte, zona_id):
         # Creamos el transform real que exige pysheds
         transform_real = rasterio.transform.from_bounds(minx, miny, maxx, maxy, ancho, alto)
         
-        # Meta básica
-        meta_simulada = {"crs": "EPSG:4326"} 
+        # 🚀 FIX PARA DESCARGAS TIF: Meta completa para Rasterio
+        meta_simulada = {
+            "driver": "GTiff",
+            "height": alto,
+            "width": ancho,
+            "count": 1,
+            "dtype": "float32",
+            "crs": "EPSG:4326",
+            "transform": transform_real
+        } 
         
         return arr_elevacion, meta_simulada, transform_real
         
