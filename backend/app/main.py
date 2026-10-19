@@ -2,8 +2,10 @@
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
 from backend.app.api import router_demografia
-from backend.app.api import router_hidrologia  # 🚀 NUEVA IMPORTACIÓN DEL MOTOR HÍDRICO
+from backend.app.api import router_hidrologia 
+from backend.app.api import router_geomorfologia
 
 app = FastAPI(
     title="Sihcli-Poter API Core",

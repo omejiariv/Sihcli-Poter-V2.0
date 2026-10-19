@@ -8,7 +8,6 @@ import warnings
 import pandas as pd
 import numpy as np
 import streamlit as st
-from sqlalchemy import text
 
 # ==============================================================================
 # 💉 SISTEMA INMUNOLÓGICO Y VARIABLES GLOBALES
@@ -335,6 +334,7 @@ def obtener_metabolismo_exacto(nombre_seleccion, anio_destino=None):
     return res
 
 def display_plotly_download_buttons(fig, file_prefix):
+    import streamlit as st
     st.markdown("---")
     col1, col2 = st.columns(2)
     with col1:
@@ -344,26 +344,35 @@ def display_plotly_download_buttons(fig, file_prefix):
         try:
             img_bytes = fig.to_image(format="png")
             st.download_button("Descargar PNG", img_bytes, f"{file_prefix}.png", "image/png")
-        except: st.info("💡 Para descarga PNG instala: `pip install kaleido`")
+        except: 
+            st.info("💡 Para descarga PNG instala: `pip install kaleido`")
 
-import geopandas as gpd
 
-@st.cache_data(ttl=86400, show_spinner=False, hash_funcs={"sqlalchemy.sql.elements.TextClause": str})
+# 🚀 CIRUGÍA 5B: Eliminamos geopandas y reestructuramos el decorador de caché
+import plotly.express as px
+import pandas as pd
+import streamlit as st
+
+# Quitamos el hash_funcs de sqlalchemy para que la app no explote al iniciar
+@st.cache_data(ttl=86400, show_spinner=False)
 def cargar_capa_espacial_cache(query_sql, _arg2=None, geom_col="geometry", **kwargs):
     if isinstance(_arg2, str): geom_col = _arg2
     try:
+        # ⚠️ Lazy Loading Múltiple: Solo cargamos esto si la función realmente se usa
+        from sqlalchemy import text
         from modules.db_manager import get_engine
+        import geopandas as gpd 
+        
         engine_geo = get_engine() 
         with engine_geo.connect() as conn:
             conn.execute(text("SET statement_timeout = '600000';")) 
             sql_a_ejecutar = text(query_sql) if isinstance(query_sql, str) else query_sql
             return gpd.read_postgis(sql_a_ejecutar, conn, geom_col=geom_col)
-    except Exception as e: return None
-
-import plotly.express as px
-import pandas as pd
-import geopandas as gpd
-import streamlit as st
+    except ImportError:
+        # Si falta geopandas o sqlalchemy (porque es el frontend), no estrellamos la app
+        return None
+    except Exception as e: 
+        return None
 
 # ==============================================================================
 # 🗺️ RENDERIZADOR DE MINIMAPA RADAR (Contexto Espacial Inercial)
