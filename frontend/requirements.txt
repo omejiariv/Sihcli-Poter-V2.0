@@ -28,3 +28,4 @@ python-docx
 geopandas
 rasterio
 shapely
+pysheds
