@@ -1,14 +1,10 @@
-# modules/data_processor.py
+# frontend/modules/data_processor.py
 
 import os
 import unicodedata
-
-import geopandas as gpd
 import pandas as pd
-from shapely import wkt
-from sqlalchemy import create_engine, text
-
 import streamlit as st
+
 from modules.config import Config
 
 # 🔥 IMPORTAMOS LA APLANADORA MAESTRA (EL CEREBRO LINGÜÍSTICO)
@@ -41,8 +37,12 @@ def parse_spanish_date_robust(x):
 # =====================================================================
 # 🚀 MOTOR ESPACIAL OPTIMIZADO (Lectura Directa de PostGIS)
 # =====================================================================
-@st.cache_data(show_spinner="Descargando Gemelo Digital de Supabase...", ttl=600)
+@st.cache_data(ttl=86400, show_spinner=False)
 def load_and_process_all_data():
+    # 💉 LAZY LOADING: Inyectamos el peso matemático SOLO cuando la función arranca
+    import geopandas as gpd
+    from shapely import wkt
+    from sqlalchemy import create_engine, text
     gdf_stations = gpd.GeoDataFrame()
     gdf_municipios = gpd.GeoDataFrame()
     gdf_subcuencas = gpd.GeoDataFrame()
