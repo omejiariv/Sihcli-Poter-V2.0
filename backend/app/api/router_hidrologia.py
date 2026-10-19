@@ -9,7 +9,7 @@ import sys
 import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
-from frontend.modules.db_manager import get_engine
+from backend.app.database import get_engine
 
 router = APIRouter(prefix="/api/hidrologia", tags=["Hidrologia"])
 

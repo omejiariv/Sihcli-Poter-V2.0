@@ -24,7 +24,8 @@ app.add_middleware(
 
 # Conectamos los enrutadores a la aplicación principal
 app.include_router(router_demografia.router)
-app.include_router(router_hidrologia.router)  # 🚀 NUEVA CONEXIÓN AL CEREBRO
+app.include_router(router_hidrologia.router)
+app.include_router(router_geomorfologia.router)
 
 @app.get("/")
 def read_root():
