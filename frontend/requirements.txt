@@ -31,7 +31,6 @@ shapely
 pysheds
 
 # --- MODELADO Y PRONÓSTICOS ---
-git+https://github.com/ajwdge/PyETo.git
 pmdarima
 prophet
 scikit-learn
