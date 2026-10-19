@@ -1,13 +1,15 @@
-# modules/db_manager.py
+# frontend/modules/db_manager.py
 
 import requests
 import pandas as pd
 import json
 import streamlit as st
-import geopandas as gpd
-from sqlalchemy import create_engine, text
-from sqlalchemy.exc import SQLAlchemyError
 from io import BytesIO
+
+# 🔪 CIRUGÍA 7: Desactivamos TODAS las dependencias pesadas globales
+# import geopandas as gpd
+# from sqlalchemy import create_engine, text
+# from sqlalchemy.exc import SQLAlchemyError
 
 # Obtener la URL de conexión desde secrets.toml
 try:
@@ -26,6 +28,9 @@ def get_engine():
         return None
 
     try:
+        # 💉 LAZY LOADING: Importamos solo si la librería existe
+        from sqlalchemy import create_engine
+        
         engine = create_engine(
             db_url,
             pool_pre_ping=True,      
@@ -44,9 +49,13 @@ def get_engine():
         )
         return engine
         
+    except ImportError:
+        # Protegemos el frontend si no tiene sqlalchemy
+        return None
     except Exception as e:
         st.error(f"Error creando engine: {e}")
         return None
+
 
 def init_db():
     """
@@ -55,6 +64,10 @@ def init_db():
     engine = get_engine()
     if engine is not None:
         try:
+            # 💉 LAZY LOADING: Importamos text y excepciones aquí adentro
+            from sqlalchemy import text
+            from sqlalchemy.exc import SQLAlchemyError
+            
             with engine.connect() as conn:
                 # Sintaxis PostgreSQL
                 conn.execute(
@@ -79,9 +92,10 @@ def init_db():
                     )
                 )
                 conn.commit()
-        except SQLAlchemyError as e:
+        except ImportError:
+            pass # Si es el frontend ligero, simplemente omitimos la inicialización
+        except Exception as e:
             st.error(f"Error inicializando DB: {e}")
-
 
 def save_user_preference(username, key, value):
     """
