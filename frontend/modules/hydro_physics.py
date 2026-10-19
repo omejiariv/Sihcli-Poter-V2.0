@@ -1,19 +1,18 @@
-# modules/hydro_physics.py
+# frontend/modules/hydro_physics.py
 
 import numpy as np
 import rasterio
 from rasterio.warp import reproject, Resampling
-from rasterio.io import MemoryFile
 import os
-import io
-import requests # 🚀 FIX: Usar requests es más eficiente y estable que urllib
+import requests 
 import tempfile
 import streamlit as st
 
-from modules.interpolation import interpolador_maestro
+# 🔪 CIRUGÍA 4: Comentamos la importación global pesada (Evitamos que explote al inicio)
+# from modules.interpolation import interpolador_maestro
 
 # --- 🚀 CLOUD SMART CACHE BLINDADO ---
-@st.cache_resource # Cambiado a cache_resource para que sea un Singleton global
+@st.cache_resource 
 def download_raster_secure(url):
     """
     Descarga el raster asegurando que se almacene en memoria temporal volátil.
@@ -43,6 +42,9 @@ def download_raster_secure(url):
 
 # --- B. INTERPOLACIÓN PUENTE ---
 def interpolar_variable(gdf_puntos, columna_valor, grid_x, grid_y, method='kriging', dem_array=None):
+    # 🔪 CIRUGÍA 4 (LAZY LOADING): Importamos la librería pesada SOLAMENTE si esta función se ejecuta
+    from modules.interpolation import interpolador_maestro
+    
     Z_Interp, Z_Error = interpolador_maestro(
         df_puntos=gdf_puntos,
         col_val=columna_valor,
@@ -85,16 +87,6 @@ def warper_raster_to_grid(raster_path, bounds, shape):
     except Exception as e:
         print(f"Error en warper: {e}")
         return None
-            
-    # 2. Si el archivo es un string (Ruta local o URL)
-    safe_path = download_raster_secure(raster_path)
-    if not safe_path: return None
-    try:
-        with rasterio.open(safe_path) as src:
-            return _ejecutar_reproject(src, bounds, shape)
-    except Exception as e:
-        print(f"Error warper_raster_to_grid (Local): {e}")
-        return None
 
 # --- D. MOTOR FÍSICO "EL ALEPH" ---
 def run_distributed_model(Z_P, grid_x, grid_y, paths, bounds):
@@ -127,18 +119,9 @@ def run_distributed_model(Z_P, grid_x, grid_y, paths, bounds):
     cell_size_x = np.maximum(np.abs(grid_x[0,1] - grid_x[0,0]) * scale_factor, 1.0)
     Z_Slope_Pct = np.nan_to_num(np.sqrt((dy/cell_size_y)**2 + (dx/cell_size_x)**2), nan=0.0)
 
-    # --- 4. COBERTURA Y ESCORRENTÍA ---
+    # --- 4. COBERTURAS (Placeholder visual para evitar dependencias cruzadas) ---
     Z_C = np.full_like(Z_P, 0.45) 
     Z_Cob_Viz = None
-    if paths.get('cobertura'):
-        try:
-            Z_Cob = warper_raster_to_grid(paths['cobertura'], bounds, shape)
-            if Z_Cob is not None:
-                Z_Cob_Viz = Z_Cob 
-                def map_c(code): return CLC_C_BASE.get(int(code), 0.50)
-                vfunc = np.vectorize(map_c)
-                Z_C = vfunc(np.nan_to_num(Z_Cob, nan=0))
-        except: pass
 
     Z_C_Mod = np.clip(Z_C + (Z_Slope_Pct * 0.2), 0.05, 0.95)
     Z_Q_Sup = Z_Exc * Z_C_Mod
@@ -165,7 +148,5 @@ def run_distributed_model(Z_P, grid_x, grid_y, paths, bounds):
         '9. Rendimiento Hídrico (L/s/km²)': Z_Rendimiento,
         '10. Susceptibilidad Erosión (Adim)': Z_Erosion
     }
-    if Z_Cob_Viz is not None:
-        resultados['11. Cobertura de Suelo (Clase)'] = Z_Cob_Viz
-
+    
     return resultados
