@@ -37,3 +37,4 @@ pysheds
 pmdarima
 prophet
 scikit-learn
+pymannkendall
