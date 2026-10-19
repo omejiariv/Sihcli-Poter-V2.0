@@ -137,14 +137,14 @@ def cargar_y_cortar_dem(ruta_dem, _gdf_corte, zona_id):
         # Creamos el transform real que exige pysheds
         transform_real = rasterio.transform.from_bounds(minx, miny, maxx, maxy, ancho, alto)
         
-        # 🚀 FIX PARA DESCARGAS TIF: Meta completa para Rasterio
+        # 🚀 FIX PARA DESCARGAS TIF: Bypass de PROJ4 para evitar conflictos en la nube
         meta_simulada = {
             "driver": "GTiff",
             "height": alto,
             "width": ancho,
             "count": 1,
             "dtype": "float32",
-            "crs": "EPSG:4326",
+            "crs": "+proj=longlat +datum=WGS84 +no_defs", # 👈 Reemplazamos "EPSG:4326"
             "transform": transform_real
         } 
         
