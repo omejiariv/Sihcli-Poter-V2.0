@@ -1,15 +1,13 @@
 # frontend/requirements.txt
 
-# --- MOTOR WEB ---
+# --- MOTOR WEB Y VISUALIZACIÓN ---
 streamlit>=1.35.0
 streamlit-folium==0.18.0
+folium==0.17.0
 requests
 requests-cache
 retry-requests
 python-dotenv==1.2.2
-
-# --- VISUALIZACIÓN Y GRÁFICOS ---
-folium==0.17.0
 altair==5.3.0
 plotly==5.22.0
 matplotlib==3.8.4
@@ -17,16 +15,23 @@ kaleido==0.2.1
 Pillow==10.3.0
 rich==13.7.1
 
-# --- MANEJO DE DATOS BÁSICO Y REPORTES ---
+# --- MANEJO DE DATOS Y REPORTES ---
 numpy<2.0.0
 pandas==2.2.2
 openpyxl
 xlrd>=2.0.1
 fpdf2==2.7.8
 python-docx
+sqlalchemy
 
-# --- MOTOR ESPACIAL LOCAL (Interactividad) ---
+# --- MOTOR ESPACIAL (Interactividad) ---
 geopandas
 rasterio
 shapely
 pysheds
+
+# --- MODELADO Y PRONÓSTICOS ---
+pyeto
+pmdarima
+prophet
+scikit-learn
