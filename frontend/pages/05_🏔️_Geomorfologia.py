@@ -112,7 +112,7 @@ def cargar_y_cortar_dem(ruta_dem, _gdf_corte, zona_id):
     if _gdf_corte is None or _gdf_corte.empty: 
         return None, None, None
         
-    url_backend = "http://localhost:8000/api/geomorfologia/terreno_3d"
+    url_backend = "https://sihcli-poter-v2-0-backend.onrender.com/api/geomorfologia/terreno_3d"
     
     # Preparamos el paquete de datos
     payload = {
@@ -129,12 +129,18 @@ def cargar_y_cortar_dem(ruta_dem, _gdf_corte, zona_id):
         # Reconstruimos la matriz a partir del JSON
         arr_elevacion = np.array(datos["matriz_z"], dtype=float)
         
-        # Para mantener compatibilidad con tus 1500 líneas, simulamos un meta y transform vacíos
-        # (Esto requerirá ir ajustando las pestañas que dependen del transform oficial poco a poco)
-        meta_simulada = {"crs": "EPSG:3116"} 
-        transform_simulado = None 
+        # 🚀 SOLUCIÓN AL TRANSFORM: Reconstruimos la cuadrícula espacial a partir del polígono
+        import rasterio.transform
+        minx, miny, maxx, maxy = _gdf_corte.total_bounds
+        alto, ancho = arr_elevacion.shape
         
-        return arr_elevacion, meta_simulada, transform_simulado
+        # Creamos el transform real que exige pysheds
+        transform_real = rasterio.transform.from_bounds(minx, miny, maxx, maxy, ancho, alto)
+        
+        # Meta básica
+        meta_simulada = {"crs": "EPSG:4326"} 
+        
+        return arr_elevacion, meta_simulada, transform_real
         
     except Exception as e:
         st.error(f"Error de conexión con el Backend: {e}")
