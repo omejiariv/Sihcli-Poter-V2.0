@@ -122,7 +122,7 @@ def cargar_y_cortar_dem(ruta_dem, _gdf_corte, zona_id):
     
     try:
         # Hacemos la llamada al cerebro
-        respuesta = requests.post(url_backend, json=payload, timeout=60)
+        respuesta = requests.post(url_backend, json=payload, timeout=300)
         respuesta.raise_for_status()
         datos = respuesta.json()
         
@@ -1333,7 +1333,7 @@ with st.expander("⚙️ PANEL DE ADMINISTRADOR: Forja Masiva de Matriz Hidro-Ge
                                     
                     # B. Cargar TerritorioMaestro (Municipios, Regiones, CAR, Depto)
                     url_tm = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
-                    res = requests.get(url_tm, timeout=60)
+                    res = requests.get(url_tm, timeout=300)
                     if res.status_code == 200:
                         gdf_tm = gpd.read_file(io.BytesIO(res.content))
                         gdf_tm.columns = [c.lower().strip() for c in gdf_tm.columns]
