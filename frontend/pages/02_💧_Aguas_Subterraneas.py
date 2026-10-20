@@ -447,7 +447,9 @@ if gdf_zona is not None:
             WHERE longitud BETWEEN {minx-buff} AND {maxx+buff} 
             AND latitud BETWEEN {miny-buff} AND {maxy+buff}
         """)
-        df_puntos = pd.read_sql(str(q_geo), engine)
+        from modules.db_manager import get_engine
+        motor_seguro = get_engine()
+        df_puntos = pd.read_sql(q_geo, motor_seguro)
         
         if not df_puntos.empty:
             ids_estaciones = df_puntos['id_estacion'].astype(str).tolist()
