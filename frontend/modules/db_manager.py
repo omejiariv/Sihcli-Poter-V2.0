@@ -22,7 +22,6 @@ import streamlit as st
 
 @st.cache_resource(show_spinner=False)
 def get_engine():
-    # 1. Leemos la clave ADENTRO de la función, nunca de forma global
     try:
         db_url = st.secrets["DATABASE_URL"]
     except Exception as e:
@@ -49,11 +48,8 @@ def get_engine():
             }
         )
         return engine
-    except ImportError:
-        st.error("Error: Falta sqlalchemy en requirements.txt del frontend.")
-        return None
     except Exception as e:
-        st.error(f"Error creando motor: {e}")
+        st.error(f"🚨 Error real creando motor: {e}")
         return None
 
 
