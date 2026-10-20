@@ -40,3 +40,5 @@ scikit-learn
 pymannkendall
 psycopg2-binary
 sqlalchemy
+gstools
+pyeto
