@@ -56,7 +56,7 @@ def load_and_process_all_data():
         engine = get_engine()
         
         if engine is None:
-            st.error("No se pudo establecer la conexión segura con la base de datos.")
+            st.error(f"🚨 ERROR TÉCNICO REAL: {str(e)}")
             return None, None, None, None, None, None
 
         # --- 1. ESTACIONES (Ultra-rápido usando geom_col) ---
