@@ -39,3 +39,4 @@ prophet
 scikit-learn
 pymannkendall
 psycopg2-binary
+SQLAlchemy
