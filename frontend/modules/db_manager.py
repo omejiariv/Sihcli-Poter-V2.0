@@ -38,7 +38,6 @@ def get_engine():
             pool_size=5,             # 👈 Límite seguro de conexiones simultáneas
             max_overflow=10,         # 👈 Margen de emergencia
             connect_args={
-                'sslmode': 'require', 
                 'client_encoding': 'utf8',
                 # 🛡️ Parámetros avanzados para mantener la línea viva (Keep-Alive)
                 'keepalives': 1,
@@ -104,6 +103,8 @@ def save_user_preference(username, key, value):
     engine = get_engine()
     if engine is not None:
         try:
+            from sqlalchemy import text
+            from sqlalchemy.exc import SQLAlchemyError
             # Serializar si es objeto complejo
             if isinstance(value, (dict, list)):
                 val_str = json.dumps(value)
@@ -147,6 +148,8 @@ def get_user_preference(username, key, default=None):
     engine = get_engine()
     if engine is not None:
         try:
+            from sqlalchemy import text
+            from sqlalchemy.exc import SQLAlchemyError
             with engine.connect() as conn:
                 result = conn.execute(
                     text(
@@ -183,6 +186,7 @@ def cargar_concesiones_maestro():
     url_concesiones = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/sihcli_maestros/Metabolismo_Hidrico_Antioquia_Maestro.geojson"
     
     try:
+        import geopandas as gpd
         # 🚀 FIX: Descargamos el archivo manualmente aislando a GeoPandas de la red
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url_concesiones, headers=headers, timeout=30)
