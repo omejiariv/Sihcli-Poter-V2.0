@@ -1063,9 +1063,21 @@ if gdf_zona_seleccionada is not None:
                     except:
                         pass
 
+                    # 🌊 DIBUJAR RED DE DRENAJE (Guía visual para saber dónde hacer clic)
+                    if st.session_state.get('gdf_rios') is not None and not st.session_state['gdf_rios'].empty:
+                        try:
+                            rios_viz = st.session_state['gdf_rios'].to_crs("EPSG:4326")[['geometry']].copy()
+                            folium.GeoJson(
+                                rios_viz,
+                                name="Red de Drenaje (Cauces)",
+                                style_function=lambda x: {'color': '#0066cc', 'weight': 2.5, 'opacity': 0.85}
+                            ).add_to(m_pour)
+                        except Exception:
+                            pass
+
                     # 💧 DIBUJAR LA MICROCUENCA DELIMITADA
                     if st.session_state['cuenca_delimitada'] is not None:
-                        gdf_viz = st.session_state['cuenca_delimitada'].to_crs("EPSG:4326")
+                        gdf_viz = st.session_state['cuenca_delimitada'].to_crs("EPSG:4326")[['geometry']].copy()
                         folium.GeoJson(
                             gdf_viz,
                             style_function=lambda x: {'fillColor': '#3498db', 'color': '#2980b9', 'weight': 3, 'fillOpacity': 0.4},
@@ -1082,8 +1094,14 @@ if gdf_zona_seleccionada is not None:
                     m_pour.add_child(folium.LatLngPopup())
                     folium.LayerControl().add_to(m_pour)
                     
-                    # 🚀 FIX 2: Bloquea el tráfico de red inútil. Solo avisa al servidor cuando hay un clic efectivo.
-                    mapa_clic = st_folium(m_pour, height=650, width="stretch", key="mapa_pour_point", returned_objects=["last_clicked"])
+                    # 🚀 FIX CRÍTICO: Usar use_container_width=True en lugar de width="stretch"
+                    mapa_clic = st_folium(
+                        m_pour, 
+                        height=600, 
+                        use_container_width=True, 
+                        key="mapa_pour_point", 
+                        returned_objects=["last_clicked"]
+                    )
                     
                 with c_controles_pour:
                     st.markdown("#### 📍 Controlador Hidrológico")

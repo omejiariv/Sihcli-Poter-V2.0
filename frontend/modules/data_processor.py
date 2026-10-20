@@ -176,6 +176,12 @@ def load_and_process_all_data():
         except Exception:
             pass
 
+        return gdf_stations, gdf_municipios, df_long, df_enso, gdf_subcuencas, gdf_predios
+
+    except Exception as e:
+        st.error(f"Error Crítico BD: {e}")
+        return None, None, None, None, None, None
+
 # =====================================================================
 # 🚀 NUEVO ESCUDO PARA HISTORIAL DE PRECIPITACIÓN
 # =====================================================================
