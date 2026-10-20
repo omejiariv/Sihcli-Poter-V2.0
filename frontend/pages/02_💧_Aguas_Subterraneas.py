@@ -441,22 +441,22 @@ if gdf_zona is not None:
         buff = 0.05
         
         # Consulta usando columnas corregidas (latitud/longitud)
-        q_geo = text(f"""
+        # ELIMINADO el uso de text()
+        q_geo = f"""
             SELECT id_estacion, nombre, latitud, longitud, altitud, municipio 
             FROM estaciones 
             WHERE longitud BETWEEN {minx-buff} AND {maxx+buff} 
             AND latitud BETWEEN {miny-buff} AND {maxy+buff}
-        """)
-        from modules.db_manager import get_engine
-        motor_seguro = get_engine()
-        df_puntos = pd.read_sql(q_geo, motor_seguro)
+        """
+        df_puntos = pd.read_sql(q_geo, engine)
         
         if not df_puntos.empty:
             ids_estaciones = df_puntos['id_estacion'].astype(str).tolist()
     else:
         # Consulta por IDs específicos
         ids_fmt = ",".join([f"'{x}'" for x in ids_estaciones])
-        q = text(f"SELECT id_estacion, nombre, latitud, longitud, altitud, municipio FROM estaciones WHERE id_estacion IN ({ids_fmt})")
+        # ELIMINADO el uso de text() también aquí
+        q = f"SELECT id_estacion, nombre, latitud, longitud, altitud, municipio FROM estaciones WHERE id_estacion IN ({ids_fmt})"
         df_puntos = pd.read_sql(q, engine)
 
     if df_puntos.empty:
