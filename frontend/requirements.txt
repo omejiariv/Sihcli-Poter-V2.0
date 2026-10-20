@@ -42,3 +42,6 @@ psycopg2-binary
 sqlalchemy
 gstools
 git+https://github.com/woodcrafty/PyETo.git
+gstools==1.6.1
+earthengine-api>=0.1.400
+earthengine-api
