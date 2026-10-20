@@ -72,7 +72,7 @@ def load_and_process_all_data():
                 FROM estaciones
             """
             # Leemos directamente la geometría sin pasar por WKT
-            gdf_stations = gpd.read_postgis(text(sql_est), engine, geom_col="geometry")
+            gdf_stations = gpd.read_postgis(sql_est, engine, geom_col="geometry")
             
             # Aseguramos el CRS Web Global
             if gdf_stations.crs is None:
@@ -178,7 +178,7 @@ def load_precipitation_for_stations_cached(lista_estaciones):
         with engine.begin() as conn:
             # Aumentamos el tiempo de espera por si son muchos datos
             conn.execute(text("SET statement_timeout = '600000';"))
-            df = pd.read_sql(text(query), conn)
+            df = pd.read_sql(query, conn)
             
         return df
     except Exception as e:
