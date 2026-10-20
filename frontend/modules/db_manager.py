@@ -18,28 +18,30 @@ except Exception:
     DATABASE_URL = None
 
 # 🚀 FIX DEFINITIVO: Almacenamos el motor en la memoria global del servidor.
-# Esto evita que Supabase colapse por exceso de peticiones simultáneas.
+import streamlit as st
+
 @st.cache_resource(show_spinner=False)
 def get_engine():
-    db_url = DATABASE_URL
-    
+    # 1. Leemos la clave ADENTRO de la función, nunca de forma global
+    try:
+        db_url = st.secrets["DATABASE_URL"]
+    except Exception as e:
+        st.error(f"Falla de lectura de secrets: {e}")
+        return None
+
     if not db_url:
-        st.error("Error crítico: No se encontró DATABASE_URL en los secrets.")
         return None
 
     try:
-        # 💉 LAZY LOADING: Importamos solo si la librería existe
         from sqlalchemy import create_engine
-        
         engine = create_engine(
             db_url,
             pool_pre_ping=True,      
-            pool_recycle=1800,       # 👈 Reducido a 30 mins para ajustarse a Supabase
-            pool_size=5,             # 👈 Límite seguro de conexiones simultáneas
-            max_overflow=10,         # 👈 Margen de emergencia
+            pool_recycle=1800,       
+            pool_size=5,             
+            max_overflow=10,         
             connect_args={
                 'client_encoding': 'utf8',
-                # 🛡️ Parámetros avanzados para mantener la línea viva (Keep-Alive)
                 'keepalives': 1,
                 'keepalives_idle': 30,
                 'keepalives_interval': 10,
@@ -47,12 +49,11 @@ def get_engine():
             }
         )
         return engine
-        
     except ImportError:
-        # Protegemos el frontend si no tiene sqlalchemy
+        st.error("Error: Falta sqlalchemy en requirements.txt del frontend.")
         return None
     except Exception as e:
-        st.error(f"Error creando engine: {e}")
+        st.error(f"Error creando motor: {e}")
         return None
 
 
