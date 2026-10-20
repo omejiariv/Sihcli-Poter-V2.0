@@ -31,31 +31,37 @@ class Config:
     SOI_COL = "soi"
     IOD_COL = "iod"
 
+    # Columnas estándar de Predios Ejecutados
+    PREDIOS_MPIO_COL = "mpio_nombr"
+    PREDIOS_AREA_COL = "area"
+    PREDIOS_NOMBRE_COL = "nombre_pre"
+    PREDIOS_ENTIDAD_COL = "entididad"
+    PREDIOS_CUENCA_COL = "cuenca"
+
     # ==============================================================================
     # ☁️ RUTAS DE ACTIVOS EN LA NUBE (SUPABASE STORAGE) - CERO ARCHIVOS LOCALES
     # ==============================================================================
-    # Base URL pública de tus buckets en Supabase
     BASE_STORAGE_URL = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public"
     
     # Buckets
     BUCKET_RASTERS = f"{BASE_STORAGE_URL}/rasters"
     BUCKET_MAESTROS = f"{BASE_STORAGE_URL}/sihcli_maestros"
 
-    # URLs exactas de los Rasters (Reemplazan las viejas rutas locales de la carpeta data/)
+    # URLs exactas de los Rasters
     DEM_FILE_PATH = f"{BUCKET_RASTERS}/DemAntioquia_EPSG3116.tif"
     PRECIP_RASTER_PATH = f"{BUCKET_RASTERS}/PPAMAnt.tif"
-    
-    # ⏪ ROLLBACK ESTRATÉGICO: Volvemos al mapa original estabilizado
     LAND_COVER_FILE_PATH = f"{BUCKET_RASTERS}/Cob2026_Actualizada.tif" 
 
     # URLs exactas de los Archivos Maestros pesados
     POBLACION_MAESTRA_URL = f"{BUCKET_MAESTROS}/Poblacion_Colombia_Maestra.parquet"
     CONCESIONES_MAESTRAS_URL = f"{BUCKET_MAESTROS}/Metabolismo_Hidrico_Antioquia_Maestro.geojson"
+    PREDIOS_MAESTROS_URL = f"{BUCKET_MAESTROS}/PrediosEjecutados.geojson"
+    TERRITORIO_MAESTRO_URL = f"{BUCKET_MAESTROS}/territorio_maestro.xlsx"
 
     # ==============================================================================
     # 🖼️ RUTAS DE INTERFAZ LOCAL (Solo para UI, imágenes y logos)
     # ==============================================================================
-    _MODULES_DIR = os.path.dirname(__file__)
+    _MODULES_DIR = os.path.dirname(os.path.abspath(__file__))
     _PROJECT_ROOT = os.path.abspath(os.path.join(_MODULES_DIR, ".."))
     ASSETS_DIR = os.path.join(_PROJECT_ROOT, "assets")
 

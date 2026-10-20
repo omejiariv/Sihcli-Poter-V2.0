@@ -810,31 +810,79 @@ except Exception as e:
     pass
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def obtener_predios_y_hectareas(_gdf_zona, nombre_zona_txt):
-    import requests, tempfile
+def obtener_predios_y_hectareas(_gdf_poligono, nombre_zona_txt):
+    import requests, io, unicodedata
     import pandas as pd
     import geopandas as gpd
+
+    def _limpiar_str(val):
+        if pd.isna(val): return ""
+        s = str(val).strip().upper()
+        return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+
     ha_calc, info_debug, gdf_predios_final = 0.0, "Descargando predios...", None 
     try:
-        url_predios = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PrediosEjecutados.geojson"
-        res = requests.get(url_predios)
-        if res.status_code == 200:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".geojson") as tmp:
-                tmp.write(res.content)
-                tmp_path = tmp.name
-            gdf_p = gpd.read_file(tmp_path)
-            if not gdf_p.empty:
-                gdf_p.set_crs(epsg=4326, allow_override=True, inplace=True)
-                gdf_p_3116, gdf_z_3116 = gdf_p.to_crs(epsg=3116), _gdf_zona.to_crs(epsg=3116)
-                gdf_p_3116['geometry'] = gdf_p_3116.geometry.make_valid().buffer(0)
+        # Intentamos ambas rutas de bucket por seguridad (geojson y sihcli_maestros)
+        urls = [
+            "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PrediosEjecutados.geojson",
+            "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/sihcli_maestros/PrediosEjecutados.geojson"
+        ]
+        gdf_p = gpd.GeoDataFrame()
+        for url_predios in urls:
+            res = requests.get(url_predios, timeout=30)
+            if res.status_code == 200:
+                gdf_p = gpd.read_file(io.BytesIO(res.content))
+                if not gdf_p.empty:
+                    break
+
+        if not gdf_p.empty:
+            # 1. Asegurar WGS84 (EPSG:4326) y reparar geometrías inválidas (ej. predio PAVAS)
+            if gdf_p.crs is None or gdf_p.crs.to_epsg() != 4326:
+                gdf_p = gdf_p.set_crs(epsg=4326, allow_override=True).to_crs(epsg=4326)
+            gdf_p['geometry'] = gdf_p.geometry.make_valid()
+
+            zona_limpia = _limpiar_str(str(nombre_zona_txt).split(" - (")[0])
+            col_mpio = next((c for c in gdf_p.columns if c.lower() == 'mpio_nombr'), None)
+            col_area = next((c for c in gdf_p.columns if c.lower() == 'area'), None)
+
+            recorte_exacto = gpd.GeoDataFrame()
+
+            # 2. Cruce directo por nombre de Municipio (100% exacto para Medellín y demás municipios)
+            if col_mpio and zona_limpia:
+                mask_mpio = gdf_p[col_mpio].apply(_limpiar_str) == zona_limpia
+                if mask_mpio.any():
+                    recorte_exacto = gdf_p[mask_mpio].copy()
+
+            # 3. Si es una Cuenca, Subregión, CAR o Departamento, aplicamos intersección espacial
+            if recorte_exacto.empty and _gdf_poligono is not None and not _gdf_poligono.empty:
+                gdf_z = _gdf_poligono.copy()
+                if gdf_z.crs is None:
+                    gdf_z.set_crs(epsg=4326, inplace=True)
+                elif gdf_z.crs.to_epsg() != 4326:
+                    gdf_z = gdf_z.to_crs(epsg=4326)
+                
+                gdf_p_3116 = gdf_p.to_crs(epsg=3116)
+                gdf_z_3116 = gdf_z.to_crs(epsg=3116)
                 gdf_z_3116['geometry'] = gdf_z_3116.geometry.make_valid().buffer(0)
-                recorte_exacto = gpd.clip(gdf_p_3116, gdf_z_3116)
-                if not recorte_exacto.empty:
-                    ha_calc = recorte_exacto.area.sum() / 10000.0
-                    info_debug = f"✅ CORTE EXACTO: {len(recorte_exacto)} fragmentos de predios operan físicamente en la zona."
-                    gdf_predios_final = recorte_exacto.to_crs(epsg=4326)
-                else: 
-                    info_debug = f"ℹ️ ZONA VIRGEN: Ningún predio cae dentro de {nombre_zona_txt}."
+                
+                recorte_3116 = gpd.clip(gdf_p_3116, gdf_z_3116)
+                if not recorte_3116.empty:
+                    recorte_3116['area_clip_ha'] = recorte_3116.geometry.area / 10000.0
+                    recorte_exacto = recorte_3116.to_crs(epsg=4326)
+
+            # 4. Cálculo final de Hectáreas
+            if not recorte_exacto.empty:
+                if 'area_clip_ha' in recorte_exacto.columns:
+                    ha_calc = float(recorte_exacto['area_clip_ha'].sum())
+                elif col_area and col_area in recorte_exacto.columns:
+                    ha_calc = float(pd.to_numeric(recorte_exacto[col_area], errors='coerce').fillna(0).sum())
+                else:
+                    ha_calc = float(recorte_exacto.to_crs(epsg=3116).geometry.area.sum() / 10000.0)
+
+                info_debug = f"✅ CORTE EXACTO: {len(recorte_exacto)} predios operan en {nombre_zona_txt} ({ha_calc:,.1f} ha)."
+                gdf_predios_final = recorte_exacto.to_crs(epsg=4326)
+            else:
+                info_debug = f"ℹ️ ZONA VIRGEN: Ningún predio cae dentro de {nombre_zona_txt}."
     except Exception as e: 
         info_debug = f"❌ ERROR: {e}"
     return ha_calc, info_debug, gdf_predios_final
@@ -1158,51 +1206,11 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
         st.plotly_chart(fig_radar, width="stretch")
 
     # ==============================================================================
-    # 📥 PRE-PROCESAMIENTO Y DESCARGA PREDIAL (PROCESO SILENCIOSO DE DATOS)
+    # 📥 PRE-PROCESAMIENTO Y DESCARGA PREDIAL (YA CALCULADO EN EL LIENZO SUPERIOR)
     # ==============================================================================
-    capas = {}
-    try:
-        if gdf_zona is not None and not gdf_zona.empty:
-            capas = load_context_layers(tuple(gdf_zona.total_bounds))
-    except Exception as e:
-        st.warning(f"Aviso al cargar capas SIG: {e}")
-
-    @st.cache_data(ttl=3600, show_spinner=False)
-    def obtener_predios_y_hectareas(_gdf_zona, nombre_zona_txt):
-        import requests, tempfile
-        import pandas as pd
-        import geopandas as gpd
-        ha_calc = 0.0
-        info_debug = "Descargando predios..."
-        gdf_predios_final = None 
-        try:
-            url_predios = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PrediosEjecutados.geojson"
-            res = requests.get(url_predios)
-            if res.status_code != 200: return 0.0, f"❌ Fallo descarga API", None
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".geojson") as tmp:
-                tmp.write(res.content)
-                tmp_path = tmp.name
-            gdf_p = gpd.read_file(tmp_path)
-            if gdf_p.empty: return 0.0, "❌ GeoJSON vacío", None
-            gdf_p.set_crs(epsg=4326, allow_override=True, inplace=True)
-            gdf_p_3116 = gdf_p.to_crs(epsg=3116)
-            gdf_z_3116 = _gdf_zona.to_crs(epsg=3116)
-            gdf_p_3116['geometry'] = gdf_p_3116.geometry.make_valid().buffer(0)
-            gdf_z_3116['geometry'] = gdf_z_3116.geometry.make_valid().buffer(0)
-            recorte_exacto = gpd.clip(gdf_p_3116, gdf_z_3116)
-            if not recorte_exacto.empty:
-                ha_calc = recorte_exacto.area.sum() / 10000.0
-                info_debug = f"✅ CORTE EXACTO: {len(recorte_exacto)} fragmentos de predios operan físicamente dentro de la cuenca."
-                gdf_predios_final = recorte_exacto.to_crs(epsg=4326)
-            else:
-                info_debug = f"ℹ️ ZONA VIRGEN: Ningún predio cae dentro de {nombre_zona_txt}."
-        except Exception as e: 
-            info_debug = f"❌ ERROR GEOMÉTRICO: {e}"
-        return ha_calc, info_debug, gdf_predios_final
-
-    with st.spinner("Descargando inventario predial de la Nube (Supabase)..."):
+    # Reutilizamos 'capas', 'ha_reales_sig' y 'gdf_predios_mapa' calculados en el Lienzo Territorial
+    if 'ha_reales_sig' not in locals():
         ha_reales_sig, info_debug, gdf_predios_mapa = obtener_predios_y_hectareas(gdf_zona, nombre_zona)
-
 
     # ==============================================================================
     # 📍 PASO 3: INGENIERÍA DE SOLUCIONES (SIMULADOR FÍSICO WRI)

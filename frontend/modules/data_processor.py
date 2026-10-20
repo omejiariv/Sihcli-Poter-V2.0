@@ -56,7 +56,7 @@ def load_and_process_all_data():
         engine = get_engine()
         
         if engine is None:
-            st.error(f"🚨 ERROR TÉCNICO REAL: {str(e)}")
+            st.error("🚨 No se pudo conectar a la BD.")
             return None, None, None, None, None, None
 
         # --- 1. ESTACIONES (Ultra-rápido usando geom_col) ---
@@ -114,29 +114,56 @@ def load_and_process_all_data():
             st.error(f"⚠️ Error en Precipitación: {e}")
             df_long = pd.DataFrame()
             
-        # --- 3. GEOMETRÍAS (Usando Caché Robusta) ---
+        # --- 3. GEOMETRÍAS (Usando Caché Robusta + Fallback a Storage) ---
         try:
-            # 🚀 FIX JINETE 2: Usamos la función blindada que creamos en utils.py
-            # Esto evitará el "Statement Timeout" y protegerá el disco de Supabase
             gdf_municipios = cargar_capa_espacial_cache("SELECT * FROM municipios")
             gdf_subcuencas = cargar_capa_espacial_cache("SELECT * FROM cuencas")
             
+            # 3.1 Intento 1: Cargar predios desde PostGIS
             try:
                 gdf_predios = cargar_capa_espacial_cache("SELECT * FROM predios")
-            except:
-                gdf_predios = gpd.GeoDataFrame() # Fallback seguro
+            except Exception:
+                gdf_predios = gpd.GeoDataFrame()
                 
+            # 3.2 Intento 2 (Fallback): Si PostGIS vino vacío, leer el GeoJSON directo del Bucket
+            if gdf_predios is None or gdf_predios.empty:
+                try:
+                    import requests
+                    from io import BytesIO
+                    res_pred = requests.get(Config.PREDIOS_MAESTROS_URL, headers={'User-Agent': 'Mozilla/5.0'}, timeout=30)
+                    if res_pred.status_code == 200:
+                        gdf_predios = gpd.read_file(BytesIO(res_pred.content))
+                except Exception:
+                    gdf_predios = gpd.GeoDataFrame()
+
+            # 3.3 Estandarizar columnas y geometrías de gdf_predios para que cruce con MEDELLIN
+            if gdf_predios is not None and not gdf_predios.empty:
+                # Pasamos columnas a minúsculas (MPIO_NOMBR -> mpio_nombr, Area -> area)
+                gdf_predios.columns = [c.lower() for c in gdf_predios.columns]
+                if gdf_predios.geometry.name != "geometry" and "geom" in gdf_predios.columns:
+                    gdf_predios = gdf_predios.rename_geometry("geometry")
+                # Reparar geometrías inválidas (ej. polígono PAVAS)
+                gdf_predios["geometry"] = gdf_predios["geometry"].make_valid()
+                # Normalizar nombre de municipio ("Medellin" -> "MEDELLIN")
+                if "mpio_nombr" in gdf_predios.columns:
+                    gdf_predios["mpio_norm"] = gdf_predios["mpio_nombr"].astype(str).apply(normalizar_texto_maestro)
+                if "area" in gdf_predios.columns:
+                    gdf_predios["area"] = pd.to_numeric(gdf_predios["area"], errors="coerce").fillna(0.0)
+
             # Validamos el sistema de coordenadas de todas las capas
             for capa in [gdf_municipios, gdf_subcuencas, gdf_predios]:
-                if capa is not None and not capa.empty and capa.crs is None:
-                    capa.set_crs(epsg=4326, inplace=True)
+                if capa is not None and not capa.empty:
+                    if capa.crs is None:
+                        capa.set_crs(epsg=4326, inplace=True)
+                    elif capa.crs.to_epsg() != 4326:
+                        capa.to_crs(epsg=4326, inplace=True)
                     
         except Exception as e:
             st.warning(f"⚠️ Error en lectura de polígonos: {e}")
             
-        # --- 4. ENSO ---
+        # --- 4. ENSO (Sin text() para compatibilidad con Pandas 2.2) ---
         try:
-            df_enso = pd.read_sql(text("SELECT * FROM indices_climaticos"), engine)
+            df_enso = pd.read_sql("SELECT * FROM indices_climaticos", engine)
             df_enso.columns = [c.lower() for c in df_enso.columns]
             col_fecha = "fecha" if "fecha" in df_enso.columns else "fecha_mes_año"
             if col_fecha in df_enso.columns:
@@ -146,14 +173,8 @@ def load_and_process_all_data():
                 df_enso = df_enso.rename(columns={"oni": Config.ENSO_ONI_COL})
             elif "anomalia_oni" in df_enso.columns:
                 df_enso = df_enso.rename(columns={"anomalia_oni": Config.ENSO_ONI_COL})
-        except:
+        except Exception:
             pass
-
-        return gdf_stations, gdf_municipios, df_long, df_enso, gdf_subcuencas, gdf_predios
-
-    except Exception as e:
-        st.error(f"Error Crítico BD: {e}")
-        return None, None, None, None, None, None
 
 # =====================================================================
 # 🚀 NUEVO ESCUDO PARA HISTORIAL DE PRECIPITACIÓN
@@ -169,6 +190,7 @@ def load_precipitation_for_stations_cached(lista_estaciones):
         
     try:
         from modules.db_manager import get_engine
+        from sqlalchemy import text  # 👈 AQUÍ VA LA LÍNEA EXACTA
         engine = get_engine()
         
         # Formateamos la lista para la consulta SQL IN ('A', 'B')
