@@ -554,6 +554,20 @@ if gdf_zona is not None and not gdf_zona.empty:
             except Exception:
                 pass
 
+        # 🚀 FIX QUIRÚRGICO: Interceptor para sumar los 10 municipios si la selección es la Subregión Valle de Aburrá
+        import unicodedata
+        import re
+        texto_limpio = re.sub(r'[^A-Z0-9]', '', unicodedata.normalize('NFKD', str(lugar_limpio_pec)).encode('ascii', 'ignore').decode('utf-8').upper())
+        if texto_limpio == 'VALLEDEABURRA' and not es_amva_pec:
+            df_p_all = st.session_state.get('df_matriz_pecuaria', pd.DataFrame())
+            if not df_p_all.empty:
+                col_ter_p = next((c for c in df_p_all.columns if c.lower() in ['territorio', 'municipio', 'nombre']), 'Territorio')
+                mpios_va = ['CALDAS', 'LAESTRELLA', 'SABANETA', 'ENVIGADO', 'ITAGUI', 'MEDELLIN', 'BELLO', 'COPACABANA', 'GIRARDOTA', 'BARBOSA']
+                serie_p_norm = df_p_all[col_ter_p].astype(str).apply(
+                    lambda x: re.sub(r'[^A-Z0-9]', '', unicodedata.normalize('NFKD', str(x)).encode('ascii', 'ignore').decode('utf-8').upper())
+                )
+                df_pec = df_p_all[serie_p_norm.isin(mpios_va)]
+
         if not df_pec.empty:
             # 1. Filtro de Alta Precisión: Atrapar la cuenca exacta por su código
             import re
