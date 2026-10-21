@@ -2015,34 +2015,58 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
             
             capas = {'catastro_nuevo': None, 'historicos_ejecutados': None}
             urls = {
-                'catastro_nuevo': "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PrediosVeredas_CV.geojson",
-                'historicos_ejecutados': "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PrediosEjecutados.geojson"
+                'catastro_nuevo': [
+                    "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PrediosVeredas_CV.geojson",
+                    "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/sihcli_maestros/PrediosVeredas_CV.geojson"
+                ],
+                'historicos_ejecutados': [
+                    "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PrediosEjecutados.geojson",
+                    "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/sihcli_maestros/PrediosEjecutados.geojson"
+                ]
             }
             
+            # 1. Asegurar polígono base válido y en sistema plano (3116)
             try:
-                zona_3116 = _gdf_zona.to_crs(epsg=3116)
-                zona_3116['geometry'] = zona_3116.geometry.make_valid().buffer(0)
+                zona_3116 = _gdf_zona.copy()
+                if zona_3116.crs is None or zona_3116.crs.to_epsg() != 3116:
+                    zona_3116 = zona_3116.to_crs(epsg=3116)
+                zona_3116['geometry'] = zona_3116.geometry.make_valid()
+            except Exception:
+                return None, None
                 
-                for key, url in urls.items():
-                    res = requests.get(url, timeout=30)
-                    if res.status_code == 200:
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".geojson") as tmp:
-                            tmp.write(res.content)
-                            tmp_path = tmp.name
-                        gdf_tmp = gpd.read_file(tmp_path)
+            # 2. Iterar por cada cartografía aisladamente para evitar bloqueos cruzados
+            for key, url_list in urls.items():
+                gdf_tmp = gpd.GeoDataFrame()
+                for url in url_list:
+                    try:
+                        # 🚀 FIX: Timeout expandido a 45 segundos para el catastro gigante
+                        res = requests.get(url, timeout=45)
+                        if res.status_code == 200:
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=".geojson") as tmp:
+                                tmp.write(res.content)
+                                tmp_path = tmp.name
+                            gdf_tmp = gpd.read_file(tmp_path)
+                            if not gdf_tmp.empty:
+                                break # Si descargó bien, saltamos el fallback
+                    except Exception:
+                        continue # Intentamos con la siguiente URL del bucket
                         
-                        if not gdf_tmp.empty:
+                if not gdf_tmp.empty:
+                    try:
+                        # 3. Reparación y recorte exacto de geometrías
+                        if gdf_tmp.crs is None or gdf_tmp.crs.to_epsg() != 4326:
                             gdf_tmp.set_crs(epsg=4326, allow_override=True, inplace=True)
-                            gdf_tmp_3116 = gdf_tmp.to_crs(epsg=3116)
-                            gdf_tmp_3116['geometry'] = gdf_tmp_3116.geometry.make_valid().buffer(0)
-                            
-                            # Recortamos estrictamente a la zona de estudio
-                            clip_result = gpd.clip(gdf_tmp_3116, zona_3116)
-                            if not clip_result.empty:
-                                capas[key] = clip_result
-            except Exception as e:
-                pass
-                
+                        
+                        gdf_tmp['geometry'] = gdf_tmp.geometry.make_valid()
+                        gdf_tmp_3116 = gdf_tmp.to_crs(epsg=3116)
+                        
+                        # Recortamos estrictamente a la zona de estudio
+                        clip_result = gpd.clip(gdf_tmp_3116, zona_3116)
+                        if not clip_result.empty:
+                            capas[key] = clip_result.to_crs(epsg=4326) # Guardar en WGS84 para PyDeck directo
+                    except Exception:
+                        pass
+                        
             return capas['catastro_nuevo'], capas['historicos_ejecutados']
             
         with st.spinner("Descargando e integrando Cartografía Predial de Supabase (Catastro y Ejecutados)..."):
@@ -2125,13 +2149,15 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                                 rios_3116_estrategicos = rios_3116.copy()
                                 rios_3116_estrategicos['geometry'] = rios_3116_estrategicos.geometry.buffer(b_max, resolution=2)
                                 
-                                # 🧮 ÁLGEBRA 2: Restar Capital Gestionado (Evitar sobre-invertir en fincas que ya tienen proyectos de CuencaVerde)
+                                # 🧮 ÁLGEBRA 2: Restar Capital Gestionado (Evitar doble esfuerzo)
                                 if capa_predios_historicos is not None and not capa_predios_historicos.empty:
-                                    rios_3116_estrategicos['geometry'] = rios_3116_estrategicos.geometry.difference(capa_predios_historicos.unary_union)
+                                    historicos_3116 = capa_predios_historicos.to_crs(epsg=3116) # 🚀 FIX AQUÍ
+                                    rios_3116_estrategicos['geometry'] = rios_3116_estrategicos.geometry.difference(historicos_3116.unary_union)
                                     rios_3116_estrategicos = rios_3116_estrategicos[~rios_3116_estrategicos.is_empty]
                                 
                                 # 🧮 ÁLGEBRA 3: Intersección con Universo Catastral Nuevo
-                                predios_en_buffer = gpd.overlay(capa_predios_nuevos, rios_3116_estrategicos, how='intersection')
+                                predios_nuevos_3116 = capa_predios_nuevos.to_crs(epsg=3116) # 🚀 FIX AQUÍ
+                                predios_en_buffer = gpd.overlay(predios_nuevos_3116, rios_3116_estrategicos, how='intersection')
                                 
                                 if not predios_en_buffer.empty:
                                     predios_en_buffer['Area_Faltante_ha'] = predios_en_buffer.geometry.area / 10000.0
