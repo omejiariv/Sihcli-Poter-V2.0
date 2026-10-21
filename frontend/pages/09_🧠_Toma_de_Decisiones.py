@@ -1029,30 +1029,47 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
         from folium import plugins
         import streamlit.components.v1 as components
         
-        # Agregamos el botón de pantalla completa (Fullscreen)
+        # Agregamos el control de capas y el botón de pantalla completa
+        folium.LayerControl(position='topright').add_to(m)
         plugins.Fullscreen(position='topright', title='Pantalla Completa', title_cancel='Salir de Pantalla Completa').add_to(m)
         
         # Renderizamos el mapa directamente en el navegador (ADIÓS st_folium)
         components.html(m._repr_html_(), height=550)
-    
+
+        # 🏷️ LEYENDA ESTILIZADA EN STREAMLIT (Nativa, Robusta y Elegante)
+        leyenda_html = "<div style='background-color: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; display: flex; justify-content: space-between; gap: 20px; font-size: 0.85rem; margin-top: 5px;'><div style='flex: 2;'><strong style='color: #1e293b;'>🛰️ Coberturas (Dynamic World 10m):</strong><br><div style='margin-top: 5px; display: flex; flex-wrap: wrap; gap: 10px; color: #475569;'><span><span style='color:#419BDF;'>🟦</span> Agua</span><span><span style='color:#397D49;'>🟩</span> Bosques</span><span><span style='color:#E49635;'>🟨</span> Pastos</span><span><span style='color:#C4281B;'>🟥</span> Urbano / Infra.</span><span><span style='color:#88B053;'>🟩</span> Matorrales</span><span><span style='color:#7A87C6;'>🟪</span> Cultivos</span><span><span style='color:#DFC35A;'>🟫</span> Suelo Desnudo</span></div></div><div style='flex: 1; border-left: 1px solid #cbd5e1; padding-left: 20px;'><strong style='color: #1e293b;'>🆙 Elevación (msnm):</strong><br><div style='margin-top: 5px; background: linear-gradient(to right, #006600, #002200, #fff700, #ab7634, #c4d0ff, #ffffff); height: 8px; border-radius: 4px; width: 100%;'></div><div style='display: flex; justify-content: space-between; font-size: 0.7rem; color: #64748b; margin-top: 2px;'><span>1,000m</span><span>>3,000m</span></div></div><div style='flex: 1; border-left: 1px solid #cbd5e1; padding-left: 20px;'><strong style='color: #1e293b;'>⚠️ Pendientes:</strong><br><div style='margin-top: 5px; background: linear-gradient(to right, white, #ffcccc, red); height: 8px; border-radius: 4px; width: 100%; border: 1px solid #e2e8f0;'></div><div style='display: flex; justify-content: space-between; font-size: 0.7rem; color: #64748b; margin-top: 2px;'><span>0° (Plano)</span><span>45° (Fuerte)</span></div></div></div>"
+        st.markdown(leyenda_html, unsafe_allow_html=True)
+
     # ==========================================
     # 5. MOSTRAR MÉTRICAS: NATURAL VS GESTIONADO
     # ==========================================
+    st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("### 🌍 Balance de Coberturas: Capital Natural vs. Capital Gestionado")
     
-    c_met1, c_met2 = st.columns([3, 1])
+    # Ajustamos las columnas para incluir el Área Total (3.5 vs 1)
+    c_met1, c_met2 = st.columns([3.5, 1])
     
     with c_met1:
         if areas_data:
             df_areas = pd.DataFrame(areas_data).sort_values(by="Área (Ha)", ascending=False).reset_index(drop=True)
-            cols = st.columns(len(df_areas))
+            
+            # 1. Calculamos el área total
+            total_area_ha = df_areas['Área (Ha)'].sum()
+            
+            # 2. Creamos (N + 1) columnas para incluir el Área Total a la izquierda
+            cols = st.columns(len(df_areas) + 1)
+            
+            # 3. Imprimimos el Área Total en la primera columna
+            cols[0].metric(label="📐 Área Total", value=f"{total_area_ha:,.0f} ha")
+            
+            # 4. Imprimimos el resto de coberturas desplazadas una columna
             for idx, row in df_areas.iterrows(): 
-                # Limpiamos el texto para que se vea más estético
                 nombre_limpio = row['Cobertura'].split(' ')[1] if ' ' in row['Cobertura'] else row['Cobertura']
-                cols[idx].metric(label=f"🛰️ {nombre_limpio}", value=f"{row['Área (Ha)']:,.0f}")
+                cols[idx + 1].metric(label=f"🛰️ {nombre_limpio}", value=f"{row['Área (Ha)']:,.0f}")
+        else:
+            st.info("Métricas satelitales no disponibles para la zona actual.")
     
     with c_met2:
-        # El recuadro distintivo para la inversión SIG
         ha_historicas = float(ha_reales_sig) if 'ha_reales_sig' in locals() else 0.0
         st.markdown(f"""
         <div style="background-color: #e8f8f5; padding: 10px; border-radius: 8px; border: 2px solid #2ecc71; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
