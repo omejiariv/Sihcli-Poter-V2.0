@@ -2006,67 +2006,77 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
         # BLOQUE 4: MOTOR DE CRUCE MULTI-ANILLO Y VISOR 3D (PYDECK)
         # =========================================================================
         
-        # 2. Cargar Ambas Capas de Predios (Universo Catastral y Predios Históricos)
+        # 2. Cargar Ambas Capas de Predios (Ahora desde PostGIS - Ultra rápido)
         @st.cache_data(ttl=3600, show_spinner=False)
         def obtener_cartografias_prediales(_gdf_zona):
             import requests, tempfile
             import pandas as pd
             import geopandas as gpd
+            from modules.db_manager import get_engine
+            from sqlalchemy import text
             
             capas = {'catastro_nuevo': None, 'historicos_ejecutados': None}
-            urls = {
-                'catastro_nuevo': [
-                    "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PrediosVeredas_CV.geojson",
-                    "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/sihcli_maestros/PrediosVeredas_CV.geojson"
-                ],
-                'historicos_ejecutados': [
+            engine = get_engine()
+            
+            try:
+                # 1. Preparar zona de interés (WGS84) y obtener sus límites máximos (Bounding Box)
+                zona_4326 = _gdf_zona.copy()
+                if zona_4326.crs is None or zona_4326.crs.to_epsg() != 4326:
+                    zona_4326 = zona_4326.to_crs(epsg=4326)
+                
+                zona_4326['geometry'] = zona_4326.geometry.make_valid()
+                minx, miny, maxx, maxy = zona_4326.total_bounds
+                
+                # 2. Consultar Universo Catastral desde PostGIS (Filtro por Índice Espacial)
+                # Esta consulta busca solo en la caja delimitadora (Box) de la zona activa, reduciendo la búsqueda a milisegundos.
+                query_cat = text("""
+                    SELECT * FROM predios_catastro 
+                    WHERE geometry && ST_MakeEnvelope(:minx, :miny, :maxx, :maxy, 4326)
+                """)
+                gdf_catastro = gpd.read_postgis(query_cat, engine, params={"minx": minx, "miny": miny, "maxx": maxx, "maxy": maxy}, geom_col='geometry')
+                
+                if not gdf_catastro.empty:
+                    gdf_catastro.set_crs(epsg=4326, allow_override=True, inplace=True)
+                    # Clip final para recortar exactamente a la forma del polígono (ignorar las esquinas de la caja)
+                    capas['catastro_nuevo'] = gpd.clip(gdf_catastro, zona_4326)
+                    
+            except Exception as e:
+                import logging
+                logging.error(f"Error consultando predios_catastro en PostGIS: {e}")
+                
+            try:
+                # 3. Consultar Predios Históricos Ejecutados desde PostGIS (Tabla 'predios' del Tab 3)
+                query_hist = text("""
+                    SELECT * FROM predios 
+                    WHERE geometry && ST_MakeEnvelope(:minx, :miny, :maxx, :maxy, 4326)
+                """)
+                gdf_historicos = gpd.read_postgis(query_hist, engine, params={"minx": minx, "miny": miny, "maxx": maxx, "maxy": maxy}, geom_col='geometry')
+                
+                if not gdf_historicos.empty:
+                    gdf_historicos.set_crs(epsg=4326, allow_override=True, inplace=True)
+                    capas['historicos_ejecutados'] = gpd.clip(gdf_historicos, zona_4326)
+                else:
+                    raise ValueError("Tabla 'predios' vacía o sin datos en esta zona.")
+            except Exception:
+                # 4. Fallback de Emergencia: Carga desde el Storage si la tabla falla
+                urls_historicos = [
                     "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PrediosEjecutados.geojson",
                     "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/sihcli_maestros/PrediosEjecutados.geojson"
                 ]
-            }
-            
-            # 1. Asegurar polígono base válido y en sistema plano (3116)
-            try:
-                zona_3116 = _gdf_zona.copy()
-                if zona_3116.crs is None or zona_3116.crs.to_epsg() != 3116:
-                    zona_3116 = zona_3116.to_crs(epsg=3116)
-                zona_3116['geometry'] = zona_3116.geometry.make_valid()
-            except Exception:
-                return None, None
-                
-            # 2. Iterar por cada cartografía aisladamente para evitar bloqueos cruzados
-            for key, url_list in urls.items():
-                gdf_tmp = gpd.GeoDataFrame()
-                for url in url_list:
+                for url in urls_historicos:
                     try:
-                        # 🚀 FIX: Timeout expandido a 45 segundos para el catastro gigante
-                        res = requests.get(url, timeout=45)
+                        res = requests.get(url, timeout=30)
                         if res.status_code == 200:
                             with tempfile.NamedTemporaryFile(delete=False, suffix=".geojson") as tmp:
                                 tmp.write(res.content)
                                 tmp_path = tmp.name
                             gdf_tmp = gpd.read_file(tmp_path)
                             if not gdf_tmp.empty:
-                                break # Si descargó bien, saltamos el fallback
-                    except Exception:
-                        continue # Intentamos con la siguiente URL del bucket
-                        
-                if not gdf_tmp.empty:
-                    try:
-                        # 3. Reparación y recorte exacto de geometrías
-                        if gdf_tmp.crs is None or gdf_tmp.crs.to_epsg() != 4326:
-                            gdf_tmp.set_crs(epsg=4326, allow_override=True, inplace=True)
-                        
-                        gdf_tmp['geometry'] = gdf_tmp.geometry.make_valid()
-                        gdf_tmp_3116 = gdf_tmp.to_crs(epsg=3116)
-                        
-                        # Recortamos estrictamente a la zona de estudio
-                        clip_result = gpd.clip(gdf_tmp_3116, zona_3116)
-                        if not clip_result.empty:
-                            capas[key] = clip_result.to_crs(epsg=4326) # Guardar en WGS84 para PyDeck directo
-                    except Exception:
-                        pass
-                        
+                                gdf_tmp.set_crs(epsg=4326, allow_override=True, inplace=True)
+                                capas['historicos_ejecutados'] = gpd.clip(gdf_tmp, zona_4326)
+                                break
+                    except: continue
+
             return capas['catastro_nuevo'], capas['historicos_ejecutados']
             
         with st.spinner("Descargando e integrando Cartografía Predial de Supabase (Catastro y Ejecutados)..."):
