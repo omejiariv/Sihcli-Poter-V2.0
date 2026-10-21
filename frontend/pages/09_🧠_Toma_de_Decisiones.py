@@ -1023,8 +1023,6 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
         macro._template = Template(leyenda_html)
         m.get_root().add_child(macro)
         
-        folium.LayerControl(position='topright').add_to(m)
-        
         # 🚀 FIX 3: Renderizado HTML puro para evadir el colapso de memoria
         from folium import plugins
         import streamlit.components.v1 as components
