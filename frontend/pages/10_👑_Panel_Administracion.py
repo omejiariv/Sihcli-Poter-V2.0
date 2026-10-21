@@ -320,7 +320,7 @@ st.markdown("---")
 
 tabs = st.tabs([
     "📡 Estaciones", "🌧️ Lluvia", "📊 Índices", "🏠 Predios", "🌊 Cuencas", "🏙️ Municipios", "🌲 Coberturas",
-    "💧 Bocatomas", "⛰️ Hidrogeología", "🌱 Suelos", "🛠️ SQL", "📚 Inventario", "🌧️ Red de Drenaje", "🌧️ Zona de Peligro", "👥 Demografía", "🗺️ Aduana SIG", "☁️ Gestión Cloud"
+    "💧 Bocatomas", "⛰️ Hidrogeología", "🌱 Suelos", "🛠️ SQL", "📚 Inventario", "🌧️ Red de Drenaje", "🌧️ Zona de Peligro", "👥 Demografía", "🗺️ Aduana SIG", "☁️ Gestión Cloud", "🏡 Catastro a BD"
 ])
 
 # ==============================================================================
@@ -1821,3 +1821,69 @@ if st.button("🕵️‍♂️ Extraer Datos de Piragua", type="primary"):
                 st.error(f"Fallo en la extracción: {resultado}")
     else:
         st.warning("⚠️ Debes ingresar una URL válida obtenida con F12.")
+
+# ==============================================================================
+# TAB 17: GESTIÓN DE UNIVERSO CATASTRAL A POSTGIS
+# ==============================================================================
+with tabs[17]:
+    st.header("🏡 Motor de Inyección Catastral (PostGIS)")
+    st.info("Migrar el universo catastral desde un archivo GeoJSON pesado a una tabla nativa espacial (PostGIS) aumentará drásticamente la velocidad de la pestaña Toma de Decisiones.")
+
+    with st.expander("🛠️ Abrir Panel de Migración de Catastro a Base de Datos", expanded=False):
+        st.markdown("Sube el archivo `PrediosVeredas_CV.geojson` para inyectarlo en la base de datos.")
+        
+        file_geo_cat = st.file_uploader("Sube la geometría del Catastro", type=['geojson', 'json'], help="Sube el archivo del Universo Catastral de CuencaVerde")
+        
+        if st.button("⚡ Ejecutar Inyección de Catastro a PostGIS", type="primary", width="stretch"):
+            if file_geo_cat:
+                import geopandas as gpd
+                from modules.db_manager import get_engine
+                from sqlalchemy import text
+                import time
+                
+                engine = get_engine()
+                estado = st.empty()
+                barra = st.progress(0)
+                
+                try:
+                    estado.info("⏳ Paso 1: Leyendo geometría catastral (esto puede tardar varios segundos por el volumen de datos)...")
+                    # Cargamos el mapa a la memoria
+                    gdf_cat = gpd.read_file(file_geo_cat)
+                    
+                    # Blindaje topológico: Todo a minúsculas
+                    gdf_cat.columns = [c.lower() for c in gdf_cat.columns]
+                    
+                    # Asegurar CRS estándar (WGS84)
+                    if gdf_cat.crs is None or gdf_cat.crs.to_string() != "EPSG:4326":
+                        estado.info("🔄 Reproyectando coordenadas a estándar global WGS84...")
+                        gdf_cat = gdf_cat.to_crs("EPSG:4326")
+                    
+                    # Forzar el arreglo de geometrías rotas (Topología)
+                    gdf_cat['geometry'] = gdf_cat.geometry.make_valid()
+                    
+                    # Eliminar columnas de fecha (Timestamp) que rompen la inyección de SQL
+                    for col in gdf_cat.select_dtypes(include=['datetime64', 'datetimetz']).columns:
+                        gdf_cat[col] = gdf_cat[col].astype(str)
+
+                    estado.info("⏳ Paso 2: Limpiando la tabla antigua en la base de datos...")
+                    barra.progress(30)
+                    
+                    with engine.begin() as conn:
+                        conn.execute(text("DROP TABLE IF EXISTS predios_catastro CASCADE;"))
+                    
+                    time.sleep(1) 
+                    
+                    estado.info("🚀 Paso 3: Inyectando polígonos a Supabase (PostGIS)... ¡No cierres la ventana!")
+                    barra.progress(60)
+                    
+                    # Subimos la tabla usando 'chunksize' para no asfixiar el tubo de subida
+                    gdf_cat.to_postgis('predios_catastro', engine, if_exists='replace', index=False, chunksize=100)
+                    
+                    barra.progress(100)
+                    estado.success(f"✅ ¡Éxito Absoluto! {len(gdf_cat):,.0f} predios catastrales inyectados permanentemente en la tabla 'predios_catastro'.")
+                    st.balloons()
+                except Exception as e:
+                    barra.empty()
+                    st.error(f"❌ Error crítico en la inyección del catastro: {e}")
+            else:
+                st.warning("⚠️ Por favor, sube el archivo .geojson primero.")
