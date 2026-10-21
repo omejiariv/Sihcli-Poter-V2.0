@@ -2220,34 +2220,42 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                                             "Score Prioridad": score
                                         })
                                         
-                                    df_prioridad = pd.DataFrame(datos_prioridad).sort_values(by="Score Prioridad", ascending=False)
-                                    
-                                    # 🧮 4. ALGORITMO GOLOSO (GREEDY) PARA CUMPLIR LA META
-                                    df_prioridad['Acumulado_Restaurar_Ha'] = df_prioridad['🔴 R2 (Restaurar Ha)'].cumsum()
-                                    
-                                    # Seleccionamos fincas hasta llenar el tanque de la brecha
-                                    df_estrategico = df_prioridad[df_prioridad['Acumulado_Restaurar_Ha'] <= (brecha_ha * 1.05)].copy()
-                                    
-                                    # Aseguramos que siempre haya al menos una finca si hay brecha
-                                    if df_estrategico.empty and brecha_ha > 0 and not df_prioridad.empty:
-                                        df_estrategico = df_prioridad.head(1).copy()
+                                    # 🧮 4. ALGORITMO GOLOSO (GREEDY) BLINDADO CONTRA LISTAS VACÍAS
+                                    if datos_prioridad:
+                                        df_prioridad = pd.DataFrame(datos_prioridad).sort_values(by="Score Prioridad", ascending=False)
+                                        df_prioridad['Acumulado_Restaurar_Ha'] = df_prioridad['🔴 R2 (Restaurar Ha)'].cumsum()
+                                        
+                                        # Seleccionamos fincas hasta llenar el tanque de la brecha
+                                        df_estrategico = df_prioridad[df_prioridad['Acumulado_Restaurar_Ha'] <= (brecha_ha * 1.05)].copy()
+                                        
+                                        # Aseguramos que siempre haya al menos una finca si hay brecha
+                                        if df_estrategico.empty and brecha_ha > 0 and not df_prioridad.empty:
+                                            df_estrategico = df_prioridad.head(1).copy()
+                                    else:
+                                        # Si no hubo intersecciones válidas, creamos tablas vacías seguras
+                                        df_prioridad = pd.DataFrame()
+                                        df_estrategico = pd.DataFrame()
                                     
                                     c_rank1, c_rank2 = st.columns([3, 1])
                                     with c_rank1:
-                                        st.dataframe(
-                                            df_estrategico.style
-                                            .background_gradient(cmap="YlOrRd", subset=["🔴 R2 (Restaurar Ha)", "Presupuesto (M COP)"])
-                                            .background_gradient(cmap="Greens", subset=["🟢 R1 (Conservar Ha)"])
-                                            .background_gradient(cmap="Blues", subset=["Orden Río"])
-                                            .format({
-                                                "Franja Riparia Total (Ha)": "{:.2f}", "🟢 R1 (Conservar Ha)": "{:.2f}", "🔴 R2 (Restaurar Ha)": "{:.2f}",
-                                                "Presupuesto (M COP)": "${:.1f}", "Score Prioridad": "{:.0f}", "Acumulado_Restaurar_Ha": "{:.2f}"
-                                            }), 
-                                            width="stretch", hide_index=True
-                                        )
+                                        if not df_estrategico.empty:
+                                            st.dataframe(
+                                                df_estrategico.style
+                                                .background_gradient(cmap="YlOrRd", subset=["🔴 R2 (Restaurar Ha)", "Presupuesto (M COP)"])
+                                                .background_gradient(cmap="Greens", subset=["🟢 R1 (Conservar Ha)"])
+                                                .background_gradient(cmap="Blues", subset=["Orden Río"])
+                                                .format({
+                                                    "Franja Riparia Total (Ha)": "{:.2f}", "🟢 R1 (Conservar Ha)": "{:.2f}", "🔴 R2 (Restaurar Ha)": "{:.2f}",
+                                                    "Presupuesto (M COP)": "${:.1f}", "Score Prioridad": "{:.0f}", "Acumulado_Restaurar_Ha": "{:.2f}"
+                                                }), 
+                                                width="stretch", hide_index=True
+                                            )
+                                        else:
+                                            st.warning("⚠️ No se encontraron predios con área suficiente en la franja riparia (>0.01 ha) para mostrar en la tabla.")
+                                            
                                     with c_rank2:
                                         st.info(f"💡 **Algoritmo Activado:** Seleccionados los predios de mayor orden hidrológico para suplir las **{brecha_ha:,.1f} ha** de la meta.")
-                                        st.metric("Fincas Requeridas", f"{len(df_estrategico)}", f"De un universo de {len(df_prioridad)}")
+                                        st.metric("Fincas Requeridas", f"{len(df_estrategico)}", f"De un universo de {len(df_prioridad) if not df_prioridad.empty else 0}")
                                         presupuesto_total_matriz = df_estrategico['Presupuesto (M COP)'].sum() if not df_estrategico.empty else 0.0
                                         st.metric("CAPEX Meta", f"${presupuesto_total_matriz:,.0f} M", "Sujeto a negociación")
                                         if not df_estrategico.empty:
@@ -2255,7 +2263,9 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                                 else:
                                     st.success("No hay intersecciones catastrales válidas en la franja riparia (es probable que sea zona baldía o reserva natural sin lotear).")
                             except Exception as e:
+                                import traceback
                                 st.error(f"Error técnico en el Álgebra de Mapas: {e}")
+                                st.code(traceback.format_exc()) # Esto nos dirá exactamente dónde falla si ocurre otro error
                     else:
                         st.info("ℹ️ No se detectaron predios catastrales en esta zona.")
 
