@@ -2119,90 +2119,75 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                     st.dataframe(df_tramos.style.background_gradient(cmap="Greens", subset=["Importancia Ecológica"]).format(precision=2), width="stretch", hide_index=True)
                 
                 with tab_predios:
-                    st.markdown("##### 🧬 Inteligencia Espacial: Metas de Conectividad y Asignación de Presupuesto")
-                    st.info("**R1:** Cuidar lo bien conservado (PSA) | **R2:** Mejorar lo cercano (Enriquecimiento) | **R3:** Conectar fragmentos (Restauración) | **R4:** Prioridad a bosques riparios.")
+                    st.markdown("##### 🧬 Inteligencia Espacial: Metas de Integridad Riparia y Asignación de Presupuesto")
+                    st.info("**R1:** Conservar el bosque existente (PSA) | **R2:** Restaurar el déficit ripario (Conectar) | **R3:** Prioridad estricta a órdenes altos de Strahler.")
                     
                     predios_en_buffer = gpd.GeoDataFrame()
                     df_estrategico = pd.DataFrame()
                     
                     if capa_predios_nuevos is not None and not capa_predios_nuevos.empty:
-                        with st.spinner("Ejecutando Intersección Multidimensional y Cálculo de Conectividad..."):
+                        with st.spinner("Ejecutando Intersección Multidimensional y Cálculo de Integridad Ecológica..."):
                             try:
+                                # 🧮 1. LÍNEA BASE RIPARIA (Única fuente de verdad: El Satélite)
                                 rios_3116_estrategicos = rios_3116.copy()
                                 rios_3116_estrategicos['geometry'] = rios_3116_estrategicos.geometry.buffer(b_max, resolution=2)
                                 
-                                # 📊 1. CÁLCULO DE LÍNEA BASE DE CONECTIVIDAD
                                 area_buffer_total_ha = rios_3116_estrategicos.geometry.area.sum() / 10000.0
-                                area_historica_en_buffer_ha = 0.0
                                 
-                                if capa_predios_historicos is not None and not capa_predios_historicos.empty:
-                                    historicos_3116 = capa_predios_historicos.to_crs(epsg=3116)
-                                    # Calculamos cuánto del buffer ya está protegido por intervenciones históricas
-                                    historicos_en_buffer = gpd.clip(historicos_3116, rios_3116_estrategicos)
-                                    if not historicos_en_buffer.empty:
-                                        area_historica_en_buffer_ha = historicos_en_buffer.geometry.area.sum() / 10000.0
-                                        
-                                    # Restamos para no doble-contabilizar esfuerzo
-                                    rios_3116_estrategicos['geometry'] = rios_3116_estrategicos.geometry.difference(historicos_3116.unary_union)
-                                    rios_3116_estrategicos = rios_3116_estrategicos[~rios_3116_estrategicos.is_empty]
-                                
-                                # Cobertura natural remanente en el buffer (Estimada con IA Satelital)
-                                if 'areas_data' in locals() and areas_data and area_total_ha > 0:
-                                    pct_bosque = sum([x["Área (Ha)"] for x in areas_data if "Bosque" in x["Cobertura"]]) / area_total_ha
-                                    pct_matorral = sum([x["Área (Ha)"] for x in areas_data if "Matorrales" in x["Cobertura"]]) / area_total_ha
+                                # Extraemos el % de bosque/matorral de las métricas satelitales (Earth Engine)
+                                if 'areas_data' in locals() and areas_data and 'area_total_ha' in locals() and area_total_ha > 0:
+                                    pct_bosque_sat = sum([x["Área (Ha)"] for x in areas_data if "Bosque" in x["Cobertura"]]) / area_total_ha
+                                    pct_matorral_sat = sum([x["Área (Ha)"] for x in areas_data if "Matorrales" in x["Cobertura"]]) / area_total_ha
                                 else:
-                                    pct_bosque, pct_matorral = 0.4, 0.15 
+                                    pct_bosque_sat, pct_matorral_sat = 0.40, 0.15 
                                     
-                                area_natural_existente_ha = (area_buffer_total_ha - area_historica_en_buffer_ha) * (pct_bosque + pct_matorral)
-                                conectividad_actual_ha = area_historica_en_buffer_ha + area_natural_existente_ha
-                                conectividad_base_pct = min(100.0, (conectividad_actual_ha / area_buffer_total_ha) * 100) if area_buffer_total_ha > 0 else 100.0
+                                pct_natural_existente = pct_bosque_sat + pct_matorral_sat
+                                ripario_existente_ha = area_buffer_total_ha * pct_natural_existente
+                                integridad_base_pct = min(100.0, (ripario_existente_ha / area_buffer_total_ha) * 100) if area_buffer_total_ha > 0 else 100.0
 
-                                # 🎯 2. INTERFAZ DE METAS DE CONECTIVIDAD
+                                # 🎯 2. INTERFAZ DE METAS DE INTEGRIDAD (Slider)
                                 st.markdown("---")
                                 col_m1, col_m2, col_m3 = st.columns([1, 1.5, 1])
-                                col_m1.metric("Línea Base (Conectividad Actual)", f"{conectividad_base_pct:.1f} %", f"{conectividad_actual_ha:,.1f} ha protegidas")
+                                col_m1.metric("Línea Base (Riparios Existentes)", f"{integridad_base_pct:.1f} %", f"{ripario_existente_ha:,.1f} ha de bosque ripario")
                                 
                                 import math
-                                val_minimo = float(math.floor(conectividad_base_pct))
+                                val_minimo = float(math.floor(integridad_base_pct))
                                 if val_minimo >= 100.0: val_minimo = 99.0
                                 
-                                meta_conectividad = col_m2.slider(
-                                    "🎯 Definir Meta de Conectividad Riparia (%)", 
+                                meta_integridad = col_m2.slider(
+                                    "🎯 Definir Meta de Integridad Riparia (%)", 
                                     min_value=val_minimo, 
                                     max_value=100.0, 
                                     value=min(100.0, val_minimo + 10.0), 
                                     step=1.0,
-                                    help="Desliza para establecer qué porcentaje de la red hídrica debe quedar blindada. El sistema seleccionará los mejores predios hasta cumplir la meta."
+                                    help="Porcentaje de la red hídrica que debe quedar con bosque. El sistema seleccionará los fragmentos prediales necesarios hasta cumplir la meta."
                                 )
                                 
-                                area_objetivo_ha = (meta_conectividad / 100.0) * area_buffer_total_ha
-                                brecha_ha = max(0.0, area_objetivo_ha - conectividad_actual_ha)
-                                col_m3.metric("Déficit a Restaurar", f"{brecha_ha:,.1f} ha", f"+ {meta_conectividad - conectividad_base_pct:.1f} %", delta_color="inverse")
+                                area_objetivo_ha = (meta_integridad / 100.0) * area_buffer_total_ha
+                                brecha_ha = max(0.0, area_objetivo_ha - ripario_existente_ha)
+                                col_m3.metric("Déficit a Restaurar", f"{brecha_ha:,.1f} ha", f"+ {meta_integridad - integridad_base_pct:.1f} %", delta_color="inverse")
                                 st.markdown("---")
 
-                                # 🧮 3. ÁLGEBRA DE MAPAS CON UNIVERSO CATASTRAL
+                                # 🧮 3. ÁLGEBRA DE MAPAS: CRUCE CATASTRAL ESTRICTO AL BUFFER
                                 predios_nuevos_3116 = capa_predios_nuevos.to_crs(epsg=3116)
+                                # Clip (Overlay) para obtener SOLAMENTE la franja del predio que toca el río
                                 predios_en_buffer = gpd.overlay(predios_nuevos_3116, rios_3116_estrategicos, how='intersection')
                                 
                                 if not predios_en_buffer.empty:
                                     predios_en_buffer = predios_en_buffer.set_crs(epsg=3116, allow_override=True)
-                                    predios_en_buffer['Area_Faltante_ha'] = predios_en_buffer.geometry.area / 10000.0
+                                    predios_en_buffer['Area_Franja_ha'] = predios_en_buffer.geometry.area / 10000.0
                                     
-                                    # Escudo contra astillas geométricas de 0.00ha
-                                    col_area = next((c for c in predios_en_buffer.columns if c.lower() in ['area', 'area_ha', 'hectareas', 'shape_area']), None)
-                                    if col_area:
-                                        area_attr = pd.to_numeric(predios_en_buffer[col_area], errors='coerce').fillna(1.5)
-                                        predios_en_buffer['Area_Faltante_ha'] = np.where(predios_en_buffer['Area_Faltante_ha'] < 0.01, area_attr, predios_en_buffer['Area_Faltante_ha'])
-                                    else:
-                                        predios_en_buffer['Area_Faltante_ha'] = np.where(predios_en_buffer['Area_Faltante_ha'] < 0.01, 1.5, predios_en_buffer['Area_Faltante_ha'])
+                                    # Limpieza de astillas geométricas (< 0.01 ha se descartan para no ensuciar la tabla)
+                                    predios_en_buffer = predios_en_buffer[predios_en_buffer['Area_Franja_ha'] >= 0.01].copy()
                                     
-                                    col_id = next((col for col in ['MATRICULA', 'COD_CATAST', 'FICHA', 'OBJECTID', 'id', 'NOMBRE'] if col in predios_en_buffer.columns), None)
+                                    col_id = next((col for col in ['MATRICULA', 'COD_CATAST', 'FICHA', 'OBJECTID', 'id', 'NOMBRE', 'PK_PREDIO'] if col in predios_en_buffer.columns), None)
                                     if col_id is None:
-                                        predios_en_buffer['ID_Predio'] = predios_en_buffer.index
-                                        col_id = 'ID_Predio'
+                                        predios_en_buffer['ID_Predio_Temp'] = predios_en_buffer.index.astype(str)
+                                        col_id = 'ID_Predio_Temp'
                                         
+                                    # Agrupamos por el ID único del predio sumando solo sus franjas riparias
                                     predios_agrupados = predios_en_buffer.groupby(col_id).agg({
-                                        'Area_Faltante_ha': 'sum',
+                                        'Area_Franja_ha': 'sum',
                                         'Orden_Strahler': 'max'
                                     }).reset_index()
                                     
@@ -2210,28 +2195,27 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                                     
                                     datos_prioridad = []
                                     for idx, row in predios_agrupados.iterrows():
-                                        area_tot = row['Area_Faltante_ha']
+                                        area_tot_franja = row['Area_Franja_ha']
                                         orden_s = row.get('Orden_Strahler', 1)
                                         
-                                        area_cuidar = area_tot * pct_bosque
-                                        area_mejorar = area_tot * pct_matorral
-                                        area_conectar = area_tot - area_cuidar - area_mejorar
+                                        # La porción de la franja que ya tiene bosque vs la que hay que sembrar
+                                        area_cuidar = area_tot_franja * pct_natural_existente
+                                        area_conectar = area_tot_franja - area_cuidar
                                         if area_conectar < 0: area_conectar = 0.0
                                         
-                                        costo_r1 = area_cuidar * (costo_base_ha * 0.2)
-                                        costo_r2 = area_mejorar * (costo_base_ha * 0.6)
-                                        costo_r3 = area_conectar * costo_base_ha
-                                        costo_total_finca = costo_r1 + costo_r2 + costo_r3
+                                        costo_r1 = area_cuidar * (costo_base_ha * 0.2) # Pago por Servicios Ambientales
+                                        costo_r3 = area_conectar * costo_base_ha       # Restauración Activa
+                                        costo_total_finca = costo_r1 + costo_r3
                                         
-                                        score = (area_conectar * 10) + (area_mejorar * 5) + (orden_s * 15)
+                                        # Score prioriza fuertemente el Orden de Strahler y el tamaño del déficit
+                                        score = (area_conectar * 10) + (orden_s * 25)
                                         
                                         datos_prioridad.append({
-                                            "Predio (ID/Matrícula)": row[col_id],
+                                            "Predio (ID)": str(row[col_id]),
                                             "Orden Río": orden_s,
-                                            "Déficit Ripario (Ha)": area_tot,
-                                            "🟢 R1 (Cuidar)": area_cuidar,
-                                            "🟡 R2 (Mejorar)": area_mejorar,
-                                            "🔴 R3 (Conectar)": area_conectar,
+                                            "Franja Riparia Total (Ha)": area_tot_franja,
+                                            "🟢 R1 (Conservar Ha)": area_cuidar,
+                                            "🔴 R2 (Restaurar Ha)": area_conectar,
                                             "Presupuesto (M COP)": costo_total_finca,
                                             "Score Prioridad": score
                                         })
@@ -2239,10 +2223,12 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                                     df_prioridad = pd.DataFrame(datos_prioridad).sort_values(by="Score Prioridad", ascending=False)
                                     
                                     # 🧮 4. ALGORITMO GOLOSO (GREEDY) PARA CUMPLIR LA META
-                                    df_prioridad['Acumulado_Ha'] = df_prioridad['Déficit Ripario (Ha)'].cumsum()
+                                    df_prioridad['Acumulado_Restaurar_Ha'] = df_prioridad['🔴 R2 (Restaurar Ha)'].cumsum()
                                     
-                                    # Seleccionar predios hasta cumplir la brecha (+10% margen operativo)
-                                    df_estrategico = df_prioridad[df_prioridad['Acumulado_Ha'] <= (brecha_ha * 1.1)].copy()
+                                    # Seleccionamos fincas hasta llenar el tanque de la brecha
+                                    df_estrategico = df_prioridad[df_prioridad['Acumulado_Restaurar_Ha'] <= (brecha_ha * 1.05)].copy()
+                                    
+                                    # Aseguramos que siempre haya al menos una finca si hay brecha
                                     if df_estrategico.empty and brecha_ha > 0 and not df_prioridad.empty:
                                         df_estrategico = df_prioridad.head(1).copy()
                                     
@@ -2250,38 +2236,38 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                                     with c_rank1:
                                         st.dataframe(
                                             df_estrategico.style
-                                            .background_gradient(cmap="YlOrRd", subset=["🔴 R3 (Conectar)", "Score Prioridad", "Presupuesto (M COP)"])
-                                            .background_gradient(cmap="Greens", subset=["🟢 R1 (Cuidar)"])
+                                            .background_gradient(cmap="YlOrRd", subset=["🔴 R2 (Restaurar Ha)", "Presupuesto (M COP)"])
+                                            .background_gradient(cmap="Greens", subset=["🟢 R1 (Conservar Ha)"])
                                             .background_gradient(cmap="Blues", subset=["Orden Río"])
                                             .format({
-                                                "Déficit Ripario (Ha)": "{:.2f}", "🟢 R1 (Cuidar)": "{:.2f}", "🟡 R2 (Mejorar)": "{:.2f}", "🔴 R3 (Conectar)": "{:.2f}",
-                                                "Presupuesto (M COP)": "${:.1f}", "Score Prioridad": "{:.0f}", "Acumulado_Ha": "{:.2f}"
+                                                "Franja Riparia Total (Ha)": "{:.2f}", "🟢 R1 (Conservar Ha)": "{:.2f}", "🔴 R2 (Restaurar Ha)": "{:.2f}",
+                                                "Presupuesto (M COP)": "${:.1f}", "Score Prioridad": "{:.0f}", "Acumulado_Restaurar_Ha": "{:.2f}"
                                             }), 
                                             width="stretch", hide_index=True
                                         )
                                     with c_rank2:
-                                        st.info(f"💡 **Algoritmo Activado:** Seleccionados los predios de mayor impacto ecológico para suplir las **{brecha_ha:,.1f} ha** de la meta.")
+                                        st.info(f"💡 **Algoritmo Activado:** Seleccionados los predios de mayor orden hidrológico para suplir las **{brecha_ha:,.1f} ha** de la meta.")
                                         st.metric("Fincas Requeridas", f"{len(df_estrategico)}", f"De un universo de {len(df_prioridad)}")
-                                        presupuesto_total_matriz = df_estrategico['Presupuesto (M COP)'].sum()
+                                        presupuesto_total_matriz = df_estrategico['Presupuesto (M COP)'].sum() if not df_estrategico.empty else 0.0
                                         st.metric("CAPEX Meta", f"${presupuesto_total_matriz:,.0f} M", "Sujeto a negociación")
                                         if not df_estrategico.empty:
                                             st.download_button("📥 Exportar Plan de Adquisición", df_estrategico.to_csv(index=False).encode('utf-8'), "Plan_Adquisicion_Riparia.csv", "text/csv")
                                 else:
-                                    st.success("Toda la red hídrica en esta zona ya se encuentra dentro de las áreas históricamente gestionadas.")
+                                    st.success("No hay intersecciones catastrales válidas en la franja riparia (es probable que sea zona baldía o reserva natural sin lotear).")
                             except Exception as e:
                                 st.error(f"Error técnico en el Álgebra de Mapas: {e}")
                     else:
-                        st.info("ℹ️ No se detectaron predios catastrales nuevos en esta zona.")
+                        st.info("ℹ️ No se detectaron predios catastrales en esta zona.")
 
             # =========================================================
             # 🗺️ EL MAPA TÁCTICO PYDECK (VISOR 3D MULTI-CAPA)
             # =========================================================
             st.markdown("---")
-            st.markdown(f"#### 🗺️ Visor Táctico de Conectividad y Predios: **{nombre_zona}**")
+            st.markdown(f"#### 🗺️ Visor Táctico de Integridad Riparia: **{nombre_zona}**")
             
             c_tog1, c_tog2 = st.columns(2)
-            with c_tog1: mostrar_predios_nuevos = st.toggle("🏡 Visualizar Predios Estratégicos (Naranjas)", value=True)
-            with c_tog2: mostrar_predios_historicos = st.toggle("🌳 Visualizar Predios Históricos (Verdes)", value=True)
+            with c_tog1: mostrar_predios_estrategicos = st.toggle("🟧 Visualizar Franjas Faltantes a Restaurar (Estratégicos)", value=True)
+            with c_tog2: mostrar_predios_historicos = st.toggle("🟩 Visualizar Polígonos de Conservación (Históricos/Existentes)", value=True)
             
             import pydeck as pdk
             
@@ -2292,20 +2278,17 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
             
             capas_mapa = []
             
+            # Capa 1: Límite de Cuenca/Zona
             if gdf_zona is not None:
                 zona_4326 = gdf_zona.to_crs("EPSG:4326")
                 capas_mapa.append(pdk.Layer("GeoJsonLayer", data=zona_4326, opacity=1, stroked=True, get_line_color=[0, 200, 0, 255], get_line_width=3, filled=False))
             
+            # Capa 2: Anillos Concéntricos Base (Sombra)
             if 'geom_max' in locals():
                 gdf_max = gpd.GeoDataFrame(geometry=[geom_max], crs=3116).to_crs(4326)
-                capas_mapa.append(pdk.Layer("GeoJsonLayer", data=gdf_max, opacity=0.2, get_fill_color=[171, 235, 198], stroked=False))
-                
-                gdf_med = gpd.GeoDataFrame(geometry=[geom_med], crs=3116).to_crs(4326)
-                capas_mapa.append(pdk.Layer("GeoJsonLayer", data=gdf_med, opacity=0.4, get_fill_color=[88, 214, 141], stroked=False))
-                
-                gdf_min = gpd.GeoDataFrame(geometry=[geom_min], crs=3116).to_crs(4326)
-                capas_mapa.append(pdk.Layer("GeoJsonLayer", data=gdf_min, opacity=0.6, get_fill_color=[40, 180, 99], stroked=False))
+                capas_mapa.append(pdk.Layer("GeoJsonLayer", data=gdf_max, opacity=0.1, get_fill_color=[171, 235, 198], stroked=False))
 
+            # Capa 3: Red Hídrica (Strahler)
             if 'rios_4326' in locals() and not rios_4326.empty:
                 rios_4326['TOOLTIP_TEXT'] = rios_4326.apply(lambda r: f"<b>💧 Tramo Hídrico:</b> {r.get('ID_Tramo', 'N/A')}<br/><b>🌊 Orden (Strahler):</b> {r.get('Orden_Strahler', 'N/A')}<br/><b>📏 Longitud:</b> {r.get('longitud_km', 0):.2f} km", axis=1)
                 
@@ -2315,48 +2298,35 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                     pickable=True, autoHighlight=True
                 ))
             
-            if mostrar_predios_nuevos and 'predios_en_buffer' in locals() and not predios_en_buffer.empty:
-                col_id_oficial = next((col for col in ['MATRICULA', 'COD_CATAST', 'FICHA', 'OBJECTID', 'id', 'NOMBRE'] if capa_predios_nuevos is not None and col in capa_predios_nuevos.columns), None)
+            # Capa 4: Franjas Faltantes Estratégicas (Naranjas)
+            if mostrar_predios_estrategicos and 'predios_en_buffer' in locals() and not predios_en_buffer.empty and 'df_estrategico' in locals() and not df_estrategico.empty:
+                # Extraemos y dibujamos SÓLO los recortes (franjas) de los predios seleccionados por el algoritmo
+                predios_a_dibujar = predios_en_buffer[predios_en_buffer[col_id].astype(str).isin(df_estrategico['Predio (ID)'].astype(str))].copy()
                 
-                if col_id_oficial:
-                    # 🚀 FIX TYPES: Forzamos la comparación cruzada como Texto (String)
-                    ids_afectados = predios_en_buffer[col_id_oficial].astype(str).unique()
-                    predios_a_dibujar = capa_predios_nuevos[capa_predios_nuevos[col_id_oficial].astype(str).isin(ids_afectados)].to_crs(epsg=4326).copy()
-                else:
-                    predios_a_dibujar = predios_en_buffer.to_crs(epsg=4326).copy()
-                    col_id_oficial = 'index'
-                
-                if 'df_estrategico' in locals() and not df_estrategico.empty:
-                    predios_a_dibujar[col_id_oficial] = predios_a_dibujar[col_id_oficial].astype(str)
-                    df_prior_str = df_estrategico.copy()
-                    df_prior_str['Predio (ID/Matrícula)'] = df_prior_str['Predio (ID/Matrícula)'].astype(str)
+                if not predios_a_dibujar.empty:
+                    predios_a_dibujar = predios_a_dibujar.to_crs(epsg=4326)
+                    predios_a_dibujar = predios_a_dibujar.merge(df_estrategico[['Predio (ID)', '🔴 R2 (Restaurar Ha)', 'Score Prioridad']], left_on=col_id, right_on='Predio (ID)', how='left')
                     
-                    # 🚀 FIX MAPA: Filtramos para que solo dibuje las fincas seleccionadas en la meta
-                    predios_a_dibujar = predios_a_dibujar[predios_a_dibujar[col_id_oficial].isin(df_prior_str['Predio (ID/Matrícula)'])]
+                    predios_a_dibujar['TOOLTIP_TEXT'] = predios_a_dibujar.apply(lambda r: f"<b>🎯 Franja Estratégica (ID):</b> {r.get(col_id, 'Desconocido')}<br/><b>⚠️ Área a Restaurar:</b> {r.get('🔴 R2 (Restaurar Ha)', 0):.2f} ha", axis=1)
                     
-                    predios_a_dibujar = predios_a_dibujar.merge(df_prior_str[['Predio (ID/Matrícula)', 'Déficit Ripario (Ha)']], left_on=col_id_oficial, right_on='Predio (ID/Matrícula)', how='left')
+                    capas_mapa.append(pdk.Layer(
+                        "GeoJsonLayer", data=predios_a_dibujar, opacity=0.7,
+                        stroked=True, filled=True, get_fill_color=[230, 126, 34, 200], # Naranja sólido
+                        get_line_color=[211, 84, 0, 255], get_line_width=2,
+                        pickable=True, autoHighlight=True
+                    ))
                 
-                predios_a_dibujar['TOOLTIP_TEXT'] = predios_a_dibujar.apply(lambda r: f"<b>🏡 Finca / Matrícula:</b> {r.get(col_id_oficial, 'Desconocido')}<br/><b>⚠️ Déficit Ripario:</b> {r.get('Déficit Ripario (Ha)', 0):.2f} hectáreas", axis=1)
-                
-                capas_mapa.append(pdk.Layer(
-                    "GeoJsonLayer", data=predios_a_dibujar, opacity=0.4,
-                    stroked=True, filled=True, get_fill_color=[255, 165, 0, 150],
-                    get_line_color=[255, 140, 0, 255], get_line_width=2,
-                    get_point_radius=50, # 🚀 FIX PUNTOS: Soporte para centroides catastrales
-                    pickable=True, autoHighlight=True
-                ))
-                
+            # Capa 5: Polígonos de Conservación / Históricos (Verdes)
             if mostrar_predios_historicos and capa_predios_historicos is not None and not capa_predios_historicos.empty:
                 historicos_4326 = capa_predios_historicos.to_crs(epsg=4326).copy()
                 
                 col_nombre = next((col for col in ['NOMBRE_PRE', 'nombre_pre', 'NOMBRE', 'Entididad'] if col in historicos_4326.columns), 'Desconocido')
-                historicos_4326['TOOLTIP_TEXT'] = historicos_4326.apply(lambda r: f"<b>🌳 Predio Histórico (Ejecutado):</b><br/>{r.get(col_nombre, 'N/A')}<br/><b>Entidad:</b> {r.get('Entididad', r.get('entididad', 'N/A'))}", axis=1)
+                historicos_4326['TOOLTIP_TEXT'] = historicos_4326.apply(lambda r: f"<b>🌳 Predio Protegido:</b><br/>{r.get(col_nombre, 'N/A')}<br/><b>Área:</b> {r.get('Area', r.get('area', 0)):.2f} ha", axis=1)
                 
                 capas_mapa.append(pdk.Layer(
                     "GeoJsonLayer", data=historicos_4326, opacity=0.6,
-                    stroked=True, filled=True, get_fill_color=[46, 204, 113, 160],
+                    stroked=True, filled=True, get_fill_color=[46, 204, 113, 160], # Verde esmeralda
                     get_line_color=[39, 174, 96, 255], get_line_width=2,
-                    get_point_radius=50,
                     pickable=True, autoHighlight=True
                 ))
             
