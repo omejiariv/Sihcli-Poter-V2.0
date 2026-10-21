@@ -2027,55 +2027,31 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                 zona_4326['geometry'] = zona_4326.geometry.make_valid()
                 minx, miny, maxx, maxy = zona_4326.total_bounds
                 
-                # 2. Consultar Universo Catastral desde PostGIS (Filtro por Índice Espacial)
-                # Esta consulta busca solo en la caja delimitadora (Box) de la zona activa, reduciendo la búsqueda a milisegundos.
-                query_cat = text("""
-                    SELECT * FROM predios_catastro 
-                    WHERE geometry && ST_MakeEnvelope(:minx, :miny, :maxx, :maxy, 4326)
-                """)
-                gdf_catastro = gpd.read_postgis(query_cat, engine, params={"minx": minx, "miny": miny, "maxx": maxx, "maxy": maxy}, geom_col='geometry')
-                
-                if not gdf_catastro.empty:
-                    gdf_catastro.set_crs(epsg=4326, allow_override=True, inplace=True)
-                    # Clip final para recortar exactamente a la forma del polígono (ignorar las esquinas de la caja)
-                    capas['catastro_nuevo'] = gpd.clip(gdf_catastro, zona_4326)
+                # 2. Consultar Universo Catastral desde PostGIS (Filtro espacial ultra rápido)
+                try:
+                    query_cat = text("""
+                        SELECT * FROM predios_catastro 
+                        WHERE ST_Intersects(geometry, ST_SetSRID(ST_MakeEnvelope(:minx, :miny, :maxx, :maxy), 4326))
+                    """)
+                    gdf_catastro = gpd.read_postgis(query_cat, engine, params={"minx": minx, "miny": miny, "maxx": maxx, "maxy": maxy}, geom_col='geometry')
                     
+                    if not gdf_catastro.empty:
+                        gdf_catastro.set_crs(epsg=4326, allow_override=True, inplace=True)
+                        capas['catastro_nuevo'] = gpd.clip(gdf_catastro, zona_4326)
+                except Exception as e:
+                    pass
+                
+                # 3. Consultar Predios Históricos (Al ser pocos, los traemos todos y evitamos el bloqueo del índice)
+                try:
+                    gdf_historicos = gpd.read_postgis("SELECT * FROM predios", engine, geom_col='geometry')
+                    if not gdf_historicos.empty:
+                        gdf_historicos.set_crs(epsg=4326, allow_override=True, inplace=True)
+                        capas['historicos_ejecutados'] = gpd.clip(gdf_historicos, zona_4326)
+                except Exception:
+                    pass
+
             except Exception as e:
-                import logging
-                logging.error(f"Error consultando predios_catastro en PostGIS: {e}")
-                
-            try:
-                # 3. Consultar Predios Históricos Ejecutados desde PostGIS (Tabla 'predios' del Tab 3)
-                query_hist = text("""
-                    SELECT * FROM predios 
-                    WHERE geometry && ST_MakeEnvelope(:minx, :miny, :maxx, :maxy, 4326)
-                """)
-                gdf_historicos = gpd.read_postgis(query_hist, engine, params={"minx": minx, "miny": miny, "maxx": maxx, "maxy": maxy}, geom_col='geometry')
-                
-                if not gdf_historicos.empty:
-                    gdf_historicos.set_crs(epsg=4326, allow_override=True, inplace=True)
-                    capas['historicos_ejecutados'] = gpd.clip(gdf_historicos, zona_4326)
-                else:
-                    raise ValueError("Tabla 'predios' vacía o sin datos en esta zona.")
-            except Exception:
-                # 4. Fallback de Emergencia: Carga desde el Storage si la tabla falla
-                urls_historicos = [
-                    "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PrediosEjecutados.geojson",
-                    "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/sihcli_maestros/PrediosEjecutados.geojson"
-                ]
-                for url in urls_historicos:
-                    try:
-                        res = requests.get(url, timeout=30)
-                        if res.status_code == 200:
-                            with tempfile.NamedTemporaryFile(delete=False, suffix=".geojson") as tmp:
-                                tmp.write(res.content)
-                                tmp_path = tmp.name
-                            gdf_tmp = gpd.read_file(tmp_path)
-                            if not gdf_tmp.empty:
-                                gdf_tmp.set_crs(epsg=4326, allow_override=True, inplace=True)
-                                capas['historicos_ejecutados'] = gpd.clip(gdf_tmp, zona_4326)
-                                break
-                    except: continue
+                pass
 
             return capas['catastro_nuevo'], capas['historicos_ejecutados']
             
@@ -2088,17 +2064,14 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
             with st.container(border=True):
                 st.markdown("#### ⚙️ Simulación Concéntrica de Franjas de Protección")
                 
-                # Preparación de la red hídrica
                 rios_strahler = rios_strahler.reset_index(drop=True)
                 rios_strahler['ID_Tramo'] = ["Segmento " + str(i+1) for i in range(len(rios_strahler))]
                 if 'longitud_km' in rios_strahler.columns:
                     rios_strahler['longitud_km'] = rios_strahler['longitud_km'].round(2)
                 
-                # Extraer tamaños de anillo (Mínimo, Ideal, Óptimo)
                 anillos = st.session_state.get('multi_rings', [10, 20, 30])
                 b_min, b_med, b_max = anillos[0], anillos[1], anillos[2]
                 
-                # 🌿 MAGIA GEOMÉTRICA: Pre-cálculo de anillos fusionados
                 rios_3116 = rios_strahler.to_crs(epsg=3116)
                 rios_union = rios_3116.unary_union
                 
@@ -2108,7 +2081,6 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                 
                 buffer_max_gdf = gpd.GeoDataFrame(geometry=[geom_max], crs=3116)
                 
-                # CÁLCULO DE ÁREAS POR TRAMO HÍDRICO
                 datos_tramos = []
                 for idx, row in rios_3116.iterrows():
                     long_m = row.geometry.length
@@ -2133,7 +2105,6 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
 
                 st.success(f"✅ Modelando 3 escenarios concéntricos simultáneos ({b_min}m, {b_med}m, {b_max}m)...")
                 
-                # MÉTRICAS TÁCTICAS
                 cm1, cm2, cm3, cm4, cm5 = st.columns(5)
                 cm1.metric(f"🔴 Escenario {b_min}m", f"{tot_min:,.1f} ha")
                 cm2.metric(f"🟡 Escenario {b_med}m", f"{tot_med:,.1f} ha", f"+{(tot_med - tot_min):,.1f} ha", delta_color="off")
@@ -2155,35 +2126,40 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                     if capa_predios_nuevos is not None and not capa_predios_nuevos.empty:
                         with st.spinner("Ejecutando Intersección Multidimensional (Catastro + Históricos + Strahler + Satélite)..."):
                             try:
-                                # 🧮 ÁLGEBRA 1: Preservar el Orden de Strahler en el Buffer
                                 rios_3116_estrategicos = rios_3116.copy()
                                 rios_3116_estrategicos['geometry'] = rios_3116_estrategicos.geometry.buffer(b_max, resolution=2)
                                 
-                                # 🧮 ÁLGEBRA 2: Restar Capital Gestionado (Evitar doble esfuerzo)
                                 if capa_predios_historicos is not None and not capa_predios_historicos.empty:
-                                    historicos_3116 = capa_predios_historicos.to_crs(epsg=3116) # 🚀 FIX AQUÍ
+                                    historicos_3116 = capa_predios_historicos.to_crs(epsg=3116)
                                     rios_3116_estrategicos['geometry'] = rios_3116_estrategicos.geometry.difference(historicos_3116.unary_union)
                                     rios_3116_estrategicos = rios_3116_estrategicos[~rios_3116_estrategicos.is_empty]
                                 
-                                # 🧮 ÁLGEBRA 3: Intersección con Universo Catastral Nuevo
-                                predios_nuevos_3116 = capa_predios_nuevos.to_crs(epsg=3116) # 🚀 FIX AQUÍ
+                                predios_nuevos_3116 = capa_predios_nuevos.to_crs(epsg=3116)
                                 predios_en_buffer = gpd.overlay(predios_nuevos_3116, rios_3116_estrategicos, how='intersection')
                                 
                                 if not predios_en_buffer.empty:
+                                    # 🚀 FIX ÁREAS: Forzamos sistema métrico y aseguramos que no colapse a cero
+                                    predios_en_buffer = predios_en_buffer.set_crs(epsg=3116, allow_override=True)
                                     predios_en_buffer['Area_Faltante_ha'] = predios_en_buffer.geometry.area / 10000.0
+                                    
+                                    # 🛡️ Escudo de Áreas: Si la intersección dio 0 (Puntos o astillas), usamos 1.5ha nominal
+                                    col_area = next((c for c in predios_en_buffer.columns if c.lower() in ['area', 'area_ha', 'hectareas', 'shape_area']), None)
+                                    if col_area:
+                                        area_attr = pd.to_numeric(predios_en_buffer[col_area], errors='coerce').fillna(1.5)
+                                        predios_en_buffer['Area_Faltante_ha'] = np.where(predios_en_buffer['Area_Faltante_ha'] < 0.01, area_attr, predios_en_buffer['Area_Faltante_ha'])
+                                    else:
+                                        predios_en_buffer['Area_Faltante_ha'] = np.where(predios_en_buffer['Area_Faltante_ha'] < 0.01, 1.5, predios_en_buffer['Area_Faltante_ha'])
                                     
                                     col_id = next((col for col in ['MATRICULA', 'COD_CATAST', 'FICHA', 'OBJECTID', 'id', 'NOMBRE'] if col in predios_en_buffer.columns), None)
                                     if col_id is None:
                                         predios_en_buffer['ID_Predio'] = predios_en_buffer.index
                                         col_id = 'ID_Predio'
                                         
-                                    # Agrupamos conservando el Orden de Strahler MÁXIMO que toca la finca
                                     predios_agrupados = predios_en_buffer.groupby(col_id).agg({
                                         'Area_Faltante_ha': 'sum',
                                         'Orden_Strahler': 'max'
                                     }).reset_index()
                                     
-                                    # 🧮 ÁLGEBRA 4: Inyectar Datos Satelitales
                                     if 'areas_data' in locals() and areas_data and area_total_ha > 0:
                                         pct_bosque = sum([x["Área (Ha)"] for x in areas_data if "Bosque" in x["Cobertura"]]) / area_total_ha
                                         pct_matorral = sum([x["Área (Ha)"] for x in areas_data if "Matorrales" in x["Cobertura"]]) / area_total_ha
@@ -2202,13 +2178,11 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                                         area_conectar = area_tot - area_cuidar - area_mejorar
                                         if area_conectar < 0: area_conectar = 0.0
                                         
-                                        # 💰 Tasación Financiera Diferenciada
                                         costo_r1 = area_cuidar * (costo_base_ha * 0.2)
                                         costo_r2 = area_mejorar * (costo_base_ha * 0.6)
                                         costo_r3 = area_conectar * costo_base_ha
                                         costo_total_finca = costo_r1 + costo_r2 + costo_r3
                                         
-                                        # 🎯 Nueva Fórmula de Prioridad
                                         score = (area_conectar * 10) + (area_mejorar * 5) + (orden_s * 15)
                                         
                                         datos_prioridad.append({
@@ -2256,7 +2230,6 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
             st.markdown("---")
             st.markdown(f"#### 🗺️ Visor Táctico de Conectividad y Predios: **{nombre_zona}**")
             
-            # 🔘 INTERRUPTORES PARA LAS CAPAS PREDIALES
             c_tog1, c_tog2 = st.columns(2)
             with c_tog1: mostrar_predios_nuevos = st.toggle("🏡 Visualizar Predios Estratégicos (Naranjas)", value=True)
             with c_tog2: mostrar_predios_historicos = st.toggle("🌳 Visualizar Predios Históricos (Verdes)", value=True)
@@ -2270,12 +2243,10 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
             
             capas_mapa = []
             
-            # Capa 1: Límite de Cuenca/Zona
             if gdf_zona is not None:
                 zona_4326 = gdf_zona.to_crs("EPSG:4326")
                 capas_mapa.append(pdk.Layer("GeoJsonLayer", data=zona_4326, opacity=1, stroked=True, get_line_color=[0, 200, 0, 255], get_line_width=3, filled=False))
             
-            # Capa 2: Anillos Concéntricos (Niveles de Prioridad)
             if 'geom_max' in locals():
                 gdf_max = gpd.GeoDataFrame(geometry=[geom_max], crs=3116).to_crs(4326)
                 capas_mapa.append(pdk.Layer("GeoJsonLayer", data=gdf_max, opacity=0.2, get_fill_color=[171, 235, 198], stroked=False))
@@ -2286,7 +2257,6 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                 gdf_min = gpd.GeoDataFrame(geometry=[geom_min], crs=3116).to_crs(4326)
                 capas_mapa.append(pdk.Layer("GeoJsonLayer", data=gdf_min, opacity=0.6, get_fill_color=[40, 180, 99], stroked=False))
 
-            # Capa 3: Red Hídrica (Strahler)
             if 'rios_4326' in locals() and not rios_4326.empty:
                 rios_4326['TOOLTIP_TEXT'] = rios_4326.apply(lambda r: f"<b>💧 Tramo Hídrico:</b> {r.get('ID_Tramo', 'N/A')}<br/><b>🌊 Orden (Strahler):</b> {r.get('Orden_Strahler', 'N/A')}<br/><b>📏 Longitud:</b> {r.get('longitud_km', 0):.2f} km", axis=1)
                 
@@ -2296,19 +2266,22 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                     pickable=True, autoHighlight=True
                 ))
             
-            # Capa 4: Predios Estratégicos Nuevos (Naranjas)
             if mostrar_predios_nuevos and 'predios_en_buffer' in locals() and not predios_en_buffer.empty:
                 col_id_oficial = next((col for col in ['MATRICULA', 'COD_CATAST', 'FICHA', 'OBJECTID', 'id', 'NOMBRE'] if capa_predios_nuevos is not None and col in capa_predios_nuevos.columns), None)
                 
                 if col_id_oficial:
-                    ids_afectados = predios_en_buffer[col_id_oficial].unique()
-                    predios_a_dibujar = capa_predios_nuevos[capa_predios_nuevos[col_id_oficial].isin(ids_afectados)].to_crs(epsg=4326).copy()
+                    # 🚀 FIX TYPES: Forzamos la comparación cruzada como Texto (String)
+                    ids_afectados = predios_en_buffer[col_id_oficial].astype(str).unique()
+                    predios_a_dibujar = capa_predios_nuevos[capa_predios_nuevos[col_id_oficial].astype(str).isin(ids_afectados)].to_crs(epsg=4326).copy()
                 else:
                     predios_a_dibujar = predios_en_buffer.to_crs(epsg=4326).copy()
                     col_id_oficial = 'index'
                 
                 if 'df_prioridad' in locals() and not df_prioridad.empty:
-                    predios_a_dibujar = predios_a_dibujar.merge(df_prioridad[['Predio (ID/Matrícula)', 'Déficit Ripario (Ha)']], left_on=col_id_oficial, right_on='Predio (ID/Matrícula)', how='left')
+                    predios_a_dibujar[col_id_oficial] = predios_a_dibujar[col_id_oficial].astype(str)
+                    df_prior_str = df_prioridad.copy()
+                    df_prior_str['Predio (ID/Matrícula)'] = df_prior_str['Predio (ID/Matrícula)'].astype(str)
+                    predios_a_dibujar = predios_a_dibujar.merge(df_prior_str[['Predio (ID/Matrícula)', 'Déficit Ripario (Ha)']], left_on=col_id_oficial, right_on='Predio (ID/Matrícula)', how='left')
                 
                 predios_a_dibujar['TOOLTIP_TEXT'] = predios_a_dibujar.apply(lambda r: f"<b>🏡 Finca / Matrícula:</b> {r.get(col_id_oficial, 'Desconocido')}<br/><b>⚠️ Déficit Ripario:</b> {r.get('Déficit Ripario (Ha)', 0):.2f} hectáreas", axis=1)
                 
@@ -2316,14 +2289,13 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                     "GeoJsonLayer", data=predios_a_dibujar, opacity=0.4,
                     stroked=True, filled=True, get_fill_color=[255, 165, 0, 150],
                     get_line_color=[255, 140, 0, 255], get_line_width=2,
+                    get_point_radius=50, # 🚀 FIX PUNTOS: Soporte para centroides catastrales
                     pickable=True, autoHighlight=True
                 ))
                 
-            # Capa 5: Predios Históricos Ejecutados (Verdes)
             if mostrar_predios_historicos and capa_predios_historicos is not None and not capa_predios_historicos.empty:
                 historicos_4326 = capa_predios_historicos.to_crs(epsg=4326).copy()
                 
-                # Construimos un popup informativo para los predios verdes
                 col_nombre = next((col for col in ['NOMBRE_PRE', 'nombre_pre', 'NOMBRE', 'Entididad'] if col in historicos_4326.columns), 'Desconocido')
                 historicos_4326['TOOLTIP_TEXT'] = historicos_4326.apply(lambda r: f"<b>🌳 Predio Histórico (Ejecutado):</b><br/>{r.get(col_nombre, 'N/A')}<br/><b>Entidad:</b> {r.get('Entididad', r.get('entididad', 'N/A'))}", axis=1)
                 
@@ -2331,10 +2303,10 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                     "GeoJsonLayer", data=historicos_4326, opacity=0.6,
                     stroked=True, filled=True, get_fill_color=[46, 204, 113, 160],
                     get_line_color=[39, 174, 96, 255], get_line_width=2,
+                    get_point_radius=50,
                     pickable=True, autoHighlight=True
                 ))
             
-            # Renderizado 3D Final
             view_state = pdk.ViewState(latitude=c_lat, longitude=c_lon, zoom=13, pitch=45)
             
             tooltip = {
