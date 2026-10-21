@@ -1991,36 +1991,47 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
         # BLOQUE 4: MOTOR DE CRUCE MULTI-ANILLO Y VISOR 3D (PYDECK)
         # =========================================================================
         
-        # 2. Cargar Universo Catastral (Capa Predial Total desde Supabase)
+        # 2. Cargar Ambas Capas de Predios (Universo Catastral y Predios Históricos)
         @st.cache_data(ttl=3600, show_spinner=False)
-        def obtener_catastro_estrategico(_gdf_zona):
+        def obtener_cartografias_prediales(_gdf_zona):
             import requests, tempfile
             import pandas as pd
             import geopandas as gpd
-            try:
-                # 🎯 Apuntamos al nuevo archivo maestro del catastro
-                url = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PrediosVeredas_CV.geojson"
-                res = requests.get(url)
-                if res.status_code == 200:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".geojson") as tmp:
-                        tmp.write(res.content)
-                        tmp_path = tmp.name
-                    gdf_c = gpd.read_file(tmp_path)
-                    if not gdf_c.empty:
-                        gdf_c.set_crs(epsg=4326, allow_override=True, inplace=True)
-                        gdf_c_3116 = gdf_c.to_crs(epsg=3116)
-                        zona_3116 = _gdf_zona.to_crs(epsg=3116)
-                        
-                        # Corrección de geometrías y recorte estricto a la zona de interés
-                        gdf_c_3116['geometry'] = gdf_c_3116.geometry.make_valid().buffer(0)
-                        zona_3116['geometry'] = zona_3116.geometry.make_valid().buffer(0)
-                        return gpd.clip(gdf_c_3116, zona_3116)
-            except Exception as e:
-                return None
-            return None
             
-        with st.spinner("Descargando Universo Catastral (PrediosVeredas_CV)..."):
-            capa_predios = obtener_catastro_estrategico(gdf_zona)
+            capas = {'catastro_nuevo': None, 'historicos_ejecutados': None}
+            urls = {
+                'catastro_nuevo': "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PrediosVeredas_CV.geojson",
+                'historicos_ejecutados': "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PrediosEjecutados.geojson"
+            }
+            
+            try:
+                zona_3116 = _gdf_zona.to_crs(epsg=3116)
+                zona_3116['geometry'] = zona_3116.geometry.make_valid().buffer(0)
+                
+                for key, url in urls.items():
+                    res = requests.get(url, timeout=30)
+                    if res.status_code == 200:
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".geojson") as tmp:
+                            tmp.write(res.content)
+                            tmp_path = tmp.name
+                        gdf_tmp = gpd.read_file(tmp_path)
+                        
+                        if not gdf_tmp.empty:
+                            gdf_tmp.set_crs(epsg=4326, allow_override=True, inplace=True)
+                            gdf_tmp_3116 = gdf_tmp.to_crs(epsg=3116)
+                            gdf_tmp_3116['geometry'] = gdf_tmp_3116.geometry.make_valid().buffer(0)
+                            
+                            # Recortamos estrictamente a la zona de estudio
+                            clip_result = gpd.clip(gdf_tmp_3116, zona_3116)
+                            if not clip_result.empty:
+                                capas[key] = clip_result
+            except Exception as e:
+                pass
+                
+            return capas['catastro_nuevo'], capas['historicos_ejecutados']
+            
+        with st.spinner("Descargando e integrando Cartografía Predial de Supabase (Catastro y Ejecutados)..."):
+            capa_predios_nuevos, capa_predios_historicos = obtener_cartografias_prediales(gdf_zona)
 
         # 3. Ejecutar el Motor de Cruce
         if rios_strahler is not None and not rios_strahler.empty:
@@ -2092,24 +2103,20 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                     st.info("**R1:** Cuidar lo bien conservado (PSA) | **R2:** Mejorar lo cercano (Enriquecimiento) | **R3:** Conectar fragmentos (Restauración) | **R4:** Prioridad a bosques riparios.")
                     
                     predios_en_buffer = gpd.GeoDataFrame()
-                    if capa_predios is not None and not capa_predios.empty:
-                        with st.spinner("Ejecutando Intersección Multidimensional (Catastro + Strahler + Satélite)..."):
+                    if capa_predios_nuevos is not None and not capa_predios_nuevos.empty:
+                        with st.spinner("Ejecutando Intersección Multidimensional (Catastro + Históricos + Strahler + Satélite)..."):
                             try:
-                                predios_3116 = capa_predios.to_crs(epsg=3116)
-                                
                                 # 🧮 ÁLGEBRA 1: Preservar el Orden de Strahler en el Buffer
-                                # En lugar de fusionar todo a ciegas, le damos un buffer individual a cada tramo
                                 rios_3116_estrategicos = rios_3116.copy()
                                 rios_3116_estrategicos['geometry'] = rios_3116_estrategicos.geometry.buffer(b_max, resolution=2)
                                 
-                                # 🧮 ÁLGEBRA 2: Restar Capital Gestionado (Evitar doble esfuerzo)
-                                if 'gdf_predios_mapa' in locals() and gdf_predios_mapa is not None and not gdf_predios_mapa.empty:
-                                    gestionados_3116 = gdf_predios_mapa.to_crs(3116)
-                                    rios_3116_estrategicos['geometry'] = rios_3116_estrategicos.geometry.difference(gestionados_3116.unary_union)
+                                # 🧮 ÁLGEBRA 2: Restar Capital Gestionado (Evitar sobre-invertir en fincas que ya tienen proyectos de CuencaVerde)
+                                if capa_predios_historicos is not None and not capa_predios_historicos.empty:
+                                    rios_3116_estrategicos['geometry'] = rios_3116_estrategicos.geometry.difference(capa_predios_historicos.unary_union)
                                     rios_3116_estrategicos = rios_3116_estrategicos[~rios_3116_estrategicos.is_empty]
                                 
-                                # 🧮 ÁLGEBRA 3: Intersección con Universo Catastral
-                                predios_en_buffer = gpd.overlay(predios_3116, rios_3116_estrategicos, how='intersection')
+                                # 🧮 ÁLGEBRA 3: Intersección con Universo Catastral Nuevo
+                                predios_en_buffer = gpd.overlay(capa_predios_nuevos, rios_3116_estrategicos, how='intersection')
                                 
                                 if not predios_en_buffer.empty:
                                     predios_en_buffer['Area_Faltante_ha'] = predios_en_buffer.geometry.area / 10000.0
@@ -2132,7 +2139,7 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                                     else:
                                         pct_bosque, pct_matorral = 0.4, 0.15 
                                         
-                                    costo_base_ha = st.session_state.get('td_c_ha', 8.5) # Hereda costo de la Pág 09
+                                    costo_base_ha = st.session_state.get('td_c_ha', 8.5)
                                     
                                     datos_prioridad = []
                                     for idx, row in predios_agrupados.iterrows():
@@ -2145,12 +2152,12 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                                         if area_conectar < 0: area_conectar = 0.0
                                         
                                         # 💰 Tasación Financiera Diferenciada
-                                        costo_r1 = area_cuidar * (costo_base_ha * 0.2) # PSA (20% del costo full)
-                                        costo_r2 = area_mejorar * (costo_base_ha * 0.6) # Enriquecimiento (60%)
-                                        costo_r3 = area_conectar * costo_base_ha # Restauración total (100%)
+                                        costo_r1 = area_cuidar * (costo_base_ha * 0.2)
+                                        costo_r2 = area_mejorar * (costo_base_ha * 0.6)
+                                        costo_r3 = area_conectar * costo_base_ha
                                         costo_total_finca = costo_r1 + costo_r2 + costo_r3
                                         
-                                        # 🎯 Nueva Fórmula de Prioridad (Multiplicador por Jerarquía del Río)
+                                        # 🎯 Nueva Fórmula de Prioridad
                                         score = (area_conectar * 10) + (area_mejorar * 5) + (orden_s * 15)
                                         
                                         datos_prioridad.append({
@@ -2193,13 +2200,15 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                         st.info("ℹ️ Carga la red de predios catastrales para correr el álgebra de mapas.")
 
             # =========================================================
-            # 🗺️ EL MAPA TÁCTICO PYDECK (VISOR 3D DE NEGOCIACIÓN)
+            # 🗺️ EL MAPA TÁCTICO PYDECK (VISOR 3D MULTI-CAPA)
             # =========================================================
             st.markdown("---")
             st.markdown(f"#### 🗺️ Visor Táctico de Conectividad y Predios: **{nombre_zona}**")
             
-            # 🔘 NUEVO: INTERRUPTOR PARA LA CAPA DE PREDIOS
-            mostrar_predios = st.toggle("🏡 Visualizar Capa de Predios Estratégicos (Polígonos Naranjas)", value=True)
+            # 🔘 INTERRUPTORES PARA LAS CAPAS PREDIALES
+            c_tog1, c_tog2 = st.columns(2)
+            with c_tog1: mostrar_predios_nuevos = st.toggle("🏡 Visualizar Predios Estratégicos (Naranjas)", value=True)
+            with c_tog2: mostrar_predios_historicos = st.toggle("🌳 Visualizar Predios Históricos (Verdes)", value=True)
             
             import pydeck as pdk
             
@@ -2226,7 +2235,7 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                 gdf_min = gpd.GeoDataFrame(geometry=[geom_min], crs=3116).to_crs(4326)
                 capas_mapa.append(pdk.Layer("GeoJsonLayer", data=gdf_min, opacity=0.6, get_fill_color=[40, 180, 99], stroked=False))
 
-            # Capa 3: Red Hídrica (Strahler) - CON TOOLTIP INTELIGENTE
+            # Capa 3: Red Hídrica (Strahler)
             if 'rios_4326' in locals() and not rios_4326.empty:
                 rios_4326['TOOLTIP_TEXT'] = rios_4326.apply(lambda r: f"<b>💧 Tramo Hídrico:</b> {r.get('ID_Tramo', 'N/A')}<br/><b>🌊 Orden (Strahler):</b> {r.get('Orden_Strahler', 'N/A')}<br/><b>📏 Longitud:</b> {r.get('longitud_km', 0):.2f} km", axis=1)
                 
@@ -2236,22 +2245,20 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                     pickable=True, autoHighlight=True
                 ))
             
-            # Capa 4: Predios Estratégicos (Afectados) - CONECTADA AL INTERRUPTOR
-            if mostrar_predios and 'predios_en_buffer' in locals() and not predios_en_buffer.empty:
-                col_id_oficial = next((col for col in ['MATRICULA', 'COD_CATAST', 'FICHA', 'OBJECTID', 'id', 'NOMBRE'] if capa_predios is not None and col in capa_predios.columns), None)
+            # Capa 4: Predios Estratégicos Nuevos (Naranjas)
+            if mostrar_predios_nuevos and 'predios_en_buffer' in locals() and not predios_en_buffer.empty:
+                col_id_oficial = next((col for col in ['MATRICULA', 'COD_CATAST', 'FICHA', 'OBJECTID', 'id', 'NOMBRE'] if capa_predios_nuevos is not None and col in capa_predios_nuevos.columns), None)
                 
                 if col_id_oficial:
                     ids_afectados = predios_en_buffer[col_id_oficial].unique()
-                    predios_a_dibujar = capa_predios[capa_predios[col_id_oficial].isin(ids_afectados)].to_crs(epsg=4326).copy()
+                    predios_a_dibujar = capa_predios_nuevos[capa_predios_nuevos[col_id_oficial].isin(ids_afectados)].to_crs(epsg=4326).copy()
                 else:
                     predios_a_dibujar = predios_en_buffer.to_crs(epsg=4326).copy()
                     col_id_oficial = 'index'
                 
-                # Rescatamos el Déficit Ripario que calculamos arriba en el Álgebra de Mapas
                 if 'df_prioridad' in locals() and not df_prioridad.empty:
                     predios_a_dibujar = predios_a_dibujar.merge(df_prioridad[['Predio (ID/Matrícula)', 'Déficit Ripario (Ha)']], left_on=col_id_oficial, right_on='Predio (ID/Matrícula)', how='left')
                 
-                # Pre-formateamos el texto del popup para las fincas
                 predios_a_dibujar['TOOLTIP_TEXT'] = predios_a_dibujar.apply(lambda r: f"<b>🏡 Finca / Matrícula:</b> {r.get(col_id_oficial, 'Desconocido')}<br/><b>⚠️ Déficit Ripario:</b> {r.get('Déficit Ripario (Ha)', 0):.2f} hectáreas", axis=1)
                 
                 capas_mapa.append(pdk.Layer(
@@ -2260,22 +2267,32 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                     get_line_color=[255, 140, 0, 255], get_line_width=2,
                     pickable=True, autoHighlight=True
                 ))
+                
+            # Capa 5: Predios Históricos Ejecutados (Verdes)
+            if mostrar_predios_historicos and capa_predios_historicos is not None and not capa_predios_historicos.empty:
+                historicos_4326 = capa_predios_historicos.to_crs(epsg=4326).copy()
+                
+                # Construimos un popup informativo para los predios verdes
+                col_nombre = next((col for col in ['NOMBRE_PRE', 'nombre_pre', 'NOMBRE', 'Entididad'] if col in historicos_4326.columns), 'Desconocido')
+                historicos_4326['TOOLTIP_TEXT'] = historicos_4326.apply(lambda r: f"<b>🌳 Predio Histórico (Ejecutado):</b><br/>{r.get(col_nombre, 'N/A')}<br/><b>Entidad:</b> {r.get('Entididad', r.get('entididad', 'N/A'))}", axis=1)
+                
+                capas_mapa.append(pdk.Layer(
+                    "GeoJsonLayer", data=historicos_4326, opacity=0.6,
+                    stroked=True, filled=True, get_fill_color=[46, 204, 113, 160],
+                    get_line_color=[39, 174, 96, 255], get_line_width=2,
+                    pickable=True, autoHighlight=True
+                ))
             
-            # Renderizado 3D Final (Corregido para sintaxis directa de Streamlit/PyDeck)
+            # Renderizado 3D Final
             view_state = pdk.ViewState(latitude=c_lat, longitude=c_lon, zoom=13, pitch=45)
             
             tooltip = {
                 "html": "{TOOLTIP_TEXT}",
                 "style": {
-                    "backgroundColor": "#2c3e50", 
-                    "color": "white", 
-                    "font-family": "Georgia, serif", 
-                    "padding": "12px", 
-                    "border-radius": "8px",
-                    "box-shadow": "0 4px 6px rgba(0,0,0,0.3)"
+                    "backgroundColor": "#2c3e50", "color": "white", "font-family": "Georgia, serif", 
+                    "padding": "12px", "border-radius": "8px", "box-shadow": "0 4px 6px rgba(0,0,0,0.3)"
                 }
             }
-            # 🚀 FIX: Revertimos al estándar seguro para PyDeck
             st.pydeck_chart(pdk.Deck(layers=capas_mapa, initial_view_state=view_state, map_style="light", tooltip=tooltip), width="stretch")
 
         else:
