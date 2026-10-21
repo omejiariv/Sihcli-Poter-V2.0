@@ -2157,8 +2157,11 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
 
                                 # 🧮 3. ÁLGEBRA DE MAPAS: CRUCE CATASTRAL ESTRICTO AL BUFFER
                                 predios_nuevos_3116 = capa_predios_nuevos.to_crs(epsg=3116)
-                                # Clip nativo para evitar los fallos de topología de overlay()
-                                predios_en_buffer = gpd.clip(predios_nuevos_3116, rios_3116_estrategicos)
+                                try:
+                                    predios_en_buffer = gpd.overlay(predios_nuevos_3116, rios_3116_estrategicos, how='intersection')
+                                except:
+                                    predios_en_buffer = gpd.clip(predios_nuevos_3116, rios_3116_estrategicos)
+                                    predios_en_buffer['Orden_Strahler'] = 1
                                 
                                 if not predios_en_buffer.empty:
                                     predios_en_buffer = predios_en_buffer.set_crs(epsg=3116, allow_override=True)
@@ -2172,10 +2175,9 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                                         predios_en_buffer['ID_Predio_Temp'] = predios_en_buffer.index.astype(str)
                                         col_id = 'ID_Predio_Temp'
                                         
-                                    predios_agrupados = predios_en_buffer.groupby(col_id).agg({
-                                        'Area_Franja_ha': 'sum',
-                                        'Orden_Strahler': 'max'
-                                    }).reset_index()
+                                    col_str = next((c for c in predios_en_buffer.columns if 'strahler' in c.lower()), None)
+                                    if not col_str: predios_en_buffer['Orden_Strahler'] = 1; col_str = 'Orden_Strahler'
+                                    predios_agrupados = predios_en_buffer.groupby(col_id).agg({'Area_Franja_ha': 'sum', col_str: 'max'}).reset_index().rename(columns={col_str: 'Orden_Strahler'})
                                     
                                     costo_base_ha = st.session_state.get('td_c_ha', 8.5)
                                     
