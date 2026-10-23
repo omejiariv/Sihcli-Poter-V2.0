@@ -206,9 +206,9 @@ def renderizar_menu_navegacion(pagina_actual):
                         "apikey": key_sb,
                         "Authorization": f"Bearer {key_sb}"
                     }
-                    # Petición REST ultraligera solo por las columnas necesarias
-                    url_cuencas = f"{url_sb}/rest/v1/cuencas?select=nomah,nomzh,nom_szh,nom_nss1,nss1,nom_nss2,nss2,nom_nss3,nss3"
-                    respuesta = requests.get(url_cuencas, headers=headers, timeout=10)
+                    # 🚀 FIX 1: Petición REST ultraligera con &limit=50000 para evitar que Supabase trunque el catálogo
+                    url_cuencas = f"{url_sb}/rest/v1/cuencas?select=nomah,nomzh,nom_szh,nom_nss1,nss1,nom_nss2,nss2,nom_nss3,nss3&limit=50000"
+                    respuesta = requests.get(url_cuencas, headers=headers, timeout=15)
                     
                     if respuesta.status_code == 200:
                         return pd.DataFrame(respuesta.json())
@@ -287,20 +287,27 @@ def renderizar_menu_navegacion(pagina_actual):
                             c = c.replace('_', '').strip()
                             return re.sub(r'\.0$', '', c)
                         df_c_filtro['codigo_limpio'] = df_c_filtro[col_cod].apply(limpiar_codigo)
+                        # Creamos la llave compuesta para la vista del usuario
                         df_c_filtro['Llave_Visual'] = df_c_filtro[col_obj].astype(str).str.strip() + " - (" + df_c_filtro['codigo_limpio'] + ")"
                         opciones_cuencas = sorted([str(x) for x in df_c_filtro['Llave_Visual'].unique() if str(x) != ' - ()' and not str(x).startswith(' -')])
                         
                         seleccion = st.selectbox(f"Cuenca Exacta ({nivel_cuenca}):", opciones_cuencas, key="menu_cuenca_aleph")
-                        territorio_final = seleccion
                         
+                        # 🚀 FIX 2: Separar el nombre puro para los motores y el código para la jerarquía
                         if " - (" in seleccion:
                             nombre_puro = seleccion.split(" - (")[0].strip()
                             codigo_puro = seleccion.split(" - (")[1].replace(")", "").strip()
+                            
+                            # Entregamos SOLO el nombre puro a los motores de IDEAM y Earth Engine
+                            territorio_final = nombre_puro 
+                            
                             if codigo_puro == "":
                                 st.session_state['aleph_codigo_cuenca'] = nombre_puro
                             else:
                                 st.session_state['aleph_codigo_cuenca'] = codigo_puro
                         else:
+                            # Fallback de seguridad
+                            territorio_final = seleccion.strip()
                             st.session_state['aleph_codigo_cuenca'] = seleccion.strip()
                     else:
                         st.error("Error en formato de columnas.")
