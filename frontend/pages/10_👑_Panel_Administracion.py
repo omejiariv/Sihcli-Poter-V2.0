@@ -1827,63 +1827,134 @@ if st.button("🕵️‍♂️ Extraer Datos de Piragua", type="primary"):
 # ==============================================================================
 with tabs[17]:
     st.header("🏡 Motor de Inyección Catastral (PostGIS)")
-    st.info("Migrar el universo catastral desde un archivo GeoJSON pesado a una tabla nativa espacial (PostGIS) aumentará drásticamente la velocidad de la pestaña Toma de Decisiones.")
+    st.info("Migrar el universo catastral a una tabla nativa espacial (PostGIS) aumentará drásticamente la velocidad de la pestaña Toma de Decisiones.")
 
-    with st.expander("🛠️ Abrir Panel de Migración de Catastro a Base de Datos", expanded=False):
+    with st.expander("🛠️ Opción A: Carga Manual (Archivo GeoJSON)", expanded=False):
         st.markdown("Sube el archivo `PrediosVeredas_CV.geojson` para inyectarlo en la base de datos.")
+        file_geo_cat = st.file_uploader("Sube la geometría del Catastro", type=['geojson', 'json'])
         
-        file_geo_cat = st.file_uploader("Sube la geometría del Catastro", type=['geojson', 'json'], help="Sube el archivo del Universo Catastral de CuencaVerde")
-        
-        if st.button("⚡ Ejecutar Inyección de Catastro a PostGIS", type="primary", width="stretch"):
+        if st.button("⚡ Ejecutar Inyección de Archivo", type="primary", width="stretch"):
             if file_geo_cat:
                 import geopandas as gpd
-                from modules.db_manager import get_engine
                 from sqlalchemy import text
                 import time
                 
-                engine = get_engine()
                 estado = st.empty()
-                barra = st.progress(0)
-                
                 try:
-                    estado.info("⏳ Paso 1: Leyendo geometría catastral (esto puede tardar varios segundos por el volumen de datos)...")
-                    # Cargamos el mapa a la memoria
+                    estado.info("⏳ Paso 1: Leyendo geometría catastral...")
                     gdf_cat = gpd.read_file(file_geo_cat)
-                    
-                    # Blindaje topológico: Todo a minúsculas
                     gdf_cat.columns = [c.lower() for c in gdf_cat.columns]
                     
-                    # Asegurar CRS estándar (WGS84)
                     if gdf_cat.crs is None or gdf_cat.crs.to_string() != "EPSG:4326":
-                        estado.info("🔄 Reproyectando coordenadas a estándar global WGS84...")
                         gdf_cat = gdf_cat.to_crs("EPSG:4326")
                     
-                    # Forzar el arreglo de geometrías rotas (Topología)
                     gdf_cat['geometry'] = gdf_cat.geometry.make_valid()
-                    
-                    # Eliminar columnas de fecha (Timestamp) que rompen la inyección de SQL
                     for col in gdf_cat.select_dtypes(include=['datetime64', 'datetimetz']).columns:
                         gdf_cat[col] = gdf_cat[col].astype(str)
 
-                    estado.info("⏳ Paso 2: Limpiando la tabla antigua en la base de datos...")
-                    barra.progress(30)
-                    
+                    estado.info("⏳ Paso 2: Limpiando tabla antigua...")
                     with engine.begin() as conn:
                         conn.execute(text("DROP TABLE IF EXISTS predios_catastro CASCADE;"))
                     
                     time.sleep(1) 
-                    
-                    estado.info("🚀 Paso 3: Inyectando polígonos a Supabase (PostGIS)... ¡No cierres la ventana!")
-                    barra.progress(60)
-                    
-                    # Subimos la tabla usando 'chunksize' para no asfixiar el tubo de subida
+                    estado.info("🚀 Paso 3: Inyectando polígonos a PostGIS...")
                     gdf_cat.to_postgis('predios_catastro', engine, if_exists='replace', index=False, chunksize=100)
                     
-                    barra.progress(100)
-                    estado.success(f"✅ ¡Éxito Absoluto! {len(gdf_cat):,.0f} predios catastrales inyectados permanentemente en la tabla 'predios_catastro'.")
+                    estado.success(f"✅ ¡Éxito! {len(gdf_cat):,.0f} predios inyectados.")
                     st.balloons()
                 except Exception as e:
-                    barra.empty()
-                    st.error(f"❌ Error crítico en la inyección del catastro: {e}")
+                    st.error(f"❌ Error crítico: {e}")
             else:
-                st.warning("⚠️ Por favor, sube el archivo .geojson primero.")
+                st.warning("⚠️ Sube el archivo primero.")
+
+    with st.expander("📡 Opción B: Sincronización Directa API Gobernación (ETL)", expanded=True):
+        st.markdown("Descarga polígonos en vivo desde el servidor oficial paginando de 1,000 en 1,000 para evadir los límites de seguridad.")
+        
+        col_etl1, col_etl2 = st.columns([2, 1])
+        with col_etl1:
+            # Nota: 002 es el código DANE de Abejorral, 086 es Belmira.
+            filtro_mun = st.text_input("Filtro SQL (Ej: MUNICIPIO = '002' para Abejorral):", value="MUNICIPIO = '002'")
+        with col_etl2:
+            modo_etl = st.selectbox("Modo de Inyección:", ["Añadir a la tabla (Append)", "Borrar tabla y Reemplazar"])
+
+        if st.button("🚀 Iniciar Extracción y Carga Oficial (ETL)", type="primary"):
+            import requests
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            import geopandas as gpd
+            from sqlalchemy import text
+            import time
+
+            url_api = "https://geodatos.antioquia.gov.co/server/rest/services/Catastro/BCGS_Catastro_Publico/MapServer/11/query"
+            
+            estado_etl = st.empty()
+            
+            offset = 0
+            chunk_size = 1000
+            lote = 1
+            total_descargados = 0
+            
+            if modo_etl == "Borrar tabla y Reemplazar":
+                with engine.begin() as conn:
+                    conn.execute(text("DROP TABLE IF EXISTS predios_catastro CASCADE;"))
+            
+            while True:
+                estado_etl.info(f"⏳ Descargando lote {lote} (Registros {offset} a {offset+chunk_size})...")
+                
+                params = {
+                    "where": filtro_mun,
+                    "outFields": "*",
+                    "returnGeometry": "true",
+                    "f": "geojson",
+                    "resultOffset": offset,
+                    "resultRecordCount": chunk_size
+                }
+                
+                try:
+                    res = requests.get(url_api, params=params, verify=False, timeout=30)
+                    if res.status_code == 200:
+                        data = res.json()
+                        
+                        if 'error' in data:
+                            st.error(f"❌ El servidor bloqueó la descarga: {data['error']['message']}")
+                            break
+                            
+                        features = data.get('features', [])
+                        if not features:
+                            break # Si devuelve 0 features, significa que ya descargamos todos.
+                            
+                        # Transformación a GeoDataFrame
+                        gdf_chunk = gpd.GeoDataFrame.from_features(features)
+                        gdf_chunk.columns = [c.lower() for c in gdf_chunk.columns]
+                        
+                        if gdf_chunk.crs is None or gdf_chunk.crs.to_epsg() != 4326:
+                            gdf_chunk = gdf_chunk.set_crs(epsg=4326, allow_override=True)
+                        
+                        # Blindaje Topológico
+                        gdf_chunk['geometry'] = gdf_chunk.geometry.make_valid()
+                        for col in gdf_chunk.select_dtypes(include=['datetime64', 'datetimetz']).columns:
+                            gdf_chunk[col] = gdf_chunk[col].astype(str)
+                            
+                        # Carga a PostGIS
+                        estado_etl.info(f"🚀 Inyectando lote {lote} a Supabase...")
+                        
+                        # El primer lote crea la tabla si fue borrada, los demás hacen append
+                        modo_sql = 'append' if (lote > 1 or modo_etl == "Añadir a la tabla (Append)") else 'replace'
+                        gdf_chunk.to_postgis('predios_catastro', engine, if_exists=modo_sql, index=False)
+                        
+                        total_descargados += len(features)
+                        offset += chunk_size
+                        lote += 1
+                        time.sleep(1) # Pequeña pausa para no alertar al firewall del servidor
+                    else:
+                        st.error(f"❌ Fallo en lote {lote}: Error HTTP {res.status_code}")
+                        break
+                except Exception as e:
+                    st.error(f"❌ Error técnico en lote {lote}: {e}")
+                    break
+                    
+            if total_descargados > 0:
+                estado_etl.success(f"✅ ¡Sincronización Completada! Se extrajeron e inyectaron {total_descargados:,.0f} predios oficiales.")
+                st.balloons()
+            else:
+                estado_etl.warning("⚠️ No se encontraron predios para ese filtro.")
