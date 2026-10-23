@@ -193,11 +193,10 @@ def renderizar_menu_navegacion(pagina_actual):
         LISTA_SUBREGIONES = ["Bajo Cauca", "Magdalena Medio", "Nordeste", "Norte", "Occidente", "Oriente", "Suroeste", "Urabá", "Valle De Aburrá"]
         LISTA_CARS = ["AMVA", "CORANTIOQUIA", "CORNARE", "CORPOURABA"]
 
-        # 🚀 3. Catálogo Cuencas: REFACTORIZACIÓN A CLIENTE LIGERO
+        # 🚀 3. Catálogo Cuencas: REFACTORIZACIÓN A CLIENTE LIGERO (CON PAGINACIÓN)
         @st.cache_data(ttl=3600)
         def obtener_catalogo_cuencas():
             try:
-                # Usamos la API REST nativa de Supabase en lugar de SQLAlchemy directo
                 url_sb = st.secrets.get("SUPABASE_URL") or st.secrets.get("supabase", {}).get("SUPABASE_URL")
                 key_sb = st.secrets.get("SUPABASE_KEY") or st.secrets.get("supabase", {}).get("SUPABASE_KEY")
                 
@@ -206,12 +205,27 @@ def renderizar_menu_navegacion(pagina_actual):
                         "apikey": key_sb,
                         "Authorization": f"Bearer {key_sb}"
                     }
-                    # 🚀 FIX 1: Petición REST ultraligera con &limit=50000 para evitar que Supabase trunque el catálogo
-                    url_cuencas = f"{url_sb}/rest/v1/cuencas?select=nomah,nomzh,nom_szh,nom_nss1,nss1,nom_nss2,nss2,nom_nss3,nss3&limit=50000"
-                    respuesta = requests.get(url_cuencas, headers=headers, timeout=15)
                     
-                    if respuesta.status_code == 200:
-                        return pd.DataFrame(respuesta.json())
+                    todas_las_cuencas = []
+                    offset = 0
+                    chunk = 1000
+                    
+                    # Bucle inteligente para evadir el límite estricto del servidor de Supabase
+                    while True:
+                        url_cuencas = f"{url_sb}/rest/v1/cuencas?select=nomah,nomzh,nom_szh,nom_nss1,nss1,nom_nss2,nss2,nom_nss3,nss3&limit={chunk}&offset={offset}"
+                        respuesta = requests.get(url_cuencas, headers=headers, timeout=15)
+                        
+                        if respuesta.status_code == 200:
+                            data = respuesta.json()
+                            if not data: break
+                            todas_las_cuencas.extend(data)
+                            offset += chunk
+                            if len(data) < chunk: break
+                        else:
+                            break
+                            
+                    if todas_las_cuencas:
+                        return pd.DataFrame(todas_las_cuencas)
             except Exception as e:
                 st.error(f"Error conectando al catálogo REST de cuencas: {e}")
             return pd.DataFrame()
@@ -287,27 +301,22 @@ def renderizar_menu_navegacion(pagina_actual):
                             c = c.replace('_', '').strip()
                             return re.sub(r'\.0$', '', c)
                         df_c_filtro['codigo_limpio'] = df_c_filtro[col_cod].apply(limpiar_codigo)
-                        # Creamos la llave compuesta para la vista del usuario
                         df_c_filtro['Llave_Visual'] = df_c_filtro[col_obj].astype(str).str.strip() + " - (" + df_c_filtro['codigo_limpio'] + ")"
                         opciones_cuencas = sorted([str(x) for x in df_c_filtro['Llave_Visual'].unique() if str(x) != ' - ()' and not str(x).startswith(' -')])
                         
                         seleccion = st.selectbox(f"Cuenca Exacta ({nivel_cuenca}):", opciones_cuencas, key="menu_cuenca_aleph")
                         
-                        # 🚀 FIX 2: Separar el nombre puro para los motores y el código para la jerarquía
+                        # 🔥 FIX CRÍTICO: Restauramos la llave completa 'Nombre - (Codigo)' a la variable central
+                        # Esto es estrictamente necesario para que la BD espacial no le entregue vacíos a Earth Engine.
+                        territorio_final = seleccion 
+                        
                         if " - (" in seleccion:
-                            nombre_puro = seleccion.split(" - (")[0].strip()
                             codigo_puro = seleccion.split(" - (")[1].replace(")", "").strip()
-                            
-                            # Entregamos SOLO el nombre puro a los motores de IDEAM y Earth Engine
-                            territorio_final = nombre_puro 
-                            
                             if codigo_puro == "":
-                                st.session_state['aleph_codigo_cuenca'] = nombre_puro
+                                st.session_state['aleph_codigo_cuenca'] = seleccion.split(" - (")[0].strip()
                             else:
                                 st.session_state['aleph_codigo_cuenca'] = codigo_puro
                         else:
-                            # Fallback de seguridad
-                            territorio_final = seleccion.strip()
                             st.session_state['aleph_codigo_cuenca'] = seleccion.strip()
                     else:
                         st.error("Error en formato de columnas.")
