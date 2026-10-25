@@ -550,6 +550,7 @@ with tab4:
             escenario_climatico = st.selectbox("🌦️ Escenario Climático", ["Línea Base", "🔥 El Niño (Cálido/Seco)", "🌧️ La Niña (Húmedo/Nublado)", "🌍 Cambio Climático 2050"])
             calidad_agua = st.selectbox("🧪 Estado de Calidad", ["Óptima (Albedo 0.08)", "🦠 Eutrofización/Algas (Albedo 0.12)", "🟤 Alta Turbidez (Albedo 0.10)"])
             mitigacion = st.selectbox("🛡️ Intervención Tecnológica", ["Ninguna", "Bolas de Sombra (85% red.)", "Solares Flotantes FPV (50% red.)", "Mallas de Sombreo (75% red.)", "Monocapas Químicas (25% red.)"])
+            pct_cobertura = st.slider("🛡️ Área de Cobertura Tecnológica (%)", 0, 100, 40, 5)
 
         with st.expander("👥 Demanda Hídrica Poblacional", expanded=False):
             poblacion_analisis = st.number_input("Población a Abastecer (Hab)", value=1000000, step=50000, help="Población analizada (ej. habitantes del Valle de Aburrá).")
@@ -569,12 +570,15 @@ with tab4:
     elif "Turbidez" in calidad_agua: albedo_final = 0.10
     else: albedo_final = 0.08
 
-    factor_mit = 0.0
-    if "Bolas" in mitigacion: factor_mit = 0.85
-    elif "Solares" in mitigacion: factor_mit = 0.50
-    elif "Mallas" in mitigacion: factor_mit = 0.75
-    elif "Monocapas" in mitigacion: factor_mit = 0.25
-
+    # Cálculo del factor de mitigación combinado con el área de cobertura
+    factor_mit_base = 0.0
+    if "Bolas" in mitigacion: factor_mit_base = 0.85
+    elif "Solares" in mitigacion: factor_mit_base = 0.50
+    elif "Mallas" in mitigacion: factor_mit_base = 0.75
+    elif "Monocapas" in mitigacion: factor_mit_base = 0.25
+    
+    factor_mit = factor_mit_base * (pct_cobertura / 100.0)
+    
     # --- CÁLCULOS TERMODINÁMICOS Y DE BATIMETRÍA ---
     coef_alfa = volumen_max_mm3 / (altitud**3) if altitud > 0 else 0
     volumen_xm_calculado = coef_alfa * (cota_actual**3)
@@ -616,13 +620,22 @@ with tab4:
     
     st.markdown("---")
     
+    # --- CÁLCULOS EXTRAS PARA EQUIVALENCIAS ---
+    carrotanques_demanda = demanda_m3_escala / 10.0
+    # Caudal en litros por segundo: m3 a litros, dividido por los segundos del periodo
+    caudal_evap_ls = (evap_vol_escala * 1000.0) / (dias_escala * 86400)
+    
     # --- DASHBOARD DE DEMANDA SOCIAL ---
     st.markdown(f"#### 👥 Tensión Hídrica: Evaporación vs. Demanda ({escala_temporal})")
-    d1, d2, d3, d4 = st.columns(4)
+    d1, d2, d_carro, d3, d_caudal, d4 = st.columns(6)
+    
     d1.metric(f"🚰 Demanda Requerida", f"{demanda_m3_escala:,.0f} m³", f"Pop: {poblacion_analisis:,} hab", delta_color="off")
-    d2.metric(f"🏊‍♂️ Equivalencia Demanda", f"{piscinas_demanda:,.1f} Piscinas", "Volumen en Olímpicas", delta_color="off")
-    d3.metric(f"🌤️ Pérdida por Evaporación", f"{evap_vol_escala:,.0f} m³", f"Acumulado en el {escala_temporal}", delta_color="inverse")
-    d4.metric("⚠️ Peso Evap. vs Demanda", f"{pct_evap_vs_demanda:,.1f} %", "Porcentaje de la provisión", delta_color="inverse")
+    d2.metric(f"🏊‍♂️ Equivalencia", f"{piscinas_demanda:,.1f} Piscinas", "Vol. en Olímpicas", delta_color="off")
+    d_carro.metric(f"🚛 Equivalencia", f"{carrotanques_demanda:,.0f} Camiones", "Carrotanques 10 m³", delta_color="off")
+    
+    d3.metric(f"🌤️ Pérdida Evaporación", f"{evap_vol_escala:,.0f} m³", f"Acumulado {escala_temporal}", delta_color="inverse")
+    d_caudal.metric(f"💧 Caudal Fuga", f"{caudal_evap_ls:,.1f} L/s", "Pérdida continua", delta_color="inverse")
+    d4.metric("⚠️ Peso Evap.", f"{pct_evap_vs_demanda:,.1f} %", "De la provisión", delta_color="inverse")
 
     st.markdown("---")
 
