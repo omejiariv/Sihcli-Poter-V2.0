@@ -22,6 +22,32 @@ selectors.renderizar_menu_navegacion("Evaporación")
 encender_gemelo_digital()
 
 # -----------------------------------------
+# Estilos CSS Ejecutivos (Piloto Piedras Blancas)
+# -----------------------------------------
+st.markdown("""
+<style>
+    .exec-card {
+        background: linear-gradient(145deg, #0f172a, #1e293b);
+        color: #f8fafc;
+        padding: 18px 20px;
+        border-radius: 12px;
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        margin-bottom: 12px;
+        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.25);
+    }
+    .exec-card h4 { color: #ffffff !important; margin-top: 0; margin-bottom: 6px; font-size: 1.05rem; }
+    .exec-card p { color: #cbd5e1; font-size: 0.88rem; margin-bottom: 0; line-height: 1.45; }
+    .border-sky { border-left: 5px solid #38bdf8 !important; }
+    .border-amber { border-left: 5px solid #f59e0b !important; }
+    .border-rose { border-left: 5px solid #f43f5e !important; }
+    .border-emerald { border-left: 5px solid #10b981 !important; }
+    .border-purple { border-left: 5px solid #a855f7 !important; }
+    .formula-box { background-color: #020617; color: #38bdf8; font-family: monospace; padding: 10px; border-radius: 8px; text-align: center; border: 1px solid #1e293b; margin-top: 8px; font-size: 0.86rem; }
+    .badge-exec { display: inline-block; padding: 4px 12px; border-radius: 999px; background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.45); color: #d97706; font-weight: 700; font-size: 0.78rem; letter-spacing: 0.04em; }
+</style>
+""", unsafe_allow_html=True)
+
+# -----------------------------------------
 # Motor de Datos: Carga desde Supabase
 # -----------------------------------------
 @st.cache_data
@@ -61,13 +87,14 @@ coords_embalses = {
 st.title("💧 Dinámicas de Evaporación en Cuerpos de Agua Libre")
 st.markdown("Plataforma interactiva para el análisis hidrológico, evaluación de impactos climáticos, restricciones operativas y simulación termodinámica en la red de embalses de Antioquia.")
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📚 Marco Operativo y Climático", 
     "🛡️ Tecnologías de Mitigación", 
     "📊 Base de Datos Maestra",
     "🧮 Simulador Interactivo",
     "📡 Telemetría XM",
-    "🗺️ Explorador Satelital"
+    "🗺️ Explorador Satelital",
+    "🚨 Caso Estudio: Piedras Blancas"
 ])
 
 # -----------------------------------------
@@ -570,7 +597,6 @@ with tab4:
     elif "Turbidez" in calidad_agua: albedo_final = 0.10
     else: albedo_final = 0.08
 
-    # Cálculo del factor de mitigación combinado con el área de cobertura
     factor_mit_base = 0.0
     if "Bolas" in mitigacion: factor_mit_base = 0.85
     elif "Solares" in mitigacion: factor_mit_base = 0.50
@@ -578,17 +604,12 @@ with tab4:
     elif "Monocapas" in mitigacion: factor_mit_base = 0.25
     
     factor_mit = factor_mit_base * (pct_cobertura / 100.0)
-    
+
     # --- CÁLCULOS TERMODINÁMICOS Y DE BATIMETRÍA ---
     coef_alfa = volumen_max_mm3 / (altitud**3) if altitud > 0 else 0
     volumen_xm_calculado = coef_alfa * (cota_actual**3)
     eq_cav_str = f"V(z) = {coef_alfa:.2e}·z³"
 
-    evap_dia, term_rad, term_aero, vpd, rn, P = calcular_penman(
-        altitud, latitud, dia_ano, mod_tmax, mod_tmin, mod_rh, viento_2m, mod_rs, albedo_final
-    )
-    evap_mitigada_dia = evap_dia * (1 - factor_mit)
-    
     # Cálculos Físicos Base
     area_dinamica_ha = area_ha * ((cota_actual / altitud)**2) if altitud > 0 else area_ha
     evap_dia, term_rad, term_aero, vpd, rn, P = calcular_penman(altitud, latitud, dia_ano, mod_tmax, mod_tmin, mod_rh, viento_2m, mod_rs, albedo_final)
@@ -602,39 +623,38 @@ with tab4:
     dias_escala = {"Día": 1, "Semana": 7, "Mes": 30, "Año": 365}[escala_temporal]
     demanda_litros_escala = poblacion_analisis * consumo_per_capita * dias_escala
     demanda_m3_escala = demanda_litros_escala / 1000.0
+    
+    # Nuevos cálculos solicitados
     piscinas_demanda = demanda_m3_escala / 2500.0
+    carrotanques_demanda = demanda_m3_escala / 10.0
     
     evap_vol_escala = perdida_vol_dia * dias_escala
+    caudal_evap_ls = (evap_vol_escala * 1000.0) / (dias_escala * 86400)
     pct_evap_vs_demanda = (evap_vol_escala / demanda_m3_escala) * 100 if demanda_m3_escala > 0 else 0
 
     st.markdown(f"### Análisis Dinámico para: **{embalse_sel}**")
     
     k1, k2, k_piscina, k3, k4, k5, k6 = st.columns(7)
-    k1.metric("💧 Evap. Neta", f"{evap_mitigada_dia:.2f} mm/día", f"Base: {evap_dia:.2f}" if factor_mit > 0 else None, delta_color="inverse")
-    k2.metric("📉 Pérdida Vol.", f"{perdida_vol_dia:,.0f} m³/día", "Diario", delta_color="off")
-    k_piscina.metric("🏊‍♂ Escala Física", f"{piscinas_dia:,.1f} Piscinas/día", "Olímpicas (2.5k m³)", delta_color="off")
-    k3.metric("🛡️ Agua Salvada", f"{vol_salvado_dia:,.0f} m³/día", f"{(factor_mit*100):.0f}%" if factor_mit > 0 else "Sin mitigar")
+    k1.metric("💧 Evap. Neta", f"{evap_mitigada_dia:.2f} mm/d", f"Base: {evap_dia:.2f}" if factor_mit > 0 else None, delta_color="inverse")
+    k2.metric("📉 Pérdida Vol.", f"{perdida_vol_dia:,.0f} m³/d", "Diario", delta_color="off")
+    k_piscina.metric("🏊‍♂ Escala Física", f"{piscinas_dia:,.1f} Piscinas/d", "Olímpicas", delta_color="off")
+    k3.metric("🛡️ Agua Salvada", f"{vol_salvado_dia:,.0f} m³/d", f"{(factor_mit*100):.0f}% global" if factor_mit > 0 else "Sin mitigar")
     k4.metric("📐 Área Dinámica", f"{area_dinamica_ha:,.0f} ha", f"Cota XM: {cota_actual:.0f}m")
     k5.metric("📦 Vol. Estimado", f"{(volumen_max_mm3*(cota_actual/altitud)**3):,.1f} Mm³", "Polinomio CAV")
     k6.metric("📊 Ecuación CAV", eq_cav_str, "Sincronizado XM")
     
     st.markdown("---")
     
-    # --- CÁLCULOS EXTRAS PARA EQUIVALENCIAS ---
-    carrotanques_demanda = demanda_m3_escala / 10.0
-    # Caudal en litros por segundo: m3 a litros, dividido por los segundos del periodo
-    caudal_evap_ls = (evap_vol_escala * 1000.0) / (dias_escala * 86400)
-    
-    # --- DASHBOARD DE DEMANDA SOCIAL ---
+    # --- DASHBOARD DE DEMANDA SOCIAL ACTUALIZADO (6 Columnas) ---
     st.markdown(f"#### 👥 Tensión Hídrica: Evaporación vs. Demanda ({escala_temporal})")
     d1, d2, d_carro, d3, d_caudal, d4 = st.columns(6)
     
-    d1.metric(f"🚰 Demanda Requerida", f"{demanda_m3_escala:,.0f} m³", f"Pop: {poblacion_analisis:,} hab", delta_color="off")
-    d2.metric(f"🏊‍♂️ Equivalencia", f"{piscinas_demanda:,.1f} Piscinas", "Vol. en Olímpicas", delta_color="off")
+    d1.metric(f"🚰 Demanda", f"{demanda_m3_escala:,.0f} m³", f"Pop: {poblacion_analisis:,} hab", delta_color="off")
+    d2.metric(f"🏊‍♂️ Equivalencia", f"{piscinas_demanda:,.1f} Piscinas", "Olímpicas", delta_color="off")
     d_carro.metric(f"🚛 Equivalencia", f"{carrotanques_demanda:,.0f} Camiones", "Carrotanques 10 m³", delta_color="off")
     
-    d3.metric(f"🌤️ Pérdida Evaporación", f"{evap_vol_escala:,.0f} m³", f"Acumulado {escala_temporal}", delta_color="inverse")
-    d_caudal.metric(f"💧 Caudal Fuga", f"{caudal_evap_ls:,.1f} L/s", "Pérdida continua", delta_color="inverse")
+    d3.metric(f"🌤️ Pérdida Evap.", f"{evap_vol_escala:,.0f} m³", f"Acumulado {escala_temporal}", delta_color="inverse")
+    d_caudal.metric(f"💧 Caudal Fuga", f"{caudal_evap_ls:,.1f} L/s", "Continuo", delta_color="inverse")
     d4.metric("⚠️ Peso Evap.", f"{pct_evap_vs_demanda:,.1f} %", "De la provisión", delta_color="inverse")
 
     st.markdown("---")
@@ -1032,3 +1052,161 @@ with tab6:
             st.dataframe(df_embalses.astype(str), width="stretch", hide_index=True, height=500)
         else:
             st.warning("⚠️ Base de datos maestra no encontrada.")
+
+# -----------------------------------------
+# PESTAÑA 7: Caso de Estudio - Piloto Piedras Blancas
+# -----------------------------------------
+with tab7:
+    URL_BASE_LOGOS = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/imagenes"
+
+    col_logos, col_espacio = st.columns([1.4, 1.6])
+    with col_logos:
+        st.markdown(f"""
+        <div style="display: inline-flex; align-items: center; gap: 18px; background: rgba(255, 255, 255, 0.96); padding: 8px 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12); border: 1px solid #e2e8f0;">
+            <img src="{URL_BASE_LOGOS}/CuencaVerdeLogo_V1.JPG" alt="CuencaVerde" style="height: 44px; width: auto; object-fit: contain;">
+            <div style="height: 28px; width: 1px; background-color: #cbd5e1;"></div>
+            <img src="{URL_BASE_LOGOS}/logo_epm.png" alt="EPM" style="height: 36px; width: auto; object-fit: contain;">
+            <div style="height: 28px; width: 1px; background-color: #cbd5e1;"></div>
+            <img src="{URL_BASE_LOGOS}/logo_distritoMedellin.png" alt="Alcaldía de Medellín" style="height: 44px; width: auto; object-fit: contain;">
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col_espacio:
+        st.markdown("""
+        <div style="text-align: right; padding-top: 14px;">
+            <span class="badge-exec">🛡️ ALIANZA POR LA SEGURIDAD HÍDRICA • DOCUMENTO DE DECISIÓN EJECUTIVA (OCTUBRE 2026)</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Encabezado Ejecutivo
+    st.title("🚨 Blindaje Evaporativo del Embalse Piedras Blancas ante El Niño (2026–2027)")
+    st.markdown("""
+    **Proyecto Piloto de Adaptación Hidroclimática Inmediata:** Estrategia proactiva para cosechar las lluvias remanentes de **octubre y noviembre de 2026** y sellar la lámina de agua mediante tecnologías flotantes, mitigando el riesgo de desabastecimiento y eutrofización en **diciembre de 2026 y el 1T de 2027 (Ene–Mar)**.
+    """)
+
+    # Métricas
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("📍 Ubicación", "Santa Elena, Medellín", "6.29° N, -75.49° W")
+    c2.metric("📦 Volumen Reserva", "0.50 Mm³ (500,000 m³)", "Acueducto EPM", delta_color="inverse")
+    c3.metric("🌊 Espejo de Agua", "~20.0 ha", "Ratio: 0.025 Mm³/ha ('Bandeja')")
+    c4.metric("⛰️ Altitud y Zona Vida", "2,350 msnm", "bmh-MB (~76.5 kPa)")
+    c5.metric("⏳ Ventana de Acción", "Oct - Nov 2026", "Recarga + Sellado")
+    st.markdown("---")
+
+    # Sub-Pestañas internas del Piloto
+    sub_diag, sub_fisica, sub_cobeneficios, sub_ruta = st.tabs([
+        "🏔️ 1. Diagnóstico Territorial y Gobernabilidad",
+        "☀️ 2. Física Penman-Monteith y Tecnologías",
+        "💎 3. Co-Beneficios Multidimensionales (PTAP / Arví)",
+        "🚀 4. Hoja de Ruta Crítica"
+    ])
+
+    with sub_diag:
+        st.subheader("1.1 La Vulnerabilidad de Piedras Blancas: Asimetría en el Sistema de Reservas (EPM)")
+        col_asim, col_fact = st.columns([1.05, 1.35])
+        with col_asim:
+            st.markdown("A diferencia de los grandes embalses del sistema interconectado, **Piedras Blancas** posee una capacidad volumétrica reducida y una geometría altamente expuesta:")
+            df_emb_pb = pd.DataFrame({
+                "Embalse": ["Río Grande II", "La Fe (El Retiro)", "Piedras Blancas (Medellín)"],
+                "Volumen Útil (Mm³)": [138.8, 11.1, 0.5],
+                "Espejo de Agua (ha)": [1100.0, 145.0, 20.0],
+                "Ratio Profundidad (Mm³/ha)": [0.126, 0.077, 0.025]
+            })
+            fig_emb = px.bar(df_emb_pb, x="Volumen Útil (Mm³)", y="Embalse", orientation="h", text="Volumen Útil (Mm³)", color="Embalse", color_discrete_sequence=["#38bdf8", "#10b981", "#f59e0b"], title="Comparativa Volumétrica del Sistema (Mm³)")
+            fig_emb.update_traces(texttemplate='%{text} Mm³', textposition='outside')
+            fig_emb.update_layout(height=270, showlegend=False, margin=dict(t=40, b=10, l=10, r=40), xaxis_range=[0, 160])
+            st.plotly_chart(fig_emb, width="stretch")
+        with col_fact:
+            st.markdown("""
+            <div class="exec-card border-amber">
+                <h4>☀️ 1. Pérdida de la "Manta Natural" bajo El Niño</h4>
+                <p>Ubicado en <i>bmh-MB</i> a ~2,350 msnm, sus bajas temperaturas suelen protegerlo. Con <b>El Niño</b>, se rompe la cobertura nubosa, aumentando la radiación y la temperatura (+2°C).</p>
+            </div>
+            <div class="exec-card border-rose">
+                <h4>📐 2. Morfología Tipo "Bandeja" (Baja Relación Volumen/Área)</h4>
+                <p>Con ~0.5 Mm³ distribuidos en <b>20 hectáreas</b>, su ratio morfológico lo hace comportarse como una "bandeja": expone una gran superficie térmica por cada metro cúbico.</p>
+            </div>
+            <div class="exec-card border-purple">
+                <h4>🧪 3. Presión Social y Riesgo de Eutrofización</h4>
+                <p>En diciembre y 1T aumenta la demanda en Santa Elena, mientras que la mayor radiación acelera floraciones de cianobacterias que comprometen la calidad del agua cruda.</p>
+            </div>
+            """, unsafe_allow_html=True)
+        st.markdown("---")
+        st.subheader("1.2 El Ciclo Hidrológico: ¿Qué Variable Podemos Controlar Realmente Hoy?")
+        col_p, col_q, col_e = st.columns(3)
+        with col_p:
+            st.error("🌧️ **1. Precipitación (P) — Control: NULO (~0%)**\n\nNaturaleza gobernada por anomalías ENSO. Rol actual: Capturar gotas remanentes.")
+        with col_q:
+            st.warning("🌲 **2. Caudales Base (Qb) — Control: LARGO PLAZO (5-15 años)**\n\nSoluciones Basadas en la Naturaleza (SbN). No aportará litros nuevos inmediatos.")
+        with col_e:
+            st.success("☀️ **3. Evaporación (E) — Control: INMEDIATO (50% - 85%)**\n\nCapacidad de maniobra directa en 2-6 semanas sellando la lámina de agua.")
+
+    with sub_fisica:
+        st.subheader("Termodinámica Atmosférica (Penman-Monteith) a 2,350 msnm")
+        col_rad, col_vie = st.columns(2)
+        with col_rad:
+            st.markdown("""
+            <div class="exec-card border-amber">
+                <h4>☀️ 1. Motor Radiativo (Balance Energético — ~68%)</h4>
+                <p>• <b>Trampa de Bajo Albedo:</b> El agua absorbe el 92% de la energía radiante.<br>
+                • <b>Sinergia Algas:</b> La luz activa floraciones, exigiendo gasto en PTAP.</p>
+                <div class="formula-box">E_rad = [ 0.408 · Δ · (Rns - Rnl) ] / [ Δ + γ ]</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with col_vie:
+            st.markdown("""
+            <div class="exec-card border-sky">
+                <h4>💨 2. Motor Aerodinámico (Viento y VPD — ~32%)</h4>
+                <p>• <b>Barrido de Capa Límite:</b> Gobernado por VPD y viento.<br>
+                • <b>Efecto Altitud:</b> La menor presión facilita físicamente el escape.</p>
+                <div class="formula-box">E_aero = [ γ · 2.626 · (1 + 0.536 · u2) · VPD ] / [ Δ + γ ]</div>
+            </div>
+            """, unsafe_allow_html=True)
+        st.markdown("---")
+        st.subheader("Matriz Científica y Tecnológica (Piedras Blancas)")
+        df_tech_pb = pd.DataFrame({
+            "Tecnología": ["⭐ Piloto Híbrido (FPV + HexaCovers)", "☀️ 100% Solares Flotantes (FPV)", "⬡ 100% Módulos Hexagonales", "🌑 Esferas de Sombra"],
+            "Eficacia Local": ["70% - 80%", "60% - 70%", "80% - 90%", "80% - 85%"],
+            "Viabilidad Piedras Blancas": ["⭐⭐⭐⭐⭐ Óptima (Rapidez + Flujo de Caja)", "⭐⭐⭐⭐⭐ Excelente (Sinergia)", "⭐⭐⭐⭐⭐ Excelente (Despliegue express)", "⭐⭐⭐ Media-Buena (Requiere confinamiento)"]
+        })
+        st.dataframe(df_tech_pb, width="stretch", hide_index=True)
+
+    with sub_cobeneficios:
+        st.subheader("💎 Creación de Valor Público y Ambiental")
+        cb1, cb2 = st.columns(2)
+        with cb1:
+            st.markdown("""
+            <div class="exec-card border-sky">
+                <h4>🧪 1. Mejora Calidad del Agua (PTAP)</h4>
+                <p>Reducir la temperatura <b>~2.5°C</b> frena la eutrofización, reduciendo entre 20%-30% el consumo de alguicidas.</p>
+            </div>
+            <div class="exec-card border-amber">
+                <h4>🌲 3. Cero Conflicto Suelo (Parque Arví)</h4>
+                <p>Impacto cero sobre el bosque nativo altoandino al usar la lámina artificial existente.</p>
+            </div>
+            """, unsafe_allow_html=True)
+        with cb2:
+            st.markdown("""
+            <div class="exec-card border-emerald">
+                <h4>⚡ 2. Simbiosis Termo-Eléctrica (+10%)</h4>
+                <p>El enfriamiento convectivo del agua incrementa la producción eléctrica vs instalaciones terrestres.</p>
+            </div>
+            <div class="exec-card border-purple">
+                <h4>🧭 4. Escalabilidad Regional</h4>
+                <p>Laboratorio vivo ideal para calibrar anclajes y protocolos antes de escalar a La Fe y Río Grande II.</p>
+            </div>
+            """, unsafe_allow_html=True)
+        st.success("🏛️ **Alineación:** Cumple las metas del Pacto por la Seguridad Hídrica Territorial y los ODS 6 y 7.")
+
+    with sub_ruta:
+        st.subheader("🚀 Ruta Crítica de Acción: Octubre 2026 – 1T 2027")
+        st.error("⚠️ **Decisión HOY (Oct 2026):** Aprovechar las lluvias remanentes para llenar el vaso e instalar simultáneamente la cobertura para que actúe como 'tapa hermética' desde diciembre.")
+        r1, r2, r3, r4 = st.columns(4)
+        with r1:
+            st.markdown("""<div class="exec-card border-sky"><h4>OCTUBRE 2026</h4><p><b>Cosecha</b><br>• Orden de compra directa.<br><b style="color:#38bdf8;">Hito: Orden 31 Oct.</b></p></div>""", unsafe_allow_html=True)
+        with r2:
+            st.markdown("""<div class="exec-card border-emerald"><h4>NOVIEMBRE 2026</h4><p><b>Sellado</b><br>• Vaciado módulos y booms.<br><b style="color:#10b981;">Hito: 4 ha selladas.</b></p></div>""", unsafe_allow_html=True)
+        with r3:
+            st.markdown("""<div class="exec-card border-amber"><h4>DICIEMBRE 2026</h4><p><b>Defensa</b><br>• Montaje islas solares.<br><b style="color:#f59e0b;">Hito: Mitigación pico.</b></p></div>""", unsafe_allow_html=True)
+        with r4:
+            st.markdown("""<div class="exec-card border-purple"><h4>ENE - MAR 2027</h4><p><b>Superación El Niño</b><br>• Agua sin floración algal.<br><b style="color:#a855f7;">Hito: Modelo validado.</b></p></div>""", unsafe_allow_html=True)            
