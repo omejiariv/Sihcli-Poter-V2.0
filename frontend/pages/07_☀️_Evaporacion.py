@@ -580,11 +580,15 @@ with tab4:
             pct_cobertura = st.slider("🛡️ Área de Cobertura Tecnológica (%)", 0, 100, 40, 5)
 
         with st.expander("👥 Demanda Hídrica Poblacional", expanded=False):
-            poblacion_analisis = st.number_input("Población a Abastecer (Hab)", value=1000000, step=50000, help="Población analizada (ej. habitantes del Valle de Aburrá).")
-            consumo_per_capita = st.slider("Consumo Per Cápita (L/hab-día)", 50, 300, 150)
+            poblacion_analisis = st.number_input("Población a Abastecer (Hab)", value=50000, step=10000)
+            consumo_per_capita = st.slider("Consumo Per Cápita (L/hab-día)", 50, 300, 100)
             escala_temporal = st.selectbox("Escala Temporal de Análisis", ["Día", "Semana", "Mes", "Año"], index=3)
-            # 🚀 NUEVO: Slider para el modelo acumulativo del Excel
-            dias_simulacion = st.slider("⏳ Horizonte de Crisis (Días de Estiaje Severo)", 15, 180, 90, 15)
+            dias_simulacion = st.slider("⏳ Horizonte de Crisis (Días de Estiaje Severo)", 15, 365, 90, 15)
+            
+            # 🚀 NUEVO: Oferta natural durante estiaje (Modulable)
+            st.markdown("---")
+            st.caption("💧 **Oferta Hídrica Remanente**")
+            caudal_afluente_ls = st.number_input("Afluentes Naturales + Manantiales (L/s)", value=0.0, step=10.0, help="Caudal base que entra al embalse incluso durante sequía.")
     
     # --- APLICACIÓN DE MODIFICADORES ---
     mod_tmax, mod_tmin, mod_rh, mod_rs = t_max, t_min, rh_media, rs
@@ -635,35 +639,59 @@ with tab4:
     pct_evap_vs_demanda = (evap_vol_escala / demanda_m3_escala) * 100 if demanda_m3_escala > 0 else 0
 
     # =========================================================================
-    # 🚀 NUEVO MOTOR DE ACUMULACIÓN Y DÍA CERO (Inspirado en Excel V3)
+    # 🚀 MOTOR DE ACUMULACIÓN, DÍA CERO Y POLINOMIOS CAV OPTIMIZADOS
     # =========================================================================
+    
+    # 1. Ecuaciones CAV (Área y Volumen Dinámico)
+    coef_alfa_vol = volumen_max_mm3 / (altitud**3) if altitud > 0 else 0
+    coef_beta_area = area_ha / (altitud**2) if altitud > 0 else 0
+    
+    eq_cav_vol = f"V(z) = {coef_alfa_vol:.2e}·z³"
+    eq_cav_area = f"A(z) = {coef_beta_area:.2e}·z²"
+
+    area_dinamica_ha = coef_beta_area * (cota_actual**2) if altitud > 0 else area_ha
+    
+    # 2. Diferenciación Estructural: Volumen Total vs Volumen Útil
+    volumen_total_m3 = (coef_alfa_vol * (cota_actual**3)) * 1_000_000
+    volumen_muerto_m3 = (coef_alfa_vol * (def_min_op**3)) * 1_000_000
+    volumen_util_m3 = max(0.0, volumen_total_m3 - volumen_muerto_m3)
+
+    # 3. Flujos Diarios
     demanda_diaria_m3 = (poblacion_analisis * consumo_per_capita) / 1000.0
-    volumen_inicial_m3 = (volumen_max_mm3 * (cota_actual/altitud)**3) * 1_000_000 if altitud > 0 else 0
+    escorrentia_diaria_m3 = (caudal_afluente_ls * 86400) / 1000.0
     
-    # Tasas de vaciado diario (Asumiendo 0 afluentes por estiaje extremo)
+    # Tasas de vaciado diario neto (Evaporación + Demanda - Escorrentía)
     perdida_vol_dia_sin = evap_dia * area_dinamica_ha * 10
-    tasa_agotamiento_sin = perdida_vol_dia_sin + demanda_diaria_m3
-    tasa_agotamiento_con = perdida_vol_dia + demanda_diaria_m3 # perdida_vol_dia ya viene mitigada
+    tasa_agotamiento_sin = (perdida_vol_dia_sin + demanda_diaria_m3) - escorrentia_diaria_m3
+    tasa_agotamiento_con = (perdida_vol_dia + demanda_diaria_m3) - escorrentia_diaria_m3 
     
-    # Cálculo matemático de la intersección con el Volumen 0 (Día Cero)
-    dia_cero_sin = (volumen_inicial_m3 / tasa_agotamiento_sin) if tasa_agotamiento_sin > 0 else 9999
-    dia_cero_con = (volumen_inicial_m3 / tasa_agotamiento_con) if tasa_agotamiento_con > 0 else 9999
-    dias_ganados = dia_cero_con - dia_cero_sin
+    # 4. Intersección con el Día Cero (Basado SOLO en Volumen Útil)
+    if tasa_agotamiento_sin > 0:
+        dia_cero_sin = volumen_util_m3 / tasa_agotamiento_sin
+    else:
+        dia_cero_sin = 9999 # El embalse se recarga o está en equilibrio
+        
+    if tasa_agotamiento_con > 0:
+        dia_cero_con = volumen_util_m3 / tasa_agotamiento_con
+    else:
+        dia_cero_con = 9999
+        
+    dias_ganados = max(0, dia_cero_con - dia_cero_sin) if dia_cero_sin != 9999 else 0
     
-    # Traducción demográfica (Lógica Excel V3)
     agua_salvada_horizonte = vol_salvado_dia * dias_simulacion
     pob_15_dias = agua_salvada_horizonte / (consumo_per_capita * 15 / 1000.0) if consumo_per_capita > 0 else 0
 
     st.markdown(f"### Análisis Dinámico para: **{embalse_sel}**")
     
-    k1, k2, k_piscina, k3, k4, k5, k6 = st.columns(7)
+    k1, k2, k_piscina, k3, k4, k5, k6, k7 = st.columns(8)
     k1.metric("💧 Evap. Neta", f"{evap_mitigada_dia:.2f} mm/d", f"Base: {evap_dia:.2f}" if factor_mit > 0 else None, delta_color="inverse")
     k2.metric("📉 Pérdida Vol.", f"{perdida_vol_dia:,.0f} m³/d", "Diario", delta_color="off")
     k_piscina.metric("🏊‍♂ Escala Física", f"{piscinas_dia:,.1f} Piscinas/d", "Olímpicas", delta_color="off")
     k3.metric("🛡️ Agua Salvada", f"{vol_salvado_dia:,.0f} m³/d", f"{(factor_mit*100):.0f}% global" if factor_mit > 0 else "Sin mitigar")
-    k4.metric("📐 Área Dinámica", f"{area_dinamica_ha:,.0f} ha", f"Cota XM: {cota_actual:.0f}m")
-    k5.metric("📦 Vol. Estimado", f"{(volumen_max_mm3*(cota_actual/altitud)**3):,.1f} Mm³", "Polinomio CAV")
-    k6.metric("📊 Ecuación CAV", eq_cav_str, "Sincronizado XM")
+    k4.metric("📦 Volumen Útil", f"{volumen_util_m3/1e6:,.2f} Mm³", f"Muerto: {volumen_muerto_m3/1e6:,.2f} Mm³", delta_color="off")
+    k5.metric("📐 Área Dinámica", f"{area_dinamica_ha:,.0f} ha", f"Cota XM: {cota_actual:.0f}m", delta_color="off")
+    k6.metric("📊 Curva V(z)", eq_cav_vol, "Volumen", delta_color="off")
+    k7.metric("📊 Curva A(z)", eq_cav_area, "Área Espejo", delta_color="off")
     
     st.markdown("---")
     
@@ -674,7 +702,6 @@ with tab4:
     d1.metric(f"🚰 Demanda", f"{demanda_m3_escala:,.0f} m³", f"Pop: {poblacion_analisis:,} hab", delta_color="off")
     d2.metric(f"🏊‍♂️ Equivalencia", f"{piscinas_demanda:,.1f} Piscinas", "Olímpicas", delta_color="off")
     d_carro.metric(f"🚛 Equivalencia", f"{carrotanques_demanda:,.0f} Camiones", "Carrotanques 10 m³", delta_color="off")
-    
     d3.metric(f"🌤️ Pérdida Evap.", f"{evap_vol_escala:,.0f} m³", f"Acumulado {escala_temporal}", delta_color="inverse")
     d_caudal.metric(f"💧 Caudal Fuga", f"{caudal_evap_ls:,.1f} L/s", "Continuo", delta_color="inverse")
     d4.metric("⚠️ Peso Evap.", f"{pct_evap_vs_demanda:,.1f} %", "De la provisión", delta_color="inverse")
@@ -682,42 +709,42 @@ with tab4:
     st.markdown("---")
     
     # =========================================================================
-    # 🚨 DASHBOARD ALERTA TEMPRANA Y CURVAS DE AGOTAMIENTO
+    # 🚨 DASHBOARD ALERTA TEMPRANA Y CURVAS DE AGOTAMIENTO (BASE ÚTIL)
     # =========================================================================
     st.markdown("#### 🚨 Alerta Temprana: Proyección de Agotamiento y Resiliencia Social")
     c_zero1, c_zero2, c_zero3, c_zero4 = st.columns(4)
     
-    c_zero1.metric("⏳ Día Cero (Sin Proyecto)", f"{dia_cero_sin:,.0f} Días", "Agotamiento Total", delta_color="inverse")
-    c_zero2.metric("🛡️ Día Cero (Con Mitigación)", f"{dia_cero_con:,.0f} Días", f"+{dias_ganados:,.0f} Días Extra", delta_color="normal")
-    c_zero3.metric(f"💧 Agua Salvada ({dias_simulacion} días)", f"{agua_salvada_horizonte:,.0f} m³", "Retención Acumulada", delta_color="off")
+    txt_cero_sin = f"{dia_cero_sin:,.0f} Días" if dia_cero_sin != 9999 else "Estable ⚖️"
+    txt_cero_con = f"{dia_cero_con:,.0f} Días" if dia_cero_con != 9999 else "Estable ⚖️"
+    txt_delta = f"+{dias_ganados:,.0f} Días Extra" if dias_ganados > 0 else "Equilibrio"
+    
+    c_zero1.metric("⏳ Día Cero (Sin Proyecto)", txt_cero_sin, "Agotamiento Vol Útil", delta_color="inverse" if dia_cero_sin != 9999 else "normal")
+    c_zero2.metric("🛡️ Día Cero (Con Mitigación)", txt_cero_con, txt_delta, delta_color="normal")
+    c_zero3.metric(f"💧 Agua Salvada ({dias_simulacion} días)", f"{agua_salvada_horizonte:,.0f} m³", f"+ Escorrentía {caudal_afluente_ls} L/s", delta_color="off")
     c_zero4.metric("👥 Impacto Social (Reserva)", f"{pob_15_dias:,.0f} Hab", "Abastecidos por 15 días extra", delta_color="normal")
     
-    # --- Gráfico Interactivo de Caída (Curva de Agotamiento) ---
-    max_dias_grafico = min(1000, max(dias_simulacion, int(dia_cero_con) + 10))
-    dias_array = list(range(0, max_dias_grafico + 2, 2)) # Pasos de 2 días como en el Excel
+    # --- Gráfico Interactivo de Caída (Curva de Agotamiento de Volumen Útil) ---
+    max_dias_grafico = min(1000, max(dias_simulacion, int(dia_cero_con if dia_cero_con != 9999 else 365) + 10))
+    dias_array = list(range(0, max_dias_grafico + 2, 2))
     
-    vol_sin = [max(0, volumen_inicial_m3 - (tasa_agotamiento_sin * d)) for d in dias_array]
-    vol_con = [max(0, volumen_inicial_m3 - (tasa_agotamiento_con * d)) for d in dias_array]
+    vol_sin = [max(0, volumen_util_m3 - (tasa_agotamiento_sin * d)) if tasa_agotamiento_sin > 0 else volumen_util_m3 for d in dias_array]
+    vol_con = [max(0, volumen_util_m3 - (tasa_agotamiento_con * d)) if tasa_agotamiento_con > 0 else volumen_util_m3 for d in dias_array]
     
     df_agotamiento = pd.DataFrame({
         "Día": dias_array * 2,
-        "Volumen (m³)": vol_sin + vol_con,
+        "Volumen Útil (m³)": vol_sin + vol_con,
         "Escenario": ["1. Sin Intervención"] * len(dias_array) + ["2. Con Proyecto (Mitigado)"] * len(dias_array)
     })
     
     fig_agotamiento = px.line(
-        df_agotamiento, x="Día", y="Volumen (m³)", color="Escenario", 
+        df_agotamiento, x="Día", y="Volumen Útil (m³)", color="Escenario", 
         color_discrete_map={"1. Sin Intervención": "#e74c3c", "2. Con Proyecto (Mitigado)": "#10b981"},
-        title="Curvas de Agotamiento del Embalse (Simulación Estiaje Severo Sin Afluentes)"
+        title=f"Curvas de Agotamiento del Volumen Útil (Considerando Afluente de {caudal_afluente_ls} L/s)"
     )
-    fig_agotamiento.add_hline(y=0, line_dash="dash", line_color="#333333")
-    fig_agotamiento.update_layout(
-        height=380, margin=dict(t=40, b=10, l=10, r=10), 
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
+    fig_agotamiento.add_hline(y=0, line_dash="dash", line_color="#333333", annotation_text="Límite Vol. Útil (Día Cero)")
+    fig_agotamiento.update_layout(height=380, margin=dict(t=40, b=10, l=10, r=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     
     st.plotly_chart(fig_agotamiento, width="stretch")
-    
     st.markdown("---")
 
     col_izq, col_der = st.columns(2)
