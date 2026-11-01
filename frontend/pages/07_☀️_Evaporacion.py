@@ -48,26 +48,25 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------
-# Motor de Datos: Carga desde Supabase
+# Motor de Datos: Carga desde Supabase (CSV Oficial)
 # -----------------------------------------
 @st.cache_data
 def cargar_datos_embalses():
-    import requests
-    import io
+    import pandas as pd
     try:
-        url = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/sihcli_maestros/Area%20Volumen%20embalses%20Antioquia.xlsx"
-        # Descargamos el archivo en memoria de forma segura
-        response = requests.get(url, verify=False)
-        df = pd.read_excel(io.BytesIO(response.content))
+        # 🚀 FIX: Conectado a la nueva matriz en formato CSV
+        url_csv = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/sihcli_maestros/Area_Volumen_Embalses_Antioquia.csv"
+        # 🚀 FIX: sep=None y engine='python' fuerzan a Pandas a "olfatear" y descubrir el delimitador correcto (; o ,) automáticamente.
+        df = pd.read_csv(url_csv, sep=None, engine='python', encoding='utf-8-sig')
         
-        # Corrección automática de formatos decimales importados desde Excel
+        # Estandarización por si el CSV viene con errores de tipo
         if 'Altura Promedio Cota Máx (msnm)' in df.columns:
-            df['Altura Promedio Cota Máx (msnm)'] = df['Altura Promedio Cota Máx (msnm)'].apply(
-                lambda x: x * 1000 if pd.notnull(x) and x < 10 else x
-            )
+            df['Altura Promedio Cota Máx (msnm)'] = pd.to_numeric(df['Altura Promedio Cota Máx (msnm)'], errors='coerce')
+        if 'Volumen Máximo (Mm³)' in df.columns:
+            df['Volumen Máximo (Mm³)'] = pd.to_numeric(df['Volumen Máximo (Mm³)'], errors='coerce')
         return df
     except Exception as e:
-        st.error(f"Error cargando Excel de Embalses desde Supabase: {e}")
+        st.error(f"Error crítico cargando la base de datos CSV de embalses: {e}")
         return pd.DataFrame()
 
 df_embalses = cargar_datos_embalses()
@@ -524,16 +523,40 @@ with tab4:
             cota_max_val = round(float(def_alt), 1) if def_alt > 0 else 0.0
 
             # 🔥 FIX: Se agregaron llaves (keys) dinámicas para que los valores se reseteen al cambiar de embalse.
+            # 1. Ajuste de Cota Máxima
             altitud = st.number_input(
                 "Cota Máxima (msnm)", 
                 value=float(def_alt), step=50.0, key=f"alt_{embalse_sel}",
                 help="Nivel máximo de llenado del embalse (cota de vertedero o corona). Define el 100% de la capacidad operativa."
             )
             
+            # 2. Extracción Dinámica de Coordenadas (Desde la Matriz)
+            lat_bd = def_lat
+            if not df_embalses.empty and embalse_sel != "Personalizado":
+                fila_bd = df_embalses[df_embalses['Embalse'] == embalse_sel].iloc[0]
+                # 🚀 FIX: Reemplazar coma por punto antes de convertir a float
+                raw_lat = str(fila_bd.get('Latitud', def_lat)).replace(',', '.')
+                lat_bd = float(raw_lat)
+                
+            latitud = st.number_input(
+                "Latitud (°)", value=float(lat_bd), step=0.1, key=f"lat_{embalse_sel}",
+                help="Coordenada geográfica utilizada para el balance de radiación."
+            )
+            
+            # 3. Cálculo Topológico: Cota de Inicio al 90% de Volumen
+            vol_90_m3 = (def_vol_max * 0.90) * 1_000_000
+            h_max_def = 3.0 * (def_vol_max * 1_000_000) / (def_area * 10_000) if def_area > 0 else 10.0
+            cota_fondo_def = altitud - h_max_def
+            
+            cota_90_defecto = altitud
+            if def_vol_max > 0 and h_max_def > 0:
+                cota_90_defecto = cota_fondo_def + (h_max_def * (0.90 ** (1/3)))
+
+            # 4. Input Limpio y Realista para la Cota de Simulación
             cota_input = st.number_input(
-                "📡 Cota Actual (Lectura XM)", 
-                value=float(def_alt * 0.98), step=1.0, key=f"cot_{embalse_sel}",
-                help="Nivel actual del espejo de agua. La plataforma auto-calibra los volúmenes usando este dato."
+                "📡 Cota Actual", 
+                value=float(cota_90_defecto), step=1.0, key=f"cot_{embalse_sel}",
+                help="Nivel actual del espejo de agua. Por defecto se inicializa al 90% de su capacidad para modelar estiaje."
             )
             
             # Autoajuste de Seguridad (Evita el StreamlitValueBelowMinError)
@@ -548,10 +571,7 @@ with tab4:
             if embalse_sel != "Personalizado":
                 st.info(f"📏 **Límites Aceptables:** Mín: **{cota_min_val:,.0f} msnm** | Máx: **{cota_max_val:,.0f} msnm**")
 
-            latitud = st.number_input(
-                "Latitud (°)", value=float(def_lat), step=0.1, key=f"lat_{embalse_sel}",
-                help="Coordenada geográfica utilizada para calcular la declinación solar y el balance de radiación."
-            )
+            # 🚀 FIX: Se eliminó el bloque viejo de "latitud" que causaba el error de duplicado.
             
             area_ha = st.number_input(
                 "Área Máxima (ha)", 
@@ -566,7 +586,11 @@ with tab4:
             )
             
         with st.expander("🌤️ Clima Diario (Línea Base)", expanded=False):
-            dia_ano = st.slider("Día del año", 1, 365, 152)
+            # 🚀 FIX: Calcular dinámicamente el día juliano actual
+            import datetime
+            dia_actual = datetime.datetime.now().timetuple().tm_yday
+            
+            dia_ano = st.slider("Día del año", 1, 365, int(dia_actual))
             t_max = st.slider("Temp. Máxima (°C)", 15.0, 45.0, 26.0)
             t_min = st.slider("Temp. Mínima (°C)", 5.0, 30.0, 16.0)
             rh_media = st.slider("Humedad Relativa (%)", 30.0, 100.0, 75.0)
@@ -639,56 +663,207 @@ with tab4:
     pct_evap_vs_demanda = (evap_vol_escala / demanda_m3_escala) * 100 if demanda_m3_escala > 0 else 0
 
     # =========================================================================
-    # 🚀 MOTOR DE ACUMULACIÓN, DÍA CERO Y POLINOMIOS CAV OPTIMIZADOS
+    # 🚀 MOTOR DIFERENCIAL DE ACUMULACIÓN Y DÍA CERO (ITERACIÓN DIARIA)
     # =========================================================================
     
-    # 1. Ecuaciones CAV (Área y Volumen Dinámico)
-    coef_alfa_vol = volumen_max_mm3 / (altitud**3) if altitud > 0 else 0
-    coef_beta_area = area_ha / (altitud**2) if altitud > 0 else 0
+    # 1. Extracción de Parámetros Reales desde la Matriz (Si existe)
+    vol_util_bd_m3 = 0
+    if not df_embalses.empty and embalse_sel != "Personalizado":
+        fila = df_embalses[df_embalses['Embalse'] == embalse_sel].iloc[0]
+        vol_util_bd_m3 = float(fila.get('Volumen Útil (Mm³)', 0)) * 1_000_000
     
-    eq_cav_vol = f"V(z) = {coef_alfa_vol:.2e}·z³"
-    eq_cav_area = f"A(z) = {coef_beta_area:.2e}·z²"
-
-    area_dinamica_ha = coef_beta_area * (cota_actual**2) if altitud > 0 else area_ha
+    vol_max_m3 = volumen_max_mm3 * 1_000_000
+    area_max_m2 = area_ha * 10_000
     
-    # 2. Diferenciación Estructural: Volumen Total vs Volumen Útil
-    volumen_total_m3 = (coef_alfa_vol * (cota_actual**3)) * 1_000_000
-    volumen_muerto_m3 = (coef_alfa_vol * (def_min_op**3)) * 1_000_000
-    volumen_util_m3 = max(0.0, volumen_total_m3 - volumen_muerto_m3)
+    # 2. Calibración Topológica (Cota Fondo y Volumen Muerto)
+    # Si tenemos Volumen Útil reportado en la BD, calculamos el volumen muerto real.
+    if vol_util_bd_m3 > 0 and vol_util_bd_m3 < vol_max_m3:
+        vol_muerto_m3_real = vol_max_m3 - vol_util_bd_m3
+    else:
+        # Fallback si no hay dato: Asumimos un 20% de volumen muerto
+        vol_muerto_m3_real = vol_max_m3 * 0.20
+        
+    # Profundidad total del cono asumiendo V = 1/3 * A * h
+    h_max_efectiva = 3.0 * (vol_max_m3 / area_max_m2) if area_max_m2 > 0 else 10.0
+    cota_fondo = altitud - h_max_efectiva
+    
+    # Ecuaciones Dinámicas (Trasladadas al fondo local)
+    def calcular_volumen_total(cota):
+        h = max(0.0, cota - cota_fondo)
+        return vol_max_m3 * ((h / h_max_efectiva)**3) if h_max_efectiva > 0 else 0
+        
+    def calcular_area_ha(cota):
+        h = max(0.0, cota - cota_fondo)
+        return (area_max_m2 * ((h / h_max_efectiva)**2)) / 10_000 if h_max_efectiva > 0 else 0
 
-    # 3. Flujos Diarios
+    def cota_desde_volumen(v_tot_m3):
+        if vol_max_m3 == 0: return cota_fondo
+        h = h_max_efectiva * ((max(0.0, v_tot_m3) / vol_max_m3) ** (1/3))
+        return cota_fondo + h
+
+    # Ecuaciones para mostrar en el Dashboard
+    coef_v = vol_max_m3 / (h_max_efectiva**3) if h_max_efectiva > 0 else 0
+    coef_a = area_max_m2 / (h_max_efectiva**2) if h_max_efectiva > 0 else 0
+    eq_cav_vol = f"V(h) = {coef_v:.1f}·h³"
+    eq_cav_area = f"A(h) = {coef_a:.1f}·h²"
+
+    area_dinamica_ha = calcular_area_ha(cota_actual)
+    
+    # 3. Definición del Volumen Inicial Útil 
+    volumen_total_inicial_m3 = calcular_volumen_total(cota_actual)
+    
+    # El volumen muerto (intocable) se fija por la Regla Segura (cota mínima)
+    volumen_muerto_operativo_m3 = calcular_volumen_total(def_min_op)
+    
+    # Ajuste de calibración fina: Si el volumen muerto operativo difiere del de la BD, priorizamos la Cota Mínima.
+    volumen_util_m3 = max(0.0, volumen_total_inicial_m3 - volumen_muerto_operativo_m3)
+    
+    area_cubierta_fija_ha = area_dinamica_ha * (pct_cobertura / 100.0)
+
+    # 4. Flujos Fijos Diarios
     demanda_diaria_m3 = (poblacion_analisis * consumo_per_capita) / 1000.0
     escorrentia_diaria_m3 = (caudal_afluente_ls * 86400) / 1000.0
     
-    # Tasas de vaciado diario neto (Evaporación + Demanda - Escorrentía)
-    perdida_vol_dia_sin = evap_dia * area_dinamica_ha * 10
-    tasa_agotamiento_sin = (perdida_vol_dia_sin + demanda_diaria_m3) - escorrentia_diaria_m3
-    tasa_agotamiento_con = (perdida_vol_dia + demanda_diaria_m3) - escorrentia_diaria_m3 
+    evap_vol_dia_1_sin = evap_dia * area_dinamica_ha * 10
+    factor_mit_real_dia_1 = factor_mit_base * min(1.0, area_cubierta_fija_ha / area_dinamica_ha) if area_dinamica_ha > 0 else 0
+    evap_vol_dia_1_con = evap_vol_dia_1_sin * (1 - factor_mit_real_dia_1)
     
-    # 4. Intersección con el Día Cero (Basado SOLO en Volumen Útil)
-    if tasa_agotamiento_sin > 0:
-        dia_cero_sin = volumen_util_m3 / tasa_agotamiento_sin
-    else:
-        dia_cero_sin = 9999 # El embalse se recarga o está en equilibrio
-        
-    if tasa_agotamiento_con > 0:
-        dia_cero_con = volumen_util_m3 / tasa_agotamiento_con
-    else:
-        dia_cero_con = 9999
-        
-    dias_ganados = max(0, dia_cero_con - dia_cero_sin) if dia_cero_sin != 9999 else 0
-    
-    agua_salvada_horizonte = vol_salvado_dia * dias_simulacion
-    pob_15_dias = agua_salvada_horizonte / (consumo_per_capita * 15 / 1000.0) if consumo_per_capita > 0 else 0
+    perdida_vol_dia = evap_vol_dia_1_con 
+    vol_salvado_dia = evap_vol_dia_1_sin - evap_vol_dia_1_con
 
-    st.markdown(f"### Análisis Dinámico para: **{embalse_sel}**")
+    # ==============================================================
+    # 🌀 BUCLE ITERATIVO (Vaciado del Volumen Útil)
+    # ==============================================================
+    max_dias_simulacion = max(365, dias_simulacion + 30)
     
+    vol_util_iter_sin = volumen_util_m3
+    vol_util_iter_con = volumen_util_m3
+    
+    serie_vol_sin = [vol_util_iter_sin]
+    serie_vol_con = [vol_util_iter_con]
+    
+    dia_cero_sin = 9999
+    dia_cero_con = 9999
+    agua_salvada_acumulada = 0.0
+
+    for dia in range(1, max_dias_simulacion + 1):
+        # --- RUTA 1: SIN PROYECTO ---
+        if vol_util_iter_sin > 0:
+            # Se suma el volumen muerto para encontrar la cota real y calcular el área
+            vol_tot_actual_sin = vol_util_iter_sin + volumen_muerto_operativo_m3
+            cota_actual_sin = cota_desde_volumen(vol_tot_actual_sin)
+            area_actual_sin = calcular_area_ha(cota_actual_sin)
+            
+            evap_vol_hoy_sin = evap_dia * area_actual_sin * 10
+            flujo_neto_sin = escorrentia_diaria_m3 - (evap_vol_hoy_sin + demanda_diaria_m3)
+            
+            vol_util_iter_sin = max(0.0, vol_util_iter_sin + flujo_neto_sin)
+            if vol_util_iter_sin == 0 and dia_cero_sin == 9999:
+                dia_cero_sin = dia
+        
+        serie_vol_sin.append(vol_util_iter_sin)
+
+        # --- RUTA 2: CON PROYECTO ---
+        if vol_util_iter_con > 0:
+            vol_tot_actual_con = vol_util_iter_con + volumen_muerto_operativo_m3
+            cota_actual_con = cota_desde_volumen(vol_tot_actual_con)
+            area_actual_con = calcular_area_ha(cota_actual_con)
+            
+            fraccion_cubierta = min(1.0, area_cubierta_fija_ha / area_actual_con) if area_actual_con > 0 else 1.0
+            mitigacion_efectiva = factor_mit_base * fraccion_cubierta
+            
+            evap_vol_hoy_base = evap_dia * area_actual_con * 10
+            evap_vol_hoy_con = evap_vol_hoy_base * (1 - mitigacion_efectiva)
+            flujo_neto_con = escorrentia_diaria_m3 - (evap_vol_hoy_con + demanda_diaria_m3)
+            
+            vol_util_iter_con = max(0.0, vol_util_iter_con + flujo_neto_con)
+            if vol_util_iter_con == 0 and dia_cero_con == 9999:
+                dia_cero_con = dia
+                
+            if dia <= dias_simulacion:
+                agua_salvada_acumulada += (evap_vol_hoy_base - evap_vol_hoy_con)
+                
+        serie_vol_con.append(vol_util_iter_con)
+
+    # 4. Métricas de Cierre
+    dias_ganados = max(0, dia_cero_con - dia_cero_sin) if dia_cero_sin != 9999 else 0
+    pob_15_dias = agua_salvada_acumulada / (consumo_per_capita * 15 / 1000.0) if consumo_per_capita > 0 else 0
+    
+    # 5. Métricas para el Dashboard Estático Superior
+    evap_mitigada_dia = evap_dia * (1 - factor_mit_real_dia_1)
+    piscinas_dia = perdida_vol_dia / 2500.0
+    
+    dias_escala = {"Día": 1, "Semana": 7, "Mes": 30, "Año": 365}[escala_temporal]
+    demanda_litros_escala = poblacion_analisis * consumo_per_capita * dias_escala
+    demanda_m3_escala = demanda_litros_escala / 1000.0
+    piscinas_demanda = demanda_m3_escala / 2500.0
+    carrotanques_demanda = demanda_m3_escala / 10.0
+    
+    evap_vol_escala = perdida_vol_dia * dias_escala
+    caudal_evap_ls = (evap_vol_escala * 1000.0) / (dias_escala * 86400)
+    pct_evap_vs_demanda = (evap_vol_escala / demanda_m3_escala) * 100 if demanda_m3_escala > 0 else 0
+
+    # =========================================================================
+    # 📍 CONTEXTO FÍSICO Y FINANCIERO DINÁMICO (Conectado a Supabase)
+    # =========================================================================
+    ubicacion_str = "Antioquia, Colombia"
+    lat_str, lon_str = "6.25", "-75.50"
+    ratio_bandeja = 0.0
+    capex_neto = 0.0
+    payback_str = "N/A"
+    zona_vida = "N/A"
+    
+    if not df_embalses.empty and embalse_sel != "Personalizado":
+        fila_ctx = df_embalses[df_embalses['Embalse'] == embalse_sel].iloc[0]
+        ubicacion_str = str(fila_ctx.get('Ubicación', embalse_sel))
+        lat_str = str(fila_ctx.get('Latitud', def_lat)).replace(',', '.')
+        lon_str = str(fila_ctx.get('Longitud', -75.50)).replace(',', '.')
+        
+        v_max = float(fila_ctx.get('Volumen Máximo (Mm³)', 0))
+        a_max = float(fila_ctx.get('Área Máxima (ha)', 1))
+        ratio_bandeja = v_max / a_max if a_max > 0 else 0
+        
+        if altitud > 2000: zona_vida = "Bosque Húmedo Montano Bajo (bh-MB)"
+        elif altitud > 1000: zona_vida = "Bosque Húmedo Premontano (bh-PM)"
+        else: zona_vida = "Bosque Seco/Húmedo Tropical (bs-T / bh-T)"
+        
+        # 🚀 FIX: Calibración estricta de CAPEX basada en el Piloto Piedras Blancas
+        mitigacion_str = str(mitigacion).lower() if 'mitigacion' in locals() else ""
+        
+        if "solar" in mitigacion_str or "fpv" in mitigacion_str:
+            capex_neto = area_cubierta_fija_ha * 0.562 # $562k USD/ha (Fórmula Solar)
+            payback_str = "3.1 - 4.5 Años"
+        elif "bolas" in mitigacion_str:
+            capex_neto = area_cubierta_fija_ha * 0.150 # $150k USD/ha (Retorna a ~$1M USD para 7-8 ha)
+            payback_str = "6.5 - 7.5 Años (Hídrico)"
+        elif "mallas" in mitigacion_str or "hexagonal" in mitigacion_str:
+            capex_neto = area_cubierta_fija_ha * 0.190 # $190k USD/ha
+            payback_str = "7.8 Años (Hídrico)"
+        elif "monocapa" in mitigacion_str or "química" in mitigacion_str:
+            capex_neto = area_cubierta_fija_ha * 0.050 
+            payback_str = "Gasto Recurrente"
+        else:
+            capex_neto = 0.0
+            payback_str = "N/A"
+            
+        # 🚀 FIX: Helper Tooltip HTML integrado en el div de Morfología
+        st.markdown(f"""
+        <div style='display: flex; justify-content: space-between; background-color: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid #3498db; margin-bottom: 20px; font-size: 0.95em;'>
+            <div><b>📍 Ubicación:</b> {ubicacion_str} ({float(lat_str):.2f}° N, {float(lon_str):.2f}° W)</div>
+            <div><b>⛰️ Altitud / Zona:</b> {altitud:,.0f} msnm | {zona_vida}</div>
+            <div title="Nota Técnica: Métrica de 'eficiencia morfológica' que permite entender qué embalses son similares a una 'bandeja' (mucha área, poca profundidad = alta evaporación) y cuáles son como un 'vaso' (poca área, mucha profundidad = baja evaporación relativa).">
+                <b style="cursor: help; border-bottom: 1px dotted #3498db;">📐 Morfología:</b> Ratio {ratio_bandeja:.3f} Mm³/ha ℹ️
+            </div>
+            <div><b>💰 CAPEX Neto:</b> ${capex_neto:,.2f}M USD | Payback: {payback_str}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
     k1, k2, k_piscina, k3, k4, k5, k6, k7 = st.columns(8)
     k1.metric("💧 Evap. Neta", f"{evap_mitigada_dia:.2f} mm/d", f"Base: {evap_dia:.2f}" if factor_mit > 0 else None, delta_color="inverse")
     k2.metric("📉 Pérdida Vol.", f"{perdida_vol_dia:,.0f} m³/d", "Diario", delta_color="off")
     k_piscina.metric("🏊‍♂ Escala Física", f"{piscinas_dia:,.1f} Piscinas/d", "Olímpicas", delta_color="off")
     k3.metric("🛡️ Agua Salvada", f"{vol_salvado_dia:,.0f} m³/d", f"{(factor_mit*100):.0f}% global" if factor_mit > 0 else "Sin mitigar")
-    k4.metric("📦 Volumen Útil", f"{volumen_util_m3/1e6:,.2f} Mm³", f"Muerto: {volumen_muerto_m3/1e6:,.2f} Mm³", delta_color="off")
+    k4.metric("📦 Volumen Útil", f"{volumen_util_m3/1e6:,.2f} Mm³", f"Muerto: {volumen_muerto_operativo_m3/1e6:,.2f} Mm³", delta_color="off")
     k5.metric("📐 Área Dinámica", f"{area_dinamica_ha:,.0f} ha", f"Cota XM: {cota_actual:.0f}m", delta_color="off")
     k6.metric("📊 Curva V(z)", eq_cav_vol, "Volumen", delta_color="off")
     k7.metric("📊 Curva A(z)", eq_cav_area, "Área Espejo", delta_color="off")
@@ -720,32 +895,73 @@ with tab4:
     
     c_zero1.metric("⏳ Día Cero (Sin Proyecto)", txt_cero_sin, "Agotamiento Vol Útil", delta_color="inverse" if dia_cero_sin != 9999 else "normal")
     c_zero2.metric("🛡️ Día Cero (Con Mitigación)", txt_cero_con, txt_delta, delta_color="normal")
-    c_zero3.metric(f"💧 Agua Salvada ({dias_simulacion} días)", f"{agua_salvada_horizonte:,.0f} m³", f"+ Escorrentía {caudal_afluente_ls} L/s", delta_color="off")
+    
+    # 🚀 FIX APLICADO: Usamos 'agua_salvada_acumulada' que proviene del bucle iterativo
+    c_zero3.metric(f"💧 Agua Salvada ({dias_simulacion} días)", f"{agua_salvada_acumulada:,.0f} m³", f"+ Escorrentía {caudal_afluente_ls} L/s", delta_color="off")
+    
     c_zero4.metric("👥 Impacto Social (Reserva)", f"{pob_15_dias:,.0f} Hab", "Abastecidos por 15 días extra", delta_color="normal")
     
-    # --- Gráfico Interactivo de Caída (Curva de Agotamiento de Volumen Útil) ---
-    max_dias_grafico = min(1000, max(dias_simulacion, int(dia_cero_con if dia_cero_con != 9999 else 365) + 10))
-    dias_array = list(range(0, max_dias_grafico + 2, 2))
-    
-    vol_sin = [max(0, volumen_util_m3 - (tasa_agotamiento_sin * d)) if tasa_agotamiento_sin > 0 else volumen_util_m3 for d in dias_array]
-    vol_con = [max(0, volumen_util_m3 - (tasa_agotamiento_con * d)) if tasa_agotamiento_con > 0 else volumen_util_m3 for d in dias_array]
+    # --- Gráfico Interactivo de Caída (Curva Diferencial de Agotamiento) ---
+    limite_visual_dias = min(max_dias_simulacion, max(dias_simulacion, (dia_cero_con if dia_cero_con != 9999 else 180) + 15))
     
     df_agotamiento = pd.DataFrame({
-        "Día": dias_array * 2,
-        "Volumen Útil (m³)": vol_sin + vol_con,
-        "Escenario": ["1. Sin Intervención"] * len(dias_array) + ["2. Con Proyecto (Mitigado)"] * len(dias_array)
+        "Día": list(range(limite_visual_dias + 1)) * 2,
+        "Volumen Útil (m³)": serie_vol_sin[:limite_visual_dias + 1] + serie_vol_con[:limite_visual_dias + 1],
+        "Escenario": ["1. Sin Intervención"] * (limite_visual_dias + 1) + ["2. Con Proyecto (Mitigado)"] * (limite_visual_dias + 1)
     })
     
     fig_agotamiento = px.line(
         df_agotamiento, x="Día", y="Volumen Útil (m³)", color="Escenario", 
         color_discrete_map={"1. Sin Intervención": "#e74c3c", "2. Con Proyecto (Mitigado)": "#10b981"},
-        title=f"Curvas de Agotamiento del Volumen Útil (Considerando Afluente de {caudal_afluente_ls} L/s)"
+        title=f"Curvas de Agotamiento No Lineal (Modelado Iterativo de Contracción de Área)"
     )
     fig_agotamiento.add_hline(y=0, line_dash="dash", line_color="#333333", annotation_text="Límite Vol. Útil (Día Cero)")
     fig_agotamiento.update_layout(height=380, margin=dict(t=40, b=10, l=10, r=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     
     st.plotly_chart(fig_agotamiento, width="stretch")
     st.markdown("---")
+
+    # =========================================================================
+    # 📐 CURVAS BATIMÉTRICAS TEÓRICAS (CAV)
+    # =========================================================================
+    st.markdown("#### 📐 Curvas Batimétricas Teóricas (Área y Volumen vs. Cota)")
+    
+    import numpy as np
+    import plotly.express as px
+    import pandas as pd
+    
+    # Generamos 50 puntos desde el fondo del embalse hasta la cota máxima
+    cotas_plot = np.linspace(cota_fondo, altitud, 50)
+    vol_tot_plot = [calcular_volumen_total(c) for c in cotas_plot]
+    vol_util_plot = [max(0.0, v - volumen_muerto_operativo_m3) for v in vol_tot_plot]
+    area_plot_m2 = [calcular_area_ha(c) * 10000 for c in cotas_plot]
+    
+    df_cav = pd.DataFrame({
+        "Cota (msnm)": cotas_plot,
+        "Volumen Total (m³)": vol_tot_plot,
+        "Volumen Útil (m³)": vol_util_plot,
+        "Área (m²)": area_plot_m2
+    })
+    
+    col_cav1, col_cav2 = st.columns(2)
+    
+    with col_cav1:
+        fig_v = px.line(df_cav, x="Cota (msnm)", y=["Volumen Total (m³)", "Volumen Útil (m³)"], 
+                        title=f"Curva Volumen-Cota<br><sup>{eq_cav_vol}</sup>")
+        fig_v.add_vline(x=def_min_op, line_dash="dash", line_color="#e74c3c", annotation_text="Nivel Mín. Op.")
+        fig_v.add_vline(x=cota_actual, line_dash="dot", line_color="#2ecc71", annotation_text="Nivel Actual")
+        fig_v.update_traces(line_width=3)
+        fig_v.update_layout(height=350, margin=dict(t=50, b=10, l=10, r=10), legend_title="Métrica")
+        st.plotly_chart(fig_v, use_container_width=True)
+        
+    with col_cav2:
+        fig_a = px.line(df_cav, x="Cota (msnm)", y="Área (m²)", 
+                        title=f"Curva Área-Cota<br><sup>{eq_cav_area}</sup>")
+        fig_a.add_vline(x=def_min_op, line_dash="dash", line_color="#e74c3c", annotation_text="Nivel Mín. Op.")
+        fig_a.add_vline(x=cota_actual, line_dash="dot", line_color="#2ecc71", annotation_text="Nivel Actual")
+        fig_a.update_traces(line_color="#e67e22", line_width=3)
+        fig_a.update_layout(height=350, margin=dict(t=50, b=10, l=10, r=10))
+        st.plotly_chart(fig_a, use_container_width=True)
 
     col_izq, col_der = st.columns(2)
     with col_izq:
@@ -865,10 +1081,10 @@ with tab4:
         st.plotly_chart(fig_scatter, width="stretch")
 
 # -----------------------------------------
-# PESTAÑA 5: Telemetría XM (Últimos 3 Meses)
+# PESTAÑA 5: Telemetría XM (Últimos 6 Meses)
 # -----------------------------------------
 with tab5:
-    st.header("📡 Telemetría XM: Dinámica Real del Embalse (Últimos 90 Días)")
+    st.header("📡 Telemetría XM: Dinámica Real del Embalse (Últimos 180 Días)")
     st.markdown("Conexión en vivo al portal de datos del Sistema Interconectado Nacional (XM S.A. E.S.P.) para extraer la curva real histórica.")
     
     if st.button("📡 Conectar con Servidores XM y Descargar Curva Real", type="primary"):
@@ -889,7 +1105,8 @@ with tab5:
                     
                     api_xm = pydataxm.ReadDB()
                     end_date = dt.date.today() - dt.timedelta(days=5)
-                    start_date = end_date - dt.timedelta(days=90)
+                    # 🚀 MODIFICADO: Retrocedemos 180 días en la consulta
+                    start_date = end_date - dt.timedelta(days=180) 
                     
                     cat = api_xm.get_collections()
                     metric_id_volumen = "VolUtil"
@@ -998,6 +1215,25 @@ with tab5:
                                 )
                                 fig_xm.update_yaxes(title_text="Volumen Calculado (m³)", secondary_y=False)
                                 fig_xm.update_yaxes(title_text="Cota Equivalente (msnm)", secondary_y=True)
+                                
+                                # 🚀 NUEVO: Selector de Meses interactivo (Range Selector de Plotly)
+                                fig_xm.update_xaxes(
+                                    rangeselector=dict(
+                                        buttons=list([
+                                            dict(count=1, label="1 Mes", step="month", stepmode="backward"),
+                                            dict(count=2, label="2 Meses", step="month", stepmode="backward"),
+                                            dict(count=3, label="3 Meses", step="month", stepmode="backward"),
+                                            dict(count=4, label="4 Meses", step="month", stepmode="backward"),
+                                            dict(count=5, label="5 Meses", step="month", stepmode="backward"),
+                                            dict(step="all", label="6 Meses (Todo)")
+                                        ]),
+                                        bgcolor="#f8f9fa",
+                                        activecolor="#3498db",
+                                        bordercolor="#d3d3d3",
+                                        borderwidth=1
+                                    ),
+                                    type="date"
+                                )
                                 
                                 # Dibujar Líneas de Referencia (Alineadas al Eje Primario/Secundario)
                                 if vol_regla_segura > 0:
