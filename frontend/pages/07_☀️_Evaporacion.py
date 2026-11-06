@@ -54,16 +54,20 @@ st.markdown("""
 def cargar_datos_embalses():
     import pandas as pd
     try:
-        # 🚀 FIX: Conectado a la nueva matriz en formato CSV
+        # 🚀 Asegúrate de usar el enlace al nuevo archivo CSV
         url_csv = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/sihcli_maestros/Area_Volumen_Embalses_Antioquia.csv"
-        # 🚀 FIX: sep=None y engine='python' fuerzan a Pandas a "olfatear" y descubrir el delimitador correcto (; o ,) automáticamente.
         df = pd.read_csv(url_csv, sep=None, engine='python', encoding='utf-8-sig')
         
-        # Estandarización por si el CSV viene con errores de tipo
-        if 'Altura Promedio Cota Máx (msnm)' in df.columns:
-            df['Altura Promedio Cota Máx (msnm)'] = pd.to_numeric(df['Altura Promedio Cota Máx (msnm)'], errors='coerce')
-        if 'Volumen Máximo (Mm³)' in df.columns:
-            df['Volumen Máximo (Mm³)'] = pd.to_numeric(df['Volumen Máximo (Mm³)'], errors='coerce')
+        # 🚀 FIX: Limpieza dinámica de TODAS las columnas numéricas que tengan comas
+        # Excluimos columnas que sabemos que son de texto
+        cols_texto = ['Embalse', 'Lugar de Captación', 'Notas / Estado', 'Notas Técnicas / Afluentes Principales']
+        
+        for col in df.columns:
+            if col not in cols_texto:
+                # Reemplazamos las comas por puntos y forzamos a numérico
+                df[col] = df[col].astype(str).str.replace(',', '.', regex=False)
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+                
         return df
     except Exception as e:
         st.error(f"Error crítico cargando la base de datos CSV de embalses: {e}")
@@ -77,7 +81,8 @@ coords_embalses = {
     "Jaguas": (6.31, -75.02), "La Fe": (6.11, -75.50), 
     "Piedras Blancas": (6.29, -75.49), "Playas": (6.27, -74.95),
     "Porce II": (6.75, -75.15), "Porce III": (6.80, -75.10), 
-    "Riogrande II": (6.55, -75.45), "San Carlos": (6.21, -74.85)
+    "Riogrande II": (6.55, -75.45), "San Carlos": (6.21, -74.85),
+    "Chingaza": (4.55, -73.75)
 }
 
 # -----------------------------------------
@@ -530,13 +535,23 @@ with tab4:
                 help="Nivel máximo de llenado del embalse (cota de vertedero o corona). Define el 100% de la capacidad operativa."
             )
             
-            # 2. Extracción Dinámica de Coordenadas (Desde la Matriz)
+            # 2. Extracción Dinámica (Desde la Matriz Limpia)
             lat_bd = def_lat
+            def_caudal_ls = 0.0
+            
             if not df_embalses.empty and embalse_sel != "Personalizado":
                 fila_bd = df_embalses[df_embalses['Embalse'] == embalse_sel].iloc[0]
-                # 🚀 FIX: Reemplazar coma por punto antes de convertir a float
-                raw_lat = str(fila_bd.get('Latitud', def_lat)).replace(',', '.')
-                lat_bd = float(raw_lat)
+                
+                # Las coordenadas ya vienen limpias y convertidas a float gracias al cargador
+                lat_bd = float(fila_bd.get('Latitud', def_lat))
+                
+                # 🚀 Búsqueda dinámica de la columna de Caudal Medio Multianual
+                col_caudal_medio = next((c for c in df_embalses.columns if 'caudal medio' in c.lower()), None)
+                
+                if col_caudal_medio:
+                    val_caudal_m3s = float(fila_bd.get(col_caudal_medio, 0.0))
+                    # La tabla de Excel tiene los caudales en m³/s, así que los pasamos a L/s multiplicando por 1000
+                    def_caudal_ls = val_caudal_m3s * 1000.0
                 
             latitud = st.number_input(
                 "Latitud (°)", value=float(lat_bd), step=0.1, key=f"lat_{embalse_sel}",
@@ -609,10 +624,15 @@ with tab4:
             escala_temporal = st.selectbox("Escala Temporal de Análisis", ["Día", "Semana", "Mes", "Año"], index=3)
             dias_simulacion = st.slider("⏳ Horizonte de Crisis (Días de Estiaje Severo)", 15, 365, 90, 15)
             
-            # 🚀 NUEVO: Oferta natural durante estiaje (Modulable)
+            # 🚀 NUEVO: Oferta natural (Conectada al CSV)
             st.markdown("---")
             st.caption("💧 **Oferta Hídrica Remanente**")
-            caudal_afluente_ls = st.number_input("Afluentes Naturales + Manantiales (L/s)", value=0.0, step=10.0, help="Caudal base que entra al embalse incluso durante sequía.")
+            caudal_afluente_ls = st.number_input(
+                "Afluentes Naturales + Manantiales (L/s)", 
+                value=float(def_caudal_ls) if 'def_caudal_ls' in locals() else 0.0, 
+                step=100.0, 
+                help="Caudal medio de entrada (m³/s convertidos a L/s) extraído del CSV. En simulación de estiaje severo, reduce este valor."
+            )
     
     # --- APLICACIÓN DE MODIFICADORES ---
     mod_tmax, mod_tmin, mod_rh, mod_rs = t_max, t_min, rh_media, rs
@@ -757,7 +777,8 @@ with tab4:
             evap_vol_hoy_sin = evap_dia * area_actual_sin * 10
             flujo_neto_sin = escorrentia_diaria_m3 - (evap_vol_hoy_sin + demanda_diaria_m3)
             
-            vol_util_iter_sin = max(0.0, vol_util_iter_sin + flujo_neto_sin)
+            # 🚀 FIX: Se le pone un techo al llenado (El agua que sobra se vierte)
+            vol_util_iter_sin = min((vol_max_m3 - volumen_muerto_operativo_m3), max(0.0, vol_util_iter_sin + flujo_neto_sin))
             if vol_util_iter_sin == 0 and dia_cero_sin == 9999:
                 dia_cero_sin = dia
         
@@ -776,7 +797,8 @@ with tab4:
             evap_vol_hoy_con = evap_vol_hoy_base * (1 - mitigacion_efectiva)
             flujo_neto_con = escorrentia_diaria_m3 - (evap_vol_hoy_con + demanda_diaria_m3)
             
-            vol_util_iter_con = max(0.0, vol_util_iter_con + flujo_neto_con)
+            # 🚀 FIX: Techo de volumen máximo útil
+            vol_util_iter_con = min((vol_max_m3 - volumen_muerto_operativo_m3), max(0.0, vol_util_iter_con + flujo_neto_con))
             if vol_util_iter_con == 0 and dia_cero_con == 9999:
                 dia_cero_con = dia
                 
