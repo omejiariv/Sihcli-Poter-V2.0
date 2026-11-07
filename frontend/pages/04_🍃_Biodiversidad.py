@@ -870,7 +870,7 @@ with tab_forestal:
             # 🚀 FIX 3: Migración a arquitectura HTML (Folium) para máxima estabilidad
             import folium
             from folium import plugins
-            import streamlit.components.v1 as components
+            
             
             c_lat = gdf_zona.to_crs(4326).geometry.centroid.y.mean() if gdf_zona is not None else 6.5
             c_lon = gdf_zona.to_crs(4326).geometry.centroid.x.mean() if gdf_zona is not None else -75.5

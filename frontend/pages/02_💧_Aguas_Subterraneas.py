@@ -923,8 +923,8 @@ if gdf_zona is not None:
             from folium import plugins
             plugins.Fullscreen(position='topright', title='Pantalla Completa', title_cancel='Salir de Pantalla Completa').add_to(m)
             
-            import streamlit.components.v1 as components
-            components.html(m._repr_html_(), height=650)
+            
+            st.html(m._repr_html_(), height=650)
             
         except Exception as e:
             st.error(f"Error renderizando mapa de contexto: {e}")
@@ -961,7 +961,7 @@ if gdf_zona is not None:
                             popup=f"<b>Estación:</b> {row['nombre']}<br><b>Recarga:</b> {row['recarga_calc']:.1f} mm/año"
                         ).add_to(m_recarga_fallback)
 
-                    import streamlit.components.v1 as components
+                    
                     components.html(m_recarga_fallback._repr_html_(), height=550)
             else:
                 with st.spinner("Calculando superficie de recarga (PNG Base64)..."):
@@ -1048,7 +1048,7 @@ if gdf_zona is not None:
                         from folium import plugins
                         plugins.Fullscreen(position='topright', title='Pantalla Completa', title_cancel='Salir de Pantalla Completa').add_to(m_recarga)
                         
-                        import streamlit.components.v1 as components
+                        
                         components.html(m_recarga._repr_html_(), height=650)
                         
                         st.caption("🗺️ Superficie interpolada a partir de los puntos de control. Las zonas más oscuras indican mayor recarga potencial al acuífero.")

@@ -3,7 +3,7 @@
 import os
 import sys
 import streamlit as st
-import streamlit.components.v1 as components
+
 
 # --- 1. CONFIGURACIÓN DE PÁGINA (PANTALLA COMPLETA) ---
 st.set_page_config(page_title="Radar Meteorológico", page_icon="🛰️", layout="wide")

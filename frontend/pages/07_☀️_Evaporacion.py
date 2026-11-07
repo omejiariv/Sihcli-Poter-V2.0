@@ -974,7 +974,7 @@ with tab4:
         fig_v.add_vline(x=cota_actual, line_dash="dot", line_color="#2ecc71", annotation_text="Nivel Actual")
         fig_v.update_traces(line_width=3)
         fig_v.update_layout(height=350, margin=dict(t=50, b=10, l=10, r=10), legend_title="Métrica")
-        st.plotly_chart(fig_v, use_container_width=True)
+        st.plotly_chart(fig_v, width="stretch")
         
     with col_cav2:
         fig_a = px.line(df_cav, x="Cota (msnm)", y="Área (m²)", 
@@ -983,7 +983,7 @@ with tab4:
         fig_a.add_vline(x=cota_actual, line_dash="dot", line_color="#2ecc71", annotation_text="Nivel Actual")
         fig_a.update_traces(line_color="#e67e22", line_width=3)
         fig_a.update_layout(height=350, margin=dict(t=50, b=10, l=10, r=10))
-        st.plotly_chart(fig_a, use_container_width=True)
+        st.plotly_chart(fig_a, width="stretch")
 
     col_izq, col_der = st.columns(2)
     with col_izq:
@@ -1389,8 +1389,7 @@ with tab6:
         folium.LayerControl(position='topright', collapsed=True).add_to(m)
 
         # 🔥 FIX: Renderizado nativo HTML a prueba de fallos
-        import streamlit.components.v1 as components
-        components.html(m._repr_html_(), height=500)
+        st.html(m._repr_html_())
 
     with col_datos:
         if not df_embalses.empty:

@@ -1915,8 +1915,7 @@ def display_satellite_imagery_tab(gdf_filtered):
                         ).add_to(mc)
 
                 folium.LayerControl().add_to(m)
-                import streamlit.components.v1 as components
-                components.html(m._repr_html_(), height=500)
+                st.html(m._repr_html_())
 
             except Exception as e:
                 st.error(f"Error cargando mapa: {e}")
@@ -1957,7 +1956,7 @@ def display_advanced_maps_tab(df_long, gdf_stations, matrices, grid, mask, gdf_z
     # 🚀 ANTÍDOTO ABSOLUTO: Importación incondicional en la línea 1 de la función
     import folium
     from folium import plugins
-    import streamlit.components.v1 as components
+    
     from modules.maps_engine import generar_mapa_interactivo
     
     """
@@ -2009,7 +2008,7 @@ def display_advanced_maps_tab(df_long, gdf_stations, matrices, grid, mask, gdf_z
 
     # 3. RENDERIZADO HTML SEGURO (Evita colapsos de memoria en Streamlit)
     if m is not None:
-        components.html(m._repr_html_(), height=600)
+        st.html(m._repr_html_(), height=600)
     else:
         st.warning("⚠️ No se pudo generar el mapa tridimensional.")
 
@@ -5084,7 +5083,7 @@ def display_land_cover_analysis_tab(df_long, gdf_stations, **kwargs):
                 st.info("💡 **Vista Sincronizada:** Desplaza o haz zoom en un mapa y el otro lo seguirá automáticamente.")
                 
                 from folium.plugins import DualMap
-                import streamlit.components.v1 as components
+                
                 import pandas as pd
                 
                 # Recortamos el 2020 exactamente igual que el 2026
