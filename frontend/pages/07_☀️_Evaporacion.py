@@ -1418,7 +1418,8 @@ with tab6:
         folium.LayerControl(position='topright', collapsed=True).add_to(m)
 
         # 🔥 FIX: Renderizado nativo HTML a prueba de fallos
-        st.html(m._repr_html_())
+        from streamlit_folium import st_folium
+        st_folium(m, use_container_width=True, height=500, returned_objects=[])
 
     with col_datos:
         if not df_embalses.empty:

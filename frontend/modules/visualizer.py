@@ -1915,7 +1915,8 @@ def display_satellite_imagery_tab(gdf_filtered):
                         ).add_to(mc)
 
                 folium.LayerControl().add_to(m)
-                st.html(m._repr_html_())
+                from streamlit_folium import st_folium
+                st_folium(m, use_container_width=True, height=500, returned_objects=[])
 
             except Exception as e:
                 st.error(f"Error cargando mapa: {e}")
