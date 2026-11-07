@@ -46,3 +46,4 @@ gstools==1.6.1
 earthengine-api>=0.1.400
 earthengine-api
 geoalchemy2
+pydataxm
