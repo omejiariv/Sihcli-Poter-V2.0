@@ -1094,12 +1094,12 @@ if gdf_zona_seleccionada is not None:
                     m_pour.add_child(folium.LatLngPopup())
                     folium.LayerControl().add_to(m_pour)
                     
-                    # 🚀 FIX CRÍTICO: Usar use_container_width=True en lugar de width="stretch"
+                    # 🚀 FIX CRÍTICO: st_folium limpio e interactivo 
+                    # El mapa debe atrapar el click ('last_clicked') y refrescar la variable 'mapa_clic'
                     mapa_clic = st_folium(
                         m_pour, 
-                        height=600, 
+                        height=550, 
                         use_container_width=True, 
-                        key="mapa_pour_point", 
                         returned_objects=["last_clicked"]
                     )
                     
@@ -1113,31 +1113,31 @@ if gdf_zona_seleccionada is not None:
                         st.info(f"**Cierre:** LAT `{lat_cierre:.5f}` | LON `{lon_cierre:.5f}`")
                         umbral_acc = st.slider("Sensibilidad de encaje (Celdas):", 100, 2000, 500, step=100)
                         
-                        if st.button("🚀 Extraer Microcuenca", type="primary", width="stretch"):
+                        if st.button("🚀 Extraer Microcuenca", type="primary", use_container_width=True):
                             try:
                                 with st.spinner("⚙️ Encajando coordenadas y extrayendo polígono..."):
                                     from shapely.geometry import shape
                                     import geopandas as gpd
                                     import numpy as np
                                     
-                                    # 🚀 FIX: Rescatamos el modelo físico directamente de la RAM, saltando minutos de recálculo
+                                    # 🚀 FIX: Rescatamos el modelo físico directamente de la RAM
                                     grid_mem = st.session_state.get('grid_obj')
                                     fdir_mem = st.session_state.get('fdir_obj')
                                     acc_mem = st.session_state.get('acc_obj')
                                     
                                     if grid_mem is None or fdir_mem is None or acc_mem is None:
-                                        st.error("⚠️ El modelo hidrológico base no ha terminado de cargar. Ve a la pestaña '🌊 Hidrología' primero para inicializar el terreno.")
+                                        st.error("⚠️ El modelo hidrológico base no ha terminado de cargar. Ve a la pestaña '🌊 Hidrología' primero.")
                                         st.stop()
                                     
                                     dirmap = (64, 128, 1, 2, 4, 8, 16, 32)
                                     
-                                    # 4. Snapping (Encaje inteligente del clic al río más cercano)
+                                    # Snapping (Encaje inteligente del clic al río más cercano)
                                     transformer_in = Transformer.from_crs("EPSG:4326", meta['crs'], always_xy=True)
                                     x_click, y_click = transformer_in.transform(lon_cierre, lat_cierre)
                                     
                                     x_snap, y_snap = grid_mem.snap_to_mask(acc_mem > umbral_acc, (x_click, y_click), return_dist=False)
                                     
-                                    # 5. Delimitar y Vectorizar usando la memoria RAM
+                                    # Delimitar y Vectorizar usando la memoria RAM
                                     catch = grid_mem.catchment(x=x_snap, y=y_snap, fdir=fdir_mem, dirmap=dirmap, xytype='coordinate')
                                     catch_uint8 = catch.astype(np.uint8)
                                     
