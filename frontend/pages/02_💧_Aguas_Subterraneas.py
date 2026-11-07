@@ -924,7 +924,8 @@ if gdf_zona is not None:
             plugins.Fullscreen(position='topright', title='Pantalla Completa', title_cancel='Salir de Pantalla Completa').add_to(m)
             
             
-            st.html(m._repr_html_(), height=650)
+            from streamlit_folium import st_folium
+            st_folium(m, use_container_width=True, height=650, returned_objects=[])
             
         except Exception as e:
             st.error(f"Error renderizando mapa de contexto: {e}")

@@ -2009,7 +2009,8 @@ def display_advanced_maps_tab(df_long, gdf_stations, matrices, grid, mask, gdf_z
 
     # 3. RENDERIZADO HTML SEGURO (Evita colapsos de memoria en Streamlit)
     if m is not None:
-        st.html(m._repr_html_(), height=600)
+        from streamlit_folium import st_folium
+        st_folium(m, use_container_width=True, height=600, returned_objects=[])
     else:
         st.warning("⚠️ No se pudo generar el mapa tridimensional.")
 
