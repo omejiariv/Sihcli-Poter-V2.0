@@ -234,7 +234,9 @@ def renderizar_menu_navegacion(pagina_actual):
             "🏢 Municipal": "MUNICIPAL",
             "🧩 Regiones (Subregiones)": "REGIONAL",
             "🦅 Autoridades (CARs)": "CAR",
-            "💧 Cuencas Hidrográficas": "CUENCA"
+            "💧 Cuencas Hidrográficas": "CUENCA",
+            "🏘️ Barrios (Medellín)": "BARRIO",   # 🚀 NUEVO
+            "🛤️ Veredas (Antioquia)": "VEREDA"   # 🚀 NUEVO
         }
         
         escala_sel = st.radio("Escala de Análisis:", list(niveles.keys()), index=1, key="menu_escala_aleph")
@@ -262,6 +264,21 @@ def renderizar_menu_navegacion(pagina_actual):
 
         elif nivel_backend == "CAR":
             territorio_final = st.selectbox("Autoridad Ambiental:", sorted(LISTA_CARS), key="menu_car_aleph")
+            
+        # 🚀 NUEVO: Conexión al backend para Barrios y Veredas
+        elif nivel_backend in ["BARRIO", "VEREDA"]:
+            opciones_territorio = []
+            try:
+                from modules.utils import obtener_listado_territorios
+                opciones_territorio = obtener_listado_territorios(nivel_backend)
+                if not opciones_territorio:
+                    opciones_territorio = ["EL POBLADO"] if nivel_backend == "BARRIO" else ["SANTA ELENA"]
+            except Exception:
+                opciones_territorio = ["EL POBLADO"] if nivel_backend == "BARRIO" else ["SANTA ELENA"]
+                
+            titulo_selector = "Barrio / Comuna (Medellín):" if nivel_backend == "BARRIO" else "Vereda (Antioquia):"
+            territorio_final = st.selectbox(titulo_selector, opciones_territorio, key=f"menu_{nivel_backend.lower()}_aleph")
+            st.success(f"Territorio fijado: {territorio_final}")
             
         elif nivel_backend == "CUENCA":
             df_c = obtener_catalogo_cuencas()

@@ -744,7 +744,7 @@ with tab_mapa:
             hover_text = gdf_bio['Nombre Común'] if 'Nombre Común' in gdf_bio.columns else gdf_bio['Nombre Científico'] if 'Nombre Científico' in gdf_bio.columns else "Registro Biológico"
             fig.add_trace(go.Scattermapbox(lon=gdf_bio['lon'], lat=gdf_bio['lat'], mode='markers', marker=dict(size=7, color='rgb(0, 200, 100)'), text=hover_text, name='Biodiversidad'))
 
-        fig.update_layout(mapbox_style="carto-positron", mapbox=dict(center=dict(lat=center_lat, lon=center_lon), zoom=10), margin={"r":0,"t":0,"l":0,"b":0}, height=600, legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor="rgba(255, 255, 255, 0.8)"))
+        fig.update_layout(mapbox_style="open-street-map", mapbox=dict(center=dict(lat=center_lat, lon=center_lon), zoom=10), margin={"r":0,"t":0,"l":0,"b":0}, height=600, legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor="rgba(255, 255, 255, 0.8)"))
         st.plotly_chart(fig, width="stretch")
         
         if not gdf_bio.empty:

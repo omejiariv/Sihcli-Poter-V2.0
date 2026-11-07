@@ -2454,7 +2454,7 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
                         
                         fig_mapa_ctx = px.choropleth_mapbox(
                             zona_wgs84, geojson=zona_wgs84.geometry, locations=zona_wgs84.index,
-                            mapbox_style="carto-positron", opacity=0.5, color_discrete_sequence=["#3498db"],
+                            mapbox_style="open-street-map", opacity=0.5, color_discrete_sequence=["#3498db"],
                             center={"lat": centro_lat, "lon": centro_lon}, zoom=9.5
                         )
                         

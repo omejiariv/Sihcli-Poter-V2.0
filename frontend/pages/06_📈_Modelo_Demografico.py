@@ -950,14 +950,14 @@ with tab_dinamica:
                             df_tend['Estado'] = estado_calc
                     # =========================================================
                     
-                    # 4. Renderizado del Mapa Semáforo
+                    # 4. Renderizado del Mapa Semáforo (Libre de Tokens Mapbox)
                     fig_t = px.choropleth_mapbox(
                         df_tend, geojson=datos_m["geojson"], locations="id",
                         color="Estado",
                         color_discrete_map={"Crecimiento": "#2ecc71", "Estabilidad": "#f1c40f", "Decrecimiento": "#e74c3c"},
                         hover_name="Territorio",
                         hover_data={"id": False, "Estado": False, "Municipio Matriz": True, "Crecimiento (%)": True},
-                        mapbox_style="carto-positron",
+                        mapbox_style="open-street-map", # 🚀 FIX: Forzar motor libre OSM
                         center={"lat": datos_m["centro"]["lat"], "lon": datos_m["centro"]["lon"]},
                         zoom=9 if nivel_backend == "MUNICIPAL" else 7, opacity=0.75
                     )

@@ -742,7 +742,7 @@ with st.spinner(f"Renderizando inteligencia espacial para {especie_mapa}..."):
                     gdf_densidad, geojson=geojson_densidad, locations=gdf_densidad.index,
                     color=especie_mapa, hover_name=col_m, hover_data={especie_mapa: ':,.0f'},
                     color_continuous_scale=["#27ae60", "#f1c40f", "#e74c3c"],
-                    mapbox_style="carto-positron", zoom=6.2, center={"lat": 6.55, "lon": -75.3},
+                    mapbox_style="open-street-map", zoom=6.2, center={"lat": 6.55, "lon": -75.3},
                     opacity=0.75, labels={especie_mapa: f"Cabezas ({ultimo_anio})"}
                 )
                 fig_mapa1.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
@@ -818,7 +818,7 @@ with st.spinner(f"Renderizando inteligencia espacial para {especie_mapa}..."):
                                     hover_name=col_m,
                                     hover_data={'Tendencia': True, 'Proyeccion': ':,.0f', 'Delta': ':,.0f', 'Delta_Pct': ':.1f%'},
                                     color_discrete_map=color_discrete_map,
-                                    mapbox_style="carto-positron", zoom=6.2, center={"lat": 6.55, "lon": -75.3}, opacity=0.75
+                                    mapbox_style="open-street-map", zoom=6.2, center={"lat": 6.55, "lon": -75.3}, opacity=0.75
                                 )
                                 fig_mapa2.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
                                 

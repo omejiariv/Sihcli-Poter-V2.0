@@ -933,7 +933,7 @@ if gdf_zona_seleccionada is not None:
                         else: st.info("✅ Zona segura (Amenazas pequeñas filtradas).")
                     else: st.info("✅ Sin amenazas detectadas.")
 
-                    fig.update_layout(title=titulo, mapbox_style="carto-positron", mapbox_zoom=12, mapbox_center={"lat": c_lat, "lon": c_lon}, height=600, margin=dict(l=0,r=0,t=30,b=0))
+                    fig.update_layout(title=titulo, mapbox_style="open-street-map", mapbox_zoom=12, mapbox_center={"lat": c_lat, "lon": c_lon}, height=600, margin=dict(l=0,r=0,t=30,b=0))
                     st.plotly_chart(fig, width="stretch", config={'scrollZoom': True})
 
                 def caja_analisis_ai(mask_riesgo, tipo):

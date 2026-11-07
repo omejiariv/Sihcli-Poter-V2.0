@@ -3490,7 +3490,7 @@ def display_life_zones_tab(df_long, gdf_stations, gdf_subcuencas=None, user_loc=
         with col3:
             delta_p = st.slider("🌧️ Δ Precipitación (%)", -50.0, 50.0, 0.0, 5.0)
         with col4:
-            map_style = st.selectbox("🗺️ Capa Base:", ["satellite", "carto-positron", "open-street-map"])
+            map_style = st.selectbox("🗺️ Capa Base:", ["satellite", "open-street-map", "open-street-map"])
 
         st.markdown("---")
         c_mask1, c_mask2 = st.columns(2)
@@ -3551,7 +3551,7 @@ def display_life_zones_tab(df_long, gdf_stations, gdf_subcuencas=None, user_loc=
                                 fig = px.choropleth_mapbox(
                                     gdf_poly, geojson=gdf_poly.geometry, locations=gdf_poly.index,
                                     color="zona_vida", color_discrete_map=color_discrete,
-                                    mapbox_style=map_style if map_style != "satellite" else "carto-positron",
+                                    mapbox_style=map_style if map_style != "satellite" else "open-street-map",
                                     center={"lat": gdf_poly.geometry.centroid.y.mean(), "lon": gdf_poly.geometry.centroid.x.mean()},
                                     zoom=9, opacity=0.60, labels={'zona_vida': 'Ecosistema'}
                                 )
@@ -3688,7 +3688,7 @@ def display_life_zones_tab(df_long, gdf_stations, gdf_subcuencas=None, user_loc=
         with col3_c:
             delta_p_c = st.slider("🌧️ Δ Precipitación (%)", -50.0, 50.0, 0.0, 5.0, key="dp_comp")
         with col4_c:
-            map_style_c = st.selectbox("🗺️ Capa Base:", ["satellite", "carto-positron", "open-street-map"], key="style_comp")
+            map_style_c = st.selectbox("🗺️ Capa Base:", ["satellite", "open-street-map", "open-street-map"], key="style_comp")
 
         st.markdown("---")
         use_mask_c = st.checkbox("✂️ Recortar por Cuenca y mostrar Divisoria", value=True, key="mask_comp")
@@ -3730,7 +3730,7 @@ def display_life_zones_tab(df_long, gdf_stations, gdf_subcuencas=None, user_loc=
                                 fig = px.choropleth_mapbox(
                                     gdf_data, geojson=gdf_data.geometry, locations=gdf_data.index,
                                     color="zona_vida", color_discrete_map=color_discrete,
-                                    mapbox_style=map_style_c if map_style_c != "satellite" else "carto-positron",
+                                    mapbox_style=map_style_c if map_style_c != "satellite" else "open-street-map",
                                     center={"lat": center_lat, "lon": center_lon},
                                     zoom=8.5, opacity=0.60, labels={'zona_vida': 'Ecosistema'},
                                     title=title_text
@@ -3890,7 +3890,7 @@ def display_life_zones_tab(df_long, gdf_stations, gdf_subcuencas=None, user_loc=
                         hover_name=Config.STATION_NAME_COL,
                         hover_data={Config.ALTITUDE_COL: True, Config.PRECIPITATION_COL: ':.1f'},
                         zoom=8,
-                        mapbox_style="carto-positron",
+                        mapbox_style="open-street-map",
                         title="Clasificación Bioclimática por Estación",
                         color_discrete_map={v: k for k, v in lz.holdridge_colors.items()}
                     )
@@ -4349,7 +4349,7 @@ def display_climate_scenarios_tab(**kwargs):
         with c3:
             map_style = st.selectbox(
                 "🗺️ Contexto Cartográfico Base:", 
-                ["open-street-map", "carto-positron", "carto-darkmatter", "white-bg"], 
+                ["open-street-map", "open-street-map", "carto-darkmatter", "white-bg"], 
                 index=0
             )
 

@@ -2072,7 +2072,7 @@ with tab_mapa:
 
                 fig_dens.update_layout(
                     mapbox=dict(
-                        style="carto-positron",
+                        style="open-street-map",
                         center=dict(lat=df_plot['lat'].mean(), lon=df_plot['lon'].mean()),
                         zoom=9 if total_puntos_reales > 500 else 10.5,
                         layers=mapbox_layers
