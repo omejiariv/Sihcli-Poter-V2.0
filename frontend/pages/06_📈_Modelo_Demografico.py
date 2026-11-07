@@ -73,14 +73,71 @@ tab_modelos, tab_opt, tab_mapas, tab_dinamica = st.tabs([
 ])
 
 # ---------------------------------------------------------
-# 🛡️ PURIFICADOR DE NOMBRES PARA LA MATRIZ
+# 🛡️ PURIFICADOR Y ENRUTADOR DEMOGRÁFICO (Censo vs. Datos Micro)
 # ---------------------------------------------------------
-# Limpiamos el código numérico y los espacios del nombre que viene del Aleph
 import re
+import unicodedata
+import json
+import requests
+
 territorio_puro = re.sub(r'\s*-\s*\(.*?\)', '', str(territorio_sel)).strip()
 
-# Ejecutamos la consulta matemática usando el nombre limpio
-datos_modelo = calcular_poblacion_al_vuelo(territorio_puro, nivel_backend, area_global)
+@st.cache_data(ttl=3600, show_spinner=False)
+def extraer_poblacion_micro(nivel, nombre_territorio):
+    def normalizar(t):
+        return ''.join(c for c in unicodedata.normalize('NFD', str(t).upper()) if unicodedata.category(c) != 'Mn').strip()
+    target = normalizar(nombre_territorio)
+    
+    if nivel == "VEREDA":
+        try:
+            url_sb = st.secrets.get("SUPABASE_URL") or st.secrets.get("supabase", {}).get("SUPABASE_URL")
+            key_sb = st.secrets.get("SUPABASE_KEY") or st.secrets.get("supabase", {}).get("SUPABASE_KEY")
+            if url_sb and key_sb:
+                headers = {"apikey": key_sb, "Authorization": f"Bearer {key_sb}"}
+                url_query = f"{url_sb}/rest/v1/veredas_poblacion?select=vereda,poblacion_hab,extension_ha&ilike.vereda=*{target}*"
+                resp = requests.get(url_query, headers=headers, timeout=10)
+                if resp.status_code == 200:
+                    for fila in resp.json():
+                        if normalizar(fila.get("vereda", "")) == target:
+                            pob = int(float(fila.get("poblacion_hab", 0)))
+                            return pob, 2024, {"AREA": float(fila.get("extension_ha", 0)) * 10000}
+        except Exception: pass
+            
+    elif nivel == "BARRIO":
+        url_geo = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PoblacionBarrioCorregimiento_optimizado.geojson"
+        try:
+            resp = requests.get(url_geo, timeout=15)
+            if resp.status_code == 200:
+                for f in resp.json().get("features", []):
+                    props = f.get("properties", {})
+                    for cn in ["NOMBRE", "BARRIO", "SECTOR", "Comuna"]:
+                        if cn in props and normalizar(props[cn]) == target:
+                            for cp in ["POBLACION", "TOTAL_POB", "Pob_Total", "poblacion"]:
+                                if cp in props and props[cp] is not None:
+                                    try: return int(float(props[cp])), 2024, props
+                                    except: pass
+                            return 0, 2024, props
+        except Exception: pass
+    return 0, 2024, {}
+
+es_escala_micro = nivel_backend in ["BARRIO", "VEREDA"]
+datos_modelo = None
+pob_micro, anio_micro, props_micro = 0, 2024, {}
+
+if es_escala_micro:
+    with st.spinner(f"🔍 Consultando matriz espacial para {territorio_puro}..."):
+        pob_micro, anio_micro, props_micro = extraer_poblacion_micro(nivel_backend, territorio_puro)
+        if pob_micro > 0:
+            datos_modelo = {
+                'hist_anios': [anio_micro, 2050, 2100], 
+                'hist_pob': [pob_micro, pob_micro, pob_micro], # Se simula estático para evitar quiebres en gráficos
+                'total_actual': pob_micro,
+                'piramide': None,
+                'df_edades': pd.DataFrame()
+            }
+else:
+    # 🚀 FLUJO ORIGINAL (Departamentos, Municipios, Cuencas)
+    datos_modelo = calcular_poblacion_al_vuelo(territorio_puro, nivel_backend, area_global)
 
 # ---------------------------------------------------------
 # PESTAÑA 2: OPTIMIZACIÓN (Solver Matemático)
@@ -540,15 +597,96 @@ with tab_opt:
                         except Exception as e:
                             st.error(f"🚨 Error forjando Subregiones y CARs: {e}")
 
+import requests
+import json
+import unicodedata
+import streamlit as st
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def extraer_poblacion_micro(nivel, nombre_territorio):
+    """
+    Híbrido: Extrae población de Veredas desde la BD Supabase (Rápido) 
+    y de Barrios desde el GeoJSON de Medellín.
+    Retorna: poblacion_total, anio_base, propiedades_extra
+    """
+    def normalizar(t):
+        return ''.join(c for c in unicodedata.normalize('NFD', str(t).upper()) if unicodedata.category(c) != 'Mn').strip()
+        
+    target = normalizar(nombre_territorio)
+    
+    # -------------------------------------------------------------
+    # RUTA 1: VEREDAS (Consulta directa a la tabla SQL vía REST)
+    # -------------------------------------------------------------
+    if nivel == "VEREDA":
+        try:
+            url_sb = st.secrets.get("SUPABASE_URL") or st.secrets.get("supabase", {}).get("SUPABASE_URL")
+            key_sb = st.secrets.get("SUPABASE_KEY") or st.secrets.get("supabase", {}).get("SUPABASE_KEY")
+            
+            if url_sb and key_sb:
+                headers = {"apikey": key_sb, "Authorization": f"Bearer {key_sb}"}
+                # Consultamos la tabla 'veredas_poblacion' filtrando por el nombre
+                url_query = f"{url_sb}/rest/v1/veredas_poblacion?select=vereda,poblacion_hab,extension_ha&ilike.vereda=*{target}*"
+                
+                resp = requests.get(url_query, headers=headers, timeout=10)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    # Buscamos la coincidencia exacta
+                    for fila in data:
+                        if normalizar(fila.get("vereda", "")) == target:
+                            pob = int(float(fila.get("poblacion_hab", 0)))
+                            props = {"AREA": float(fila.get("extension_ha", 0)) * 10000} # Pasamos ha a m2
+                            return pob, 2024, props
+        except Exception as e:
+            st.error(f"Error consultando BD de veredas: {e}")
+            
+    # -------------------------------------------------------------
+    # RUTA 2: BARRIOS Y CORREGIMIENTOS MEDELLÍN (Desde GeoJSON)
+    # -------------------------------------------------------------
+    elif nivel == "BARRIO":
+        url_geo = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PoblacionBarrioCorregimiento_optimizado.geojson"
+        try:
+            resp = requests.get(url_geo, timeout=15)
+            if resp.status_code == 200:
+                data = resp.json()
+                for f in data.get("features", []):
+                    props = f.get("properties", {})
+                    # Validar en los posibles campos de nombre
+                    for cn in ["NOMBRE", "BARRIO", "SECTOR", "Comuna"]:
+                        if cn in props and normalizar(props[cn]) == target:
+                            # Extraer población
+                            for cp in ["POBLACION", "TOTAL_POB", "Pob_Total", "poblacion"]:
+                                if cp in props and props[cp] is not None:
+                                    try:
+                                        pob = int(float(props[cp]))
+                                        return pob, 2024, props
+                                    except: pass
+                            return 0, 2024, props
+        except Exception as e:
+            st.error(f"Error descargando GeoJSON de barrios: {e}")
+            
+    return 0, 2024, {}
+
 # ---------------------------------------------------------
 # PESTAÑA 1: TENDENCIA Y ESTRUCTURA
 # ---------------------------------------------------------
 with tab_modelos:
     st.subheader(f"Evolución y Estructura: {territorio_sel}")
     
-    if datos_modelo is None or not isinstance(datos_modelo, dict) or 'hist_anios' not in datos_modelo:
+    # 🌟 AVISO PARA BARRIOS Y VEREDAS
+    if es_escala_micro and datos_modelo:
+        st.success(f"📍 **Dato Local Confirmado:** El territorio **{territorio_sel}** tiene una población registrada de **{pob_micro:,} habitantes** (Año base: {anio_micro}).")
+        area_m2 = float(props_micro.get("AREA", props_micro.get("Shape_Area", 0)))
+        if area_m2 > 0:
+            dens = pob_micro / (area_m2 / 1_000_000)
+            st.info(f"📐 **Densidad Estimada:** {dens:,.0f} Hab/km²")
+        st.caption("ℹ️ *Nota: Veredas y barrios poseen un conteo total estático. Para proyecciones y pirámides top-down, utiliza el 'Mapa Dasimétrico'.*")
+
+    # ⚠️ AVISO PARA CUENCAS SIN DATOS EN CENSO
+    elif datos_modelo is None or not isinstance(datos_modelo, dict) or 'hist_anios' not in datos_modelo:
         st.warning(f"⚠️ El Censo Nacional no posee registros nominales directos para la entidad: **{territorio_sel}**.")
         st.info("💡 **Solución Dasimétrica:** Para calcular la población de una cuenca, debemos superponer su geometría sobre los municipios que la componen. Por favor, dirígete a la pestaña **'🗺️ Mapa Dasimétrico (V2.0)'** para realizar el cálculo topológico espacial.")
+    
+    # 📈 FLUJO ORIGINAL (DIBUJO DE GRÁFICAS)
     else:
         # Gráfica de curva básica
         fig_main = go.Figure()
