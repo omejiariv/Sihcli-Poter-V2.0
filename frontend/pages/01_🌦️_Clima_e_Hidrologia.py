@@ -143,10 +143,22 @@ def main():
 
     # --- C. CEREBRO ESTRUCTURAL (PARACAÍDAS) ---
     gdf_zona = None
-    if 'aleph_poligono' in st.session_state and st.session_state['aleph_poligono'] is not None and not st.session_state['aleph_poligono'].empty:
-        gdf_zona = st.session_state['aleph_poligono']
+    
+    # 🚀 FIX: Detección inteligente del tipo de variable en memoria
+    if 'aleph_poligono' in st.session_state and st.session_state['aleph_poligono'] is not None:
+        poligono_memoria = st.session_state['aleph_poligono']
         
-    if gdf_zona is None or gdf_zona.empty:
+        # Si es un DataFrame de Pandas/GeoPandas, comprobamos que no esté .empty
+        if hasattr(poligono_memoria, 'empty'):
+            if not poligono_memoria.empty:
+                gdf_zona = poligono_memoria
+        # Si es un diccionario (JSON), comprobamos su longitud
+        elif isinstance(poligono_memoria, dict):
+            if len(poligono_memoria) > 0:
+                gdf_zona = poligono_memoria
+
+    # Si gdf_zona sigue siendo None o si (siendo DataFrame) está vacío
+    if gdf_zona is None or (hasattr(gdf_zona, 'empty') and gdf_zona.empty):
         with st.spinner("🪂 Sincronizando topología estricta..."):
             def norm_text(t):
                 if not isinstance(t, str) or pd.isna(t): return ""

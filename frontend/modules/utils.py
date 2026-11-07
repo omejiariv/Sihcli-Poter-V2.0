@@ -348,30 +348,125 @@ def display_plotly_download_buttons(fig, file_prefix):
             st.info("💡 Para descarga PNG instala: `pip install kaleido`")
 
 
-# 🚀 CIRUGÍA 5B: Eliminamos geopandas y reestructuramos el decorador de caché
+# 🚀 CIRUGÍA 5B: Eliminamos geopandas estático y reestructuramos el decorador de caché (Cliente Ligero Híbrido)
 import plotly.express as px
 import pandas as pd
 import streamlit as st
 
-# Quitamos el hash_funcs de sqlalchemy para que la app no explote al iniciar
-@st.cache_data(ttl=86400, show_spinner=False)
-def cargar_capa_espacial_cache(query_sql, _arg2=None, geom_col="geometry", **kwargs):
-    if isinstance(_arg2, str): geom_col = _arg2
+@st.cache_data(ttl=3600, show_spinner=False)
+def cargar_capa_espacial_cache(territorio, nivel):
+    """
+    Descarga la geometría (GeoDataFrame) de un territorio desde Supabase.
+    Actúa como 'Parche Indestructible' soportando todos los niveles, incluyendo Barrios y Veredas.
+    """
     try:
-        # ⚠️ Lazy Loading Múltiple: Solo cargamos esto si la función realmente se usa
-        from sqlalchemy import text
-        from modules.db_manager import get_engine
-        import geopandas as gpd 
-        
-        engine_geo = get_engine() 
-        with engine_geo.connect() as conn:
-            conn.execute(text("SET statement_timeout = '600000';")) 
-            sql_a_ejecutar = text(query_sql) if isinstance(query_sql, str) else query_sql
-            return gpd.read_postgis(sql_a_ejecutar, conn, geom_col=geom_col)
+        import geopandas as gpd
+        import requests
+        import json
     except ImportError:
-        # Si falta geopandas o sqlalchemy (porque es el frontend), no estrellamos la app
         return None
-    except Exception as e: 
+
+    # -----------------------------------------------------------------
+    # RUTA 1: BARRIOS Y VEREDAS (Descarga directa desde GeoJSON)
+    # -----------------------------------------------------------------
+    if nivel in ["BARRIO", "VEREDA"]:
+        try:
+            url_geo = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PoblacionBarrioCorregimiento_optimizado.geojson" if nivel == "BARRIO" else "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/VeredasAntioquia.geojson"
+            
+            resp = requests.get(url_geo, timeout=15)
+            if resp.status_code == 200:
+                gdf_completo = gpd.GeoDataFrame.from_features(resp.json()["features"])
+                gdf_completo = gdf_completo.set_crs("EPSG:4326")
+                
+                # Campos donde podría estar el nombre
+                campos_busqueda = ["NOMBRE", "BARRIO", "SECTOR", "Comuna", "NOMBRE_VER", "VEREDA"]
+                target = normalizar_texto(territorio)
+                
+                for col in campos_busqueda:
+                    if col in gdf_completo.columns:
+                        gdf_completo['temp_norm'] = gdf_completo[col].astype(str).apply(normalizar_texto)
+                        gdf_filtrado = gdf_completo[gdf_completo['temp_norm'] == target].copy()
+                        if not gdf_filtrado.empty:
+                            gdf_filtrado = gdf_filtrado.drop(columns=['temp_norm'])
+                            return gdf_filtrado
+            return None
+        except Exception:
+            return None
+
+    # -----------------------------------------------------------------
+    # RUTA 2: NIVELES ESTÁNDAR (Consulta SQL vía API REST)
+    # -----------------------------------------------------------------
+    url_sb = st.secrets.get("SUPABASE_URL") or st.secrets.get("supabase", {}).get("SUPABASE_URL")
+    key_sb = st.secrets.get("SUPABASE_KEY") or st.secrets.get("supabase", {}).get("SUPABASE_KEY")
+
+    if not url_sb or not key_sb: return None
+
+    headers = {
+        "apikey": key_sb,
+        "Authorization": f"Bearer {key_sb}",
+        "Accept": "application/json"
+    }
+
+    url_base = f"{url_sb}/rest/v1"
+    
+    tabla = "municipios_geom"
+    columna_filtro = "nombre"
+    
+    if nivel == "DEPARTAMENTAL":
+        tabla = "departamentos_geom"
+    elif nivel in ["REGIONAL", "SUBREGIONAL", "SUBREGION"]:
+        tabla = "subregiones_geom"
+    elif nivel in ["CAR", "AUTORIDAD"]:
+        tabla = "cars_geom"
+        columna_filtro = "sigla"
+    elif nivel == "CUENCA":
+        tabla = "cuencas_geom"
+
+    territorio_clean = normalizar_texto(territorio)
+    url_query = f"{url_base}/{tabla}?select=*,geojson:geom"
+
+    try:
+        resp = requests.get(url_query, headers=headers, timeout=20)
+        if resp.status_code == 200:
+            data = resp.json()
+            if not data: return None
+
+            feature_encontrado = None
+            for row in data:
+                if columna_filtro in row:
+                    val_db = normalizar_texto(row[columna_filtro])
+                    if val_db == territorio_clean or territorio_clean in val_db:
+                        feature_encontrado = row
+                        break
+                
+                if not feature_encontrado and 'llave_universal' in row:
+                    val_llave = normalizar_texto(row['llave_universal'])
+                    if territorio_clean in val_llave:
+                        feature_encontrado = row
+                        break
+
+            if feature_encontrado and "geojson" in feature_encontrado:
+                geo_obj = feature_encontrado["geojson"]
+                if isinstance(geo_obj, str):
+                    try: geo_obj = json.loads(geo_obj)
+                    except: pass
+                
+                if "type" in geo_obj and geo_obj["type"] != "FeatureCollection":
+                    geo_obj = {
+                        "type": "FeatureCollection",
+                        "features": [{
+                            "type": "Feature",
+                            "properties": {k: v for k, v in feature_encontrado.items() if k != "geojson"},
+                            "geometry": geo_obj
+                        }]
+                    }
+                
+                gdf = gpd.GeoDataFrame.from_features(geo_obj["features"])
+                if gdf.crs is None: gdf = gdf.set_crs("EPSG:4326")
+                return gdf
+            
+        return None
+    except Exception:
         return None
 
 # ==============================================================================
