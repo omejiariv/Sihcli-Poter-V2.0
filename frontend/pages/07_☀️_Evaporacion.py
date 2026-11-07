@@ -537,21 +537,25 @@ with tab4:
             
             # 2. Extracción Dinámica (Desde la Matriz Limpia)
             lat_bd = def_lat
-            def_caudal_ls = 0.0
+            def_q_medio = 0.0; def_q_max = 0.0; def_q_min = 0.0
             
             if not df_embalses.empty and embalse_sel != "Personalizado":
                 fila_bd = df_embalses[df_embalses['Embalse'] == embalse_sel].iloc[0]
-                
-                # Las coordenadas ya vienen limpias y convertidas a float gracias al cargador
                 lat_bd = float(fila_bd.get('Latitud', def_lat))
                 
-                # 🚀 Búsqueda dinámica de la columna de Caudal Medio Multianual
-                col_caudal_medio = next((c for c in df_embalses.columns if 'caudal medio' in c.lower()), None)
+                # 🚀 Búsqueda dinámica de las tres columnas de Caudales
+                col_q_medio = next((c for c in df_embalses.columns if 'caudal' in c.lower() and 'medio' in c.lower()), None)
+                col_q_max = next((c for c in df_embalses.columns if 'caudal' in c.lower() and 'máx' in c.lower()), None)
+                col_q_min = next((c for c in df_embalses.columns if 'caudal' in c.lower() and 'mín' in c.lower()), None)
                 
-                if col_caudal_medio:
-                    val_caudal_m3s = float(fila_bd.get(col_caudal_medio, 0.0))
-                    # La tabla de Excel tiene los caudales en m³/s, así que los pasamos a L/s multiplicando por 1000
-                    def_caudal_ls = val_caudal_m3s * 1000.0
+                def procesar_caudal(columna):
+                    if not columna: return 0.0
+                    val = float(fila_bd.get(columna, 0.0))
+                    return val * 1000.0 if (val < 10000 and val > 0) else val # Conversión automática a L/s
+                    
+                def_q_medio = procesar_caudal(col_q_medio)
+                def_q_max = procesar_caudal(col_q_max)
+                def_q_min = procesar_caudal(col_q_min)
                 
             latitud = st.number_input(
                 "Latitud (°)", value=float(lat_bd), step=0.1, key=f"lat_{embalse_sel}",
@@ -613,7 +617,16 @@ with tab4:
             rs = st.slider("Radiación Solar (MJ/m²/día)", 5.0, 30.0, 18.0)
             
         with st.expander("🔬 Laboratorio de Escenarios", expanded=False):
-            escenario_climatico = st.selectbox("🌦️ Escenario Climático", ["Línea Base", "🔥 El Niño (Cálido/Seco)", "🌧️ La Niña (Húmedo/Nublado)", "🌍 Cambio Climático 2050"])
+            # 🚀 FIX: Inclusión de Escenarios Compuestos (ENSO + CC)
+            lista_escenarios = [
+                "Línea Base", 
+                "🔥 El Niño (Cálido/Seco)", 
+                "🌧️ La Niña (Húmedo/Nublado)", 
+                "🌍 Cambio Climático 2050",
+                "🌋 El Niño Severo + CC 2050",
+                "🌊 La Niña Extrema + CC 2050"
+            ]
+            escenario_climatico = st.selectbox("🌦️ Escenario Climático", lista_escenarios)
             calidad_agua = st.selectbox("🧪 Estado de Calidad", ["Óptima (Albedo 0.08)", "🦠 Eutrofización/Algas (Albedo 0.12)", "🟤 Alta Turbidez (Albedo 0.10)"])
             mitigacion = st.selectbox("🛡️ Intervención Tecnológica", ["Ninguna", "Bolas de Sombra (85% red.)", "Solares Flotantes FPV (50% red.)", "Mallas de Sombreo (75% red.)", "Monocapas Químicas (25% red.)"])
             pct_cobertura = st.slider("🛡️ Área de Cobertura Tecnológica (%)", 0, 100, 40, 5)
@@ -624,24 +637,40 @@ with tab4:
             escala_temporal = st.selectbox("Escala Temporal de Análisis", ["Día", "Semana", "Mes", "Año"], index=3)
             dias_simulacion = st.slider("⏳ Horizonte de Crisis (Días de Estiaje Severo)", 15, 365, 90, 15)
             
-            # 🚀 NUEVO: Oferta natural (Conectada al CSV)
+            # 🚀 ENRUTADOR HIDROLÓGICO: Sincronización Escenario <-> Caudal
+            q_sugerido = def_q_medio if 'def_q_medio' in locals() else 0.0
+            
+            if "El Niño" in escenario_climatico:
+                q_sugerido = def_q_min if 'def_q_min' in locals() else 0.0
+                if "Severo" in escenario_climatico: q_sugerido *= 0.85 # -15% estrés extremo
+            elif "La Niña" in escenario_climatico:
+                q_sugerido = def_q_max if 'def_q_max' in locals() else 0.0
+                if "Extrema" in escenario_climatico: q_sugerido *= 1.15 # +15% lluvias atípicas
+            elif "Cambio Climático 2050" in escenario_climatico:
+                q_sugerido *= 0.90 # -10% de reducción estructural en fuentes base
+                
             st.markdown("---")
-            st.caption("💧 **Oferta Hídrica Remanente**")
+            st.caption("💧 **Oferta Hídrica Remanente (Sincronizada al Escenario)**")
             caudal_afluente_ls = st.number_input(
                 "Afluentes Naturales + Manantiales (L/s)", 
-                value=float(def_caudal_ls) if 'def_caudal_ls' in locals() else 0.0, 
+                value=float(q_sugerido), 
                 step=100.0, 
-                help="Caudal medio de entrada (m³/s convertidos a L/s) extraído del CSV. En simulación de estiaje severo, reduce este valor."
+                help="El valor se auto-asigna leyendo el Caudal Medio, Máximo o Mínimo de la base de datos según el escenario climático seleccionado. Puedes sobrescribirlo manualmente."
             )
     
-    # --- APLICACIÓN DE MODIFICADORES ---
+    # --- APLICACIÓN DE MODIFICADORES CLIMÁTICOS (Penman-Monteith) ---
     mod_tmax, mod_tmin, mod_rh, mod_rs = t_max, t_min, rh_media, rs
+    
     if escenario_climatico == "🔥 El Niño (Cálido/Seco)":
         mod_tmax += 2.0; mod_rh = max(30.0, mod_rh - 10.0); mod_rs += 2.0
     elif escenario_climatico == "🌧️ La Niña (Húmedo/Nublado)":
         mod_tmax -= 1.0; mod_rh = min(100.0, mod_rh + 10.0); mod_rs -= 2.0
     elif escenario_climatico == "🌍 Cambio Climático 2050":
         mod_tmax += 2.5; mod_tmin += 1.5; mod_rs += 1.0
+    elif escenario_climatico == "🌋 El Niño Severo + CC 2050":
+        mod_tmax += 4.0; mod_tmin += 1.5; mod_rh = max(30.0, mod_rh - 15.0); mod_rs += 3.0
+    elif escenario_climatico == "🌊 La Niña Extrema + CC 2050":
+        mod_tmax += 1.5; mod_tmin += 1.5; mod_rh = min(100.0, mod_rh + 15.0); mod_rs -= 1.5
 
     if "Eutrofización" in calidad_agua: albedo_final = 0.12
     elif "Turbidez" in calidad_agua: albedo_final = 0.10
