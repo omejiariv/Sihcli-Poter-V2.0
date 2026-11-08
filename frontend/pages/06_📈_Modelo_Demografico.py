@@ -145,18 +145,17 @@ def extraer_datos_geojson_medellin(nombre_territorio):
     except Exception: pass
     return None
 
-# 🚀 Enrutador de Escalas (Veredas apagadas temporalmente)
-es_escala_micro = nivel_backend == "BARRIO"
+# 🚀 Enrutador de Escalas (Barrios y Corregimientos leen del mismo GeoJSON)
+es_escala_micro = nivel_backend in ["BARRIO", "VEREDA"]
 datos_modelo = None
 
 if es_escala_micro:
-    with st.spinner(f"🔍 Consultando estructura poblacional de {territorio_puro}..."):
-        datos_modelo = extraer_datos_geojson_medellin(territorio_puro)
-        
-elif nivel_backend == "VEREDA":
-    st.warning("🚧 El análisis demográfico de Veredas está en mantenimiento. Por favor, selecciona otro nivel.")
-    datos_modelo = None
+    # Usamos el nombre oculto si es un corregimiento para que haga match exacto en el GeoJSON
+    nombre_busqueda = st.session_state.get('aleph_lugar_oculto', territorio_puro)
     
+    with st.spinner(f"🔍 Consultando estructura poblacional de {nombre_busqueda}..."):
+        datos_modelo = extraer_datos_geojson_medellin(nombre_busqueda)
+        
 else:
     datos_modelo = calcular_poblacion_al_vuelo(territorio_puro, nivel_backend, area_global)
 
