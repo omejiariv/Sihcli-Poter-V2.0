@@ -63,111 +63,115 @@ año_sel = st.sidebar.slider("Año Base para Pirámides y Mapas:", 1985, 2042, 2
 anio_destino = st.sidebar.slider("Horizonte de Proyección (Curvas):", 2025, 2100, 2050)
 
 # ==========================================
-# 📊 PESTAÑAS DE LA INTERFAZ
-# ==========================================
-tab_modelos, tab_opt, tab_mapas, tab_dinamica = st.tabs([
-    "📈 Tendencia y Estructura",
-    "⚙️ Optimización (Solver)",
-    "🗺️ Mapa Dasimétrico (V2.0)",
-    "🗺️ Mapa Dinámica"
-])
-
-# ---------------------------------------------------------
 # 🛡️ PURIFICADOR Y ENRUTADOR DEMOGRÁFICO (Censo vs. Datos Micro)
-# ---------------------------------------------------------
+# ==========================================
 import re
 import unicodedata
 import json
 import requests
+import pandas as pd
 
 territorio_puro = re.sub(r'\s*-\s*\(.*?\)', '', str(territorio_sel)).strip()
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def extraer_poblacion_micro(nivel, nombre_territorio):
-    import unicodedata
+def extraer_datos_geojson_medellin(nombre_territorio):
+    """
+    Descarga el GeoJSON de Medellín y fabrica un 'datos_modelo' completo 
+    con pirámides de edades para la interfaz gráfica.
+    """
     def normalizar(t):
         if pd.isna(t): return ""
         return ''.join(c for c in unicodedata.normalize('NFD', str(t).upper()) if unicodedata.category(c) != 'Mn').strip()
         
     target = normalizar(nombre_territorio)
+    url_geo = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PoblacionBarrioCorregimiento_optimizado.geojson"
     
-    if nivel == "VEREDA":
-        try:
-            url_sb = st.secrets.get("SUPABASE_URL") or st.secrets.get("supabase", {}).get("SUPABASE_URL")
-            key_sb = st.secrets.get("SUPABASE_KEY") or st.secrets.get("supabase", {}).get("SUPABASE_KEY")
-            if url_sb and key_sb:
-                headers = {"apikey": key_sb, "Authorization": f"Bearer {key_sb}"}
-                url_query = f"{url_sb}/rest/v1/veredas_poblacion?select=vereda,poblacion_hab,extension_ha&ilike.vereda=*{target}*"
-                resp = requests.get(url_query, headers=headers, timeout=10)
-                if resp.status_code == 200:
-                    for fila in resp.json():
-                        if target in normalizar(fila.get("vereda", "")):
-                            pob = int(float(fila.get("poblacion_hab", 0)))
-                            return pob, 2024, {"AREA": float(fila.get("extension_ha", 0)) * 10000}
-        except Exception: pass
-            
-    elif nivel == "BARRIO":
-        url_geo = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PoblacionBarrioCorregimiento_optimizado.geojson"
-        try:
-            resp = requests.get(url_geo, timeout=15)
-            if resp.status_code == 200:
-                for f in resp.json().get("features", []):
-                    props = f.get("properties", {})
-                    match_encontrado = False
-                    
-                    # 1. Búsqueda agresiva en TODAS las propiedades de texto
-                    for key, val in props.items():
-                        if isinstance(val, str) and target in normalizar(val):
-                            match_encontrado = True
-                            break
-                            
-                    # 2. Si encontramos El Poblado, buscamos agresivamente la población
-                    if match_encontrado:
-                        # Primero buscamos campos obvios
-                        for cp in ["POBLACION", "TOTAL_POB", "Pob_Total", "pob", "hab", "habitantes", "total"]:
-                            for k, v in props.items():
-                                if cp.lower() in k.lower() and v is not None:
-                                    try: 
-                                        pob_calc = int(float(v))
-                                        if pob_calc > 0: return pob_calc, 2024, props
-                                    except: pass
+    try:
+        resp = requests.get(url_geo, timeout=15)
+        if resp.status_code == 200:
+            for f in resp.json().get("features", []):
+                props = f.get("properties", {})
+                
+                # 1. Búsqueda EXACTA
+                es_match = False
+                for cn in ["NOMBRE", "BARRIO", "SECTOR", "Comuna", "NombreBarr"]:
+                    if cn in props and normalizar(props[cn]) == target:
+                        es_match = True
+                        break
                         
-                        # Si no hay campo obvio, tomamos el número más grande que haya en las propiedades
-                        numeros = []
-                        for k, v in props.items():
-                            if isinstance(v, (int, float)):
-                                numeros.append(v)
-                            elif isinstance(v, str) and v.replace('.','').isnumeric():
-                                try: numeros.append(float(v))
-                                except: pass
-                        if numeros:
-                            pob_max = int(max(numeros))
-                            if pob_max > 0: return pob_max, 2024, props
+                if es_match:
+                    # 2. Extracción de Población Total
+                    pob_total = 0
+                    for cp in ["POBLACION", "TOTAL_POB", "Pob_Total", "poblacion"]:
+                        if cp in props and props[cp] is not None:
+                            try: pob_total = int(float(props[cp])); break
+                            except: pass
                             
-                        # Si todo falla pero encontramos el polígono, devolvemos 1 para que no salte el error
-                        return 1, 2024, props
-        except Exception: pass
-        
-    return 0, 2024, {}
+                    if pob_total == 0: return None
+                    
+                    # 3. Construcción de Pirámide de Edades 
+                    rangos = [
+                        ("Edad_00_04", 0), ("Edad_05_09", 5), ("Edad_10_14", 10), ("Edad_15_19", 15), 
+                        ("Edad_20_24", 20), ("Edad_25_29", 25), ("Edad_30_34", 30), ("Edad_35_39", 35), 
+                        ("Edad_40_44", 40), ("Edad_45_49", 45), ("Edad_50_54", 50), ("Edad_55_59", 55), 
+                        ("Edad_60_64", 60), ("Edad_65_69", 65), ("Edad_70_74", 70), ("Edad_75_79", 75), ("Edad_80ym", 80)
+                    ]
+                    
+                    fila_edades = {'año': 2024}
+                    cols_h, cols_m = [], []
+                    
+                    for nombre_col, edad in rangos:
+                        valor_total = float(props.get(nombre_col, 0))
+                        val_h, val_m = valor_total / 2.0, valor_total / 2.0
+                        
+                        col_h = f"Hombres_{edad}"
+                        col_m = f"Mujeres_{edad}"
+                        
+                        fila_edades[col_h] = val_h
+                        fila_edades[col_m] = val_m
+                        cols_h.append(col_h)
+                        cols_m.append(col_m)
+                        
+                    datos_modelo = {
+                        'hist_anios': [2024, 2050, 2100], 
+                        'hist_pob': [pob_total, pob_total, pob_total], 
+                        'total_actual': pob_total,
+                        'df_edades': pd.DataFrame([fila_edades]),
+                        'cols_hombres': cols_h,
+                        'cols_mujeres': cols_m,
+                        'area_geo': float(props.get("Shape_Area", 0))
+                    }
+                    return datos_modelo
+    except Exception: pass
+    return None
 
-es_escala_micro = nivel_backend in ["BARRIO", "VEREDA"]
+# 🚀 Enrutador de Escalas (Veredas apagadas temporalmente)
+es_escala_micro = nivel_backend == "BARRIO"
 datos_modelo = None
-pob_micro, anio_micro, props_micro = 0, 2024, {}
 
 if es_escala_micro:
-    with st.spinner(f"🔍 Consultando matriz espacial para {territorio_puro}..."):
-        pob_micro, anio_micro, props_micro = extraer_poblacion_micro(nivel_backend, territorio_puro)
-        if pob_micro > 0:
-            datos_modelo = {
-                'hist_anios': [anio_micro, 2050, 2100], 
-                'hist_pob': [pob_micro, pob_micro, pob_micro], # Se simula estático para evitar quiebres en gráficos
-                'total_actual': pob_micro,
-                'piramide': None,
-                'df_edades': pd.DataFrame()
-            }
+    with st.spinner(f"🔍 Consultando estructura poblacional de {territorio_puro}..."):
+        datos_modelo = extraer_datos_geojson_medellin(territorio_puro)
+        
+elif nivel_backend == "VEREDA":
+    st.warning("🚧 El análisis demográfico de Veredas está en mantenimiento. Por favor, selecciona otro nivel.")
+    datos_modelo = None
+    
 else:
-    # 🚀 FLUJO ORIGINAL (Departamentos, Municipios, Cuencas)
     datos_modelo = calcular_poblacion_al_vuelo(territorio_puro, nivel_backend, area_global)
+
+# ==========================================
+# 📊 PESTAÑAS DE LA INTERFAZ (Dinámicas)
+# ==========================================
+if es_escala_micro or nivel_backend == "VEREDA":
+    tab_modelos, = st.tabs(["📈 Tendencia y Estructura"])
+else:
+    tab_modelos, tab_opt, tab_mapas, tab_dinamica = st.tabs([
+        "📈 Tendencia y Estructura",
+        "⚙️ Optimización (Solver)",
+        "🗺️ Mapa Dasimétrico (V2.0)",
+        "🗺️ Mapa Dinámica"
+    ])
 
 # ---------------------------------------------------------
 # PESTAÑA 2: OPTIMIZACIÓN (Solver Matemático)
@@ -633,19 +637,21 @@ with tab_opt:
 with tab_modelos:
     st.subheader(f"Evolución y Estructura: {territorio_sel}")
     
-    # 🌟 AVISO PARA BARRIOS Y VEREDAS
+    # 🌟 AVISO PARA BARRIOS
     if es_escala_micro and datos_modelo:
-        st.success(f"📍 **Dato Local Confirmado:** El territorio **{territorio_sel}** tiene una población registrada de **{pob_micro:,} habitantes** (Año base: {anio_micro}).")
-        area_m2 = float(props_micro.get("AREA", props_micro.get("Shape_Area", 0)))
+        pob_actual = datos_modelo['total_actual']
+        st.success(f"📍 **Dato Local Confirmado:** {territorio_sel} tiene una población de **{pob_actual:,} habitantes** (Año base: 2018/2024).")
+        
+        area_m2 = datos_modelo.get('area_geo', 0)
         if area_m2 > 0:
-            dens = pob_micro / (area_m2 / 1_000_000)
+            dens = pob_actual / (area_m2 / 1_000_000)
             st.info(f"📐 **Densidad Estimada:** {dens:,.0f} Hab/km²")
-        st.caption("ℹ️ *Nota: Veredas y barrios poseen un conteo total estático. Para proyecciones y pirámides top-down, utiliza el 'Mapa Dasimétrico'.*")
 
     # ⚠️ AVISO PARA CUENCAS SIN DATOS EN CENSO
     elif datos_modelo is None or not isinstance(datos_modelo, dict) or 'hist_anios' not in datos_modelo:
-        st.warning(f"⚠️ El Censo Nacional no posee registros nominales directos para la entidad: **{territorio_sel}**.")
-        st.info("💡 **Solución Dasimétrica:** Para calcular la población de una cuenca, debemos superponer su geometría sobre los municipios que la componen. Por favor, dirígete a la pestaña **'🗺️ Mapa Dasimétrico (V2.0)'** para realizar el cálculo topológico espacial.")
+        st.warning(f"⚠️ No hay registros demográficos para: **{territorio_sel}**.")
+        if nivel_backend == "CUENCA":
+            st.info("💡 **Solución Dasimétrica:** Dirígete a la pestaña '🗺️ Mapa Dasimétrico (V2.0)'.")
     
     # 📈 FLUJO ORIGINAL (DIBUJO DE GRÁFICAS)
     else:
