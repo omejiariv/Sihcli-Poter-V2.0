@@ -312,8 +312,9 @@ def main():
     ids_estaciones = []
     
     # 🚀 FIX 1: Verificación temprana. Si el territorio falla, avisamos de inmediato.
-    if gdf_zona is None or gdf_zona.empty:
-        st.error("🚨 Error: No se pudo cargar el polígono del territorio. Asegúrate de tener el 'parche indestructible' de búsqueda territorial en esta página.")
+    # 🚀 FIX 1: Verificación temprana y segura del polígono
+    if gdf_zona is None or (hasattr(gdf_zona, 'empty') and gdf_zona.empty) or (isinstance(gdf_zona, dict) and not gdf_zona):
+        st.error("🚨 Error: No se pudo cargar el polígono del territorio. Asegúrate de tener conexión o de haber seleccionado un territorio válido.")
         st.stop()
         
     if gdf_stations is not None and not gdf_stations.empty:
