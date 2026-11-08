@@ -639,34 +639,44 @@ if not es_escala_micro and nivel_backend != "VEREDA":
 with tab_modelos:
     st.subheader(f"Evolución y Estructura: {territorio_sel}")
     
-    # 🌟 AVISO PARA BARRIOS
+    # --- 1. BLOQUE DE ALERTAS Y SÍNTESIS ---
+    mostrar_graficos = False
+    
     if es_escala_micro and datos_modelo:
-        pob_actual = datos_modelo['total_actual']
+        pob_actual = datos_modelo.get('total_actual', 0)
         st.success(f"📍 **Dato Local Confirmado:** {territorio_sel} tiene una población de **{pob_actual:,} habitantes** (Año base: 2018/2024).")
         
         area_m2 = datos_modelo.get('area_geo', 0)
         if area_m2 > 0:
             dens = pob_actual / (area_m2 / 1_000_000)
             st.info(f"📐 **Densidad Estimada:** {dens:,.0f} Hab/km²")
+            
+        st.caption("ℹ️ *Nota: La proyección histórica (línea de tiempo) está disponible a nivel municipal o superior.*")
+        mostrar_graficos = True # ¡Permitimos que avance a la pirámide!
 
-    # ⚠️ AVISO PARA CUENCAS SIN DATOS EN CENSO
     elif datos_modelo is None or not isinstance(datos_modelo, dict) or 'hist_anios' not in datos_modelo:
-        st.warning(f"⚠️ No hay registros demográficos para: **{territorio_sel}**.")
+        st.warning(f"⚠️ No hay registros demográficos históricos para: **{territorio_sel}**.")
         if nivel_backend == "CUENCA":
-            st.info("💡 **Solución Dasimétrica:** Dirígete a la pestaña '🗺️ Mapa Dasimétrico (V2.0)'.")
-    
-    # 📈 FLUJO ORIGINAL (DIBUJO DE GRÁFICAS)
+            st.info("💡 **Solución Dasimétrica:** Dirígete a la pestaña '🗺️ Mapa Dasimétrico (V2.0)' para un cálculo espacial.")
     else:
-        # Gráfica de curva básica
-        fig_main = go.Figure()
-        if 'resultados' in locals() and resultados:
-            mejor_mod = max(resultados, key=lambda k: resultados[k]['r2'])
-            fig_main.add_trace(go.Scatter(x=x_proj, y=resultados[mejor_mod]['y'], mode='lines', name=f'Mod. {mejor_mod}', line=dict(color='#10b981', width=3)))
+        mostrar_graficos = True # Flujo normal para municipios/cuencas
+    
+    
+    # --- 2. BLOQUE DE GRÁFICOS (Renderizado Dinámico) ---
+    if mostrar_graficos:
         
-        fig_main.add_trace(go.Scatter(x=datos_modelo['hist_anios'], y=datos_modelo['hist_pob'], mode='markers', name='Censo DANE', marker=dict(color='#ef4444', size=8)))
-        fig_main.update_layout(hovermode="x unified", template="plotly_white", height=350)
-        st.plotly_chart(fig_main, width="stretch")
+        # A. Gráfica de Curva Histórica (SOLO para Municipios, Departamentos y Cuencas)
+        if not es_escala_micro:
+            fig_main = go.Figure()
+            if 'resultados' in locals() and resultados:
+                mejor_mod = max(resultados, key=lambda k: resultados[k]['r2'])
+                fig_main.add_trace(go.Scatter(x=x_proj, y=resultados[mejor_mod]['y'], mode='lines', name=f'Mod. {mejor_mod}', line=dict(color='#10b981', width=3)))
+            
+            fig_main.add_trace(go.Scatter(x=datos_modelo['hist_anios'], y=datos_modelo['hist_pob'], mode='markers', name='Censo DANE', marker=dict(color='#ef4444', size=8)))
+            fig_main.update_layout(hovermode="x unified", template="plotly_white", height=350)
+            st.plotly_chart(fig_main, width="stretch")
 
+        # B. Pirámides de Edades (PARA TODOS: Macro y Micro)
         st.markdown("---")
         st.subheader("⚖️ Análisis Comparativo de Estructura Poblacional")
         
@@ -675,7 +685,7 @@ with tab_modelos:
         with col_p1:
             st.markdown(f"**Año Base / Seleccionado: {año_sel}**")
             df_e = datos_modelo['df_edades']
-            fila_anio = df_e[df_e['año'] == año_sel]
+            fila_anio = df_e[df_e['año'] == (2024 if es_escala_micro else año_sel)]
             
             if not fila_anio.empty:
                 fila = fila_anio.iloc[0]
@@ -689,7 +699,6 @@ with tab_modelos:
                     
                 df_h, df_m = pd.DataFrame(edades_h), pd.DataFrame(edades_m)
                 
-                # Agrupamos en rangos de 5 años
                 df_h['Rango'] = pd.cut(df_h['Edad'], bins=list(range(0, 105, 5)) + [200], labels=[f"{i}-{i+4}" for i in range(0, 100, 5)] + ["100+"], right=False)
                 df_m['Rango'] = pd.cut(df_m['Edad'], bins=list(range(0, 105, 5)) + [200], labels=[f"{i}-{i+4}" for i in range(0, 100, 5)] + ["100+"], right=False)
                 
@@ -706,41 +715,44 @@ with tab_modelos:
 
         with col_p2:
             año_comp = st.session_state.get('horizonte_proj', 2034) 
-            
             st.markdown(f"**Proyección Comparativa: {año_comp}**")
             
-            try:
-                datos_comp = calcular_poblacion_al_vuelo(territorio_puro, nivel_backend, area_global, anio_especifico=año_comp)
-                
-                if datos_comp is not None and not datos_comp.empty:
-                    fila_comp = datos_comp.iloc[0]
+            # La proyección comparativa (Top-Down matemática) solo aplica si NO es micro escala
+            if es_escala_micro:
+                st.info("La proyección futura por edades solo está disponible para escalas Municipales o Departamentales.")
+            else:
+                try:
+                    datos_comp = calcular_poblacion_al_vuelo(territorio_puro, nivel_backend, area_global, anio_especifico=año_comp)
                     
-                    edades_c_h, edades_c_m = [], []
-                    for col in datos_modelo['cols_hombres']:
-                        edad_num = int(re.search(r'\d+', col).group())
-                        edades_c_h.append({'Edad': edad_num, 'Valor': fila_comp[col]})
-                    for col in datos_modelo['cols_mujeres']:
-                        edad_num = int(re.search(r'\d+', col).group())
-                        edades_c_m.append({'Edad': edad_num, 'Valor': fila_comp[col]})
+                    if datos_comp is not None and not datos_comp.empty:
+                        fila_comp = datos_comp.iloc[0]
                         
-                    df_ch, df_cm = pd.DataFrame(edades_c_h), pd.DataFrame(edades_c_m)
-                    
-                    df_ch['Rango'] = pd.cut(df_ch['Edad'], bins=list(range(0, 105, 5)) + [200], labels=[f"{i}-{i+4}" for i in range(0, 100, 5)] + ["100+"], right=False)
-                    df_cm['Rango'] = pd.cut(df_cm['Edad'], bins=list(range(0, 105, 5)) + [200], labels=[f"{i}-{i+4}" for i in range(0, 100, 5)] + ["100+"], right=False)
-                    
-                    df_pyr_ch = df_ch.groupby('Rango', observed=True)['Valor'].sum().reset_index()
-                    df_pyr_cm = df_cm.groupby('Rango', observed=True)['Valor'].sum().reset_index()
-                    
-                    fig_p2 = go.Figure()
-                    fig_p2.add_trace(go.Bar(y=df_pyr_ch['Rango'], x=-df_pyr_ch['Valor'], name='Hombres', orientation='h', marker_color='#3498db'))
-                    fig_p2.add_trace(go.Bar(y=df_pyr_cm['Rango'], x=df_pyr_cm['Valor'], name='Mujeres', orientation='h', marker_color='#e74c3c'))
-                    fig_p2.update_layout(barmode='relative', height=400, margin=dict(l=0,r=0,t=0,b=0), showlegend=False)
-                    
-                    st.plotly_chart(fig_p2, width="stretch")
-                else:
-                    st.warning(f"No hay datos de proyección matemática disponibles para el año {año_comp}.")
-            except Exception as e:
-                st.error(f"Error calculando la pirámide proyectada: {e}")
+                        edades_c_h, edades_c_m = [], []
+                        for col in datos_modelo['cols_hombres']:
+                            edad_num = int(re.search(r'\d+', col).group())
+                            edades_c_h.append({'Edad': edad_num, 'Valor': fila_comp[col]})
+                        for col in datos_modelo['cols_mujeres']:
+                            edad_num = int(re.search(r'\d+', col).group())
+                            edades_c_m.append({'Edad': edad_num, 'Valor': fila_comp[col]})
+                            
+                        df_ch, df_cm = pd.DataFrame(edades_c_h), pd.DataFrame(edades_c_m)
+                        
+                        df_ch['Rango'] = pd.cut(df_ch['Edad'], bins=list(range(0, 105, 5)) + [200], labels=[f"{i}-{i+4}" for i in range(0, 100, 5)] + ["100+"], right=False)
+                        df_cm['Rango'] = pd.cut(df_cm['Edad'], bins=list(range(0, 105, 5)) + [200], labels=[f"{i}-{i+4}" for i in range(0, 100, 5)] + ["100+"], right=False)
+                        
+                        df_pyr_ch = df_ch.groupby('Rango', observed=True)['Valor'].sum().reset_index()
+                        df_pyr_cm = df_cm.groupby('Rango', observed=True)['Valor'].sum().reset_index()
+                        
+                        fig_p2 = go.Figure()
+                        fig_p2.add_trace(go.Bar(y=df_pyr_ch['Rango'], x=-df_pyr_ch['Valor'], name='Hombres', orientation='h', marker_color='#3498db'))
+                        fig_p2.add_trace(go.Bar(y=df_pyr_cm['Rango'], x=df_pyr_cm['Valor'], name='Mujeres', orientation='h', marker_color='#e74c3c'))
+                        fig_p2.update_layout(barmode='relative', height=400, margin=dict(l=0,r=0,t=0,b=0), showlegend=False)
+                        
+                        st.plotly_chart(fig_p2, width="stretch")
+                    else:
+                        st.warning(f"No hay datos de proyección matemática disponibles para el año {año_comp}.")
+                except Exception as e:
+                    st.error(f"Error calculando la pirámide proyectada: {e}")
 
 # ---------------------------------------------------------
 # PESTAÑA 3: GEOMETRÍA DASIMÉTRICA (V2.0 FASTAPI)

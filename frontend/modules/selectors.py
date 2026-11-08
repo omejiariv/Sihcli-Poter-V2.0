@@ -269,11 +269,28 @@ def renderizar_menu_navegacion(pagina_actual):
         elif nivel_backend in ["BARRIO", "VEREDA"]:
             opciones_territorio = []
             try:
-                from modules.utils import obtener_listado_territorios
-                opciones_territorio = obtener_listado_territorios(nivel_backend)
+                if nivel_backend == "BARRIO":
+                    # Leemos directamente los nombres del GeoJSON para no depender del backend antiguo
+                    import requests
+                    url_barrios = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PoblacionBarrioCorregimiento_optimizado.geojson"
+                    resp = requests.get(url_barrios, timeout=10)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        nombres = []
+                        for f in data.get("features", []):
+                            nom = f.get("properties", {}).get("NombreBarr")
+                            if nom: nombres.append(str(nom).strip().upper())
+                        opciones_territorio = sorted(list(set(nombres)))
+                
+                # Si falló la descarga o es VEREDA, intentamos el método tradicional
                 if not opciones_territorio:
-                    opciones_territorio = ["EL POBLADO"] if nivel_backend == "BARRIO" else ["SANTA ELENA"]
+                    from modules.utils import obtener_listado_territorios
+                    opciones_territorio = obtener_listado_territorios(nivel_backend)
             except Exception:
+                pass
+                
+            # Salvavidas final de seguridad
+            if not opciones_territorio:
                 opciones_territorio = ["EL POBLADO"] if nivel_backend == "BARRIO" else ["SANTA ELENA"]
                 
             titulo_selector = "Barrio / Comuna (Medellín):" if nivel_backend == "BARRIO" else "Vereda (Antioquia):"
