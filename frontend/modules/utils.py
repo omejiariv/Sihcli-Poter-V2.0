@@ -358,14 +358,8 @@ import geopandas as gpd
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def cargar_capa_espacial_cache(query_sql, _arg2=None, geom_col="geometry", **kwargs):
-    """
-    Función Universal: 
-    1. Si recibe SQL directo, usa PostGIS. 
-    2. Si recibe un nombre (El Aleph), descarga el polígono desde TerritorioMaestro.geojson.
-    """
     import requests
     
-    # 1. RUTA POSTGIS (Exclusiva para consultas SQL puras como Estaciones, Isoyetas, etc.)
     if isinstance(query_sql, str) and "SELECT" in query_sql.upper():
         if isinstance(_arg2, str): geom_col = _arg2
         try:
@@ -377,30 +371,39 @@ def cargar_capa_espacial_cache(query_sql, _arg2=None, geom_col="geometry", **kwa
                 return gpd.read_postgis(text(query_sql), conn, geom_col=geom_col)
         except Exception: return None
 
-    # 2. RUTA ALEPH (Territorio Maestro GeoJSON)
-    territorio = query_sql
+    from modules.utils import normalizar_texto
+    target = normalizar_texto(str(query_sql))
+    nivel = str(_arg2).upper() if _arg2 else ""
     
     try:
         url_geo = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
         resp = requests.get(url_geo, timeout=20)
         
         if resp.status_code == 200:
-            target = normalizar_texto(territorio)
+            poligonos_encontrados = []
             
-            # Escaneamos el GeoJSON en crudo para no sobrecargar la RAM convirtiendo todo a GeoPandas
             for f in resp.json().get("features", []):
                 props = f.get("properties", {})
+                mpio = normalizar_texto(props.get("mpio_cnmbr", ""))
                 
-                # Búsqueda universal: revisa todos los campos de texto del polígono
-                for key, val in props.items():
-                    if isinstance(val, str) and target in normalizar_texto(val):
-                        # ¡Lo encontramos! Convertimos solo este polígono a GeoDataFrame
-                        gdf_filtrado = gpd.GeoDataFrame.from_features([f])
-                        return gdf_filtrado.set_crs("EPSG:4326")
+                if mpio == "MEDELLIN":
+                    tipo = str(props.get("tipo", "")).upper()
+                    nom_barrio = normalizar_texto(props.get("bar_ccnmbr", ""))
+                    nom_comuna = normalizar_texto(props.get("comu_nmbre", ""))
+                    
+                    if nivel == "BARRIO" and tipo == "BARRIO" and nom_barrio == target:
+                        poligonos_encontrados.append(f)
+                    elif nivel == "VEREDA" and tipo == "CORREGIMIENTO" and nom_comuna == target:
+                        poligonos_encontrados.append(f)
+                    elif nivel == "COMUNA" and tipo == "BARRIO" and nom_comuna == target:
+                        poligonos_encontrados.append(f)
                         
+            if poligonos_encontrados:
+                # 🔥 FIX: Devolvemos el GeoDataFrame completo sin hacer fusiones pesadas
+                return gpd.GeoDataFrame.from_features(poligonos_encontrados).set_crs("EPSG:4326")
+                
         return None
-    except Exception:
-        return None
+    except Exception: return None
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def obtener_listado_territorios(nivel):
@@ -413,6 +416,10 @@ def obtener_listado_territorios(nivel):
     # Rutas rápidas
     if nivel == "DEPARTAMENTAL":
         return ["ANTIOQUIA", "BOGOTA, D.C.", "CUNDINAMARCA", "VALLE DEL CAUCA"]
+        
+    # 🔥 REGLA ESTRICTA: Solo mostramos los Corregimientos matrices
+    if nivel == "VEREDA":
+        return ["ALTAVISTA", "PALMITAS", "SAN ANTONIO DE PRADO", "SAN CRISTOBAL", "SANTA ELENA"]
     
     url_geo = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
     nombres = []
@@ -426,23 +433,17 @@ def obtener_listado_territorios(nivel):
                 mpio = str(props.get("mpio_cnmbr", "")).strip().upper()
                 tipo = str(props.get("tipo", "")).strip().upper()
                 
-                # Nombre de la unidad menor (Barrio o Vereda)
-                barrio_vereda = str(props.get("bar_ccnmbr", "")).strip().upper()
-                # Nombre de la unidad mayor (Comuna o Corregimiento)
-                comuna_correg = str(props.get("comu_nmbre", "")).strip().upper()
-                
-                if nivel == "BARRIO" and mpio == "MEDELLIN":
-                    if tipo == "BARRIO" and barrio_vereda and barrio_vereda not in ["NONE", "NAN"]:
-                        nombres.append(barrio_vereda)
-                        
-                if nivel == "BARRIO" and mpio == "MEDELLIN":
-                    if tipo == "BARRIO" and barrio_vereda and barrio_vereda not in ["NONE", "NAN"]:
-                        nombres.append(barrio_vereda)
-                        
-                elif nivel == "VEREDA" and mpio == "MEDELLIN":
-                    # 🔥 REGLA ESTRICTA: Solo mostramos los Corregimientos matrices, 
-                    # porque las veredas individuales no tienen datos de edades en el censo.
-                    if tipo == "CORREGIMIENTO":
+                if mpio == "MEDELLIN":
+                    # Nombre de la unidad menor (Barrio o Vereda)
+                    barrio_vereda = str(props.get("bar_ccnmbr", "")).strip().upper()
+                    # Nombre de la unidad mayor (Comuna o Corregimiento)
+                    comuna_correg = str(props.get("comu_nmbre", "")).strip().upper()
+                    
+                    if nivel == "BARRIO" and tipo == "BARRIO":
+                        if barrio_vereda and barrio_vereda not in ["NONE", "NAN"]:
+                            nombres.append(barrio_vereda)
+                            
+                    elif nivel == "COMUNA" and tipo == "BARRIO":
                         if comuna_correg and comuna_correg not in ["NONE", "NAN"]:
                             nombres.append(comuna_correg)
                             
