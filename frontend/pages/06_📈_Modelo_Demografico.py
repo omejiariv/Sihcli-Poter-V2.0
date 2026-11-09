@@ -122,14 +122,14 @@ def extraer_datos_geojson_medellin(nombre_territorio, nivel_solicitado):
                                 barrios_agrupados.append(props)
                                 break
                                 
-                # Para Comunas y Corregimientos, buscamos y sumamos por código SIN alterar el formato
+                # Para Comunas (ej. código "04") y Corregimientos (ej. código "90")
                 elif nivel_solicitado in ["COMUNA", "VEREDA"] and codigo_comuna_target:
-                    cod_b = str(props.get("Cod_Barrio", ""))
-                    # Extraemos los dos primeros dígitos reales para hacer el cruce seguro
-                    cod_limpio = cod_b.strip()[:2] if len(cod_b.strip()) >= 2 else cod_b.strip().zfill(2)
-                    
-                    if cod_limpio == codigo_comuna_target:
-                        barrios_agrupados.append(props)
+                    cod_b = str(props.get("Cod_Barrio", "")).strip()
+                    if cod_b:
+                        # Si es un barrio (ej. "401"), zfill lo hace "0401", empieza por "04".
+                        # Si es el corregimiento entero (ej. "90"), es exactamente igual a "90".
+                        if cod_b.zfill(4).startswith(codigo_comuna_target) or cod_b == codigo_comuna_target:
+                            barrios_agrupados.append(props)
                         
             if not barrios_agrupados: return None
             
