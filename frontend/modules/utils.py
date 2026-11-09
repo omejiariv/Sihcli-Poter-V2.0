@@ -348,94 +348,110 @@ def display_plotly_download_buttons(fig, file_prefix):
             st.info("💡 Para descarga PNG instala: `pip install kaleido`")
 
 
-# 🚀 CIRUGÍA 5B RESTAURADA: Mantener el cargador SQL original y crear uno nuevo para el Aleph
+# ==============================================================================
+# 🚀 CIRUGÍA MAESTRA: CARGADOR ESPACIAL UNIFICADO (Single Source of Truth)
+# ==============================================================================
 import plotly.express as px
 import pandas as pd
 import streamlit as st
+import geopandas as gpd
 
-# 1. FUNCIÓN ORIGINAL INTACTA (Para cargar estaciones, ríos, etc. vía SQL)
 @st.cache_data(ttl=86400, show_spinner=False)
 def cargar_capa_espacial_cache(query_sql, _arg2=None, geom_col="geometry", **kwargs):
-    if isinstance(_arg2, str): geom_col = _arg2
-    try:
-        from sqlalchemy import text
-        from modules.db_manager import get_engine
-        import geopandas as gpd 
-        
-        engine_geo = get_engine() 
-        with engine_geo.connect() as conn:
-            conn.execute(text("SET statement_timeout = '600000';")) 
-            sql_a_ejecutar = text(query_sql) if isinstance(query_sql, str) else query_sql
-            return gpd.read_postgis(sql_a_ejecutar, conn, geom_col=geom_col)
-    except ImportError:
-        return None
-    except Exception as e: 
-        return None
-
-# 2. NUEVA FUNCIÓN EXCLUSIVA (El Parche Indestructible para Barrios y Veredas)
-@st.cache_data(ttl=3600, show_spinner=False)
-def cargar_poligono_aleph_hibrido(territorio, nivel):
     """
-    Descarga la geometría de un territorio. Soporta niveles espaciales estándar y GeoJSON directos (Barrios/Veredas).
+    Función Universal: 
+    1. Si recibe SQL directo, usa PostGIS. 
+    2. Si recibe un nombre (El Aleph), descarga el polígono desde TerritorioMaestro.geojson.
     """
-    try:
-        import geopandas as gpd
-        import requests
-        import json
-    except ImportError:
-        return None
-
-    # RUTA 1: BARRIOS Y VEREDAS (GeoJSON)
-    if nivel in ["BARRIO", "VEREDA"]:
+    import requests
+    
+    # 1. RUTA POSTGIS (Exclusiva para consultas SQL puras como Estaciones, Isoyetas, etc.)
+    if isinstance(query_sql, str) and "SELECT" in query_sql.upper():
+        if isinstance(_arg2, str): geom_col = _arg2
         try:
-            url_geo = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PoblacionBarrioCorregimiento_optimizado.geojson" if nivel == "BARRIO" else "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/VeredasAntioquia.geojson"
-            resp = requests.get(url_geo, timeout=15)
-            if resp.status_code == 200:
-                gdf_completo = gpd.GeoDataFrame.from_features(resp.json()["features"])
-                gdf_completo = gdf_completo.set_crs("EPSG:4326")
-                
-                campos = ["NOMBRE", "BARRIO", "SECTOR", "Comuna", "NOMBRE_VER", "VEREDA"]
-                target = normalizar_texto(territorio)
-                
-                for col in campos:
-                    if col in gdf_completo.columns:
-                        gdf_completo['temp'] = gdf_completo[col].astype(str).apply(normalizar_texto)
-                        gdf_filtrado = gdf_completo[gdf_completo['temp'] == target].copy()
-                        if not gdf_filtrado.empty:
-                            gdf_filtrado = gdf_filtrado.drop(columns=['temp'])
-                            return gdf_filtrado
-            return None
+            from sqlalchemy import text
+            from modules.db_manager import get_engine
+            engine_geo = get_engine() 
+            with engine_geo.connect() as conn:
+                conn.execute(text("SET statement_timeout = '600000';")) 
+                return gpd.read_postgis(text(query_sql), conn, geom_col=geom_col)
         except Exception: return None
 
-    # RUTA 2: NIVELES ESTÁNDAR (REST API)
-    url_sb = st.secrets.get("SUPABASE_URL") or st.secrets.get("supabase", {}).get("SUPABASE_URL")
-    key_sb = st.secrets.get("SUPABASE_KEY") or st.secrets.get("supabase", {}).get("SUPABASE_KEY")
-    if not url_sb or not key_sb: return None
-
-    headers = {"apikey": key_sb, "Authorization": f"Bearer {key_sb}", "Accept": "application/json"}
+    # 2. RUTA ALEPH (Territorio Maestro GeoJSON)
+    territorio = query_sql
     
-    tabla, col_filtro = "municipios_geom", "nombre"
-    if nivel == "DEPARTAMENTAL": tabla = "departamentos_geom"
-    elif nivel in ["REGIONAL", "SUBREGIONAL", "SUBREGION"]: tabla = "subregiones_geom"
-    elif nivel in ["CAR", "AUTORIDAD"]: tabla, col_filtro = "cars_geom", "sigla"
-    elif nivel == "CUENCA": tabla = "cuencas_geom"
-
-    url_query = f"{url_sb}/rest/v1/{tabla}?select=*,geojson:geom"
-    t_clean = normalizar_texto(territorio)
-
     try:
-        resp = requests.get(url_query, headers=headers, timeout=20)
+        url_geo = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
+        resp = requests.get(url_geo, timeout=20)
+        
         if resp.status_code == 200:
-            for row in resp.json():
-                if t_clean in normalizar_texto(row.get(col_filtro, "")) or t_clean in normalizar_texto(row.get('llave_universal', "")):
-                    geo_obj = row.get("geojson", {})
-                    if isinstance(geo_obj, str): geo_obj = json.loads(geo_obj)
-                    if geo_obj.get("type") != "FeatureCollection":
-                        geo_obj = {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {k: v for k, v in row.items() if k != "geojson"}, "geometry": geo_obj}]}
-                    gdf = gpd.GeoDataFrame.from_features(geo_obj["features"]).set_crs("EPSG:4326")
-                    return gdf
+            target = normalizar_texto(territorio)
+            
+            # Escaneamos el GeoJSON en crudo para no sobrecargar la RAM convirtiendo todo a GeoPandas
+            for f in resp.json().get("features", []):
+                props = f.get("properties", {})
+                
+                # Búsqueda universal: revisa todos los campos de texto del polígono
+                for key, val in props.items():
+                    if isinstance(val, str) and target in normalizar_texto(val):
+                        # ¡Lo encontramos! Convertimos solo este polígono a GeoDataFrame
+                        gdf_filtrado = gpd.GeoDataFrame.from_features([f])
+                        return gdf_filtrado.set_crs("EPSG:4326")
+                        
         return None
-    except Exception: return None
+    except Exception:
+        return None
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def obtener_listado_territorios(nivel):
+    """
+    Escanea el TerritorioMaestro.geojson y devuelve la lista exacta de nombres
+    usando las propiedades 'tipo', 'bar_ccnmbr' y 'comu_nmbre'.
+    """
+    import requests
+    
+    # Rutas rápidas
+    if nivel == "DEPARTAMENTAL":
+        return ["ANTIOQUIA", "BOGOTA, D.C.", "CUNDINAMARCA", "VALLE DEL CAUCA"]
+    
+    url_geo = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
+    nombres = []
+    
+    try:
+        resp = requests.get(url_geo, timeout=20)
+        if resp.status_code == 200:
+            for f in resp.json().get("features", []):
+                props = f.get("properties", {})
+                
+                mpio = str(props.get("mpio_cnmbr", "")).strip().upper()
+                tipo = str(props.get("tipo", "")).strip().upper()
+                
+                # Nombre de la unidad menor (Barrio o Vereda)
+                barrio_vereda = str(props.get("bar_ccnmbr", "")).strip().upper()
+                # Nombre de la unidad mayor (Comuna o Corregimiento)
+                comuna_correg = str(props.get("comu_nmbre", "")).strip().upper()
+                
+                if nivel == "BARRIO" and mpio == "MEDELLIN":
+                    if tipo == "BARRIO" and barrio_vereda and barrio_vereda not in ["NONE", "NAN"]:
+                        nombres.append(barrio_vereda)
+                        
+                if nivel == "BARRIO" and mpio == "MEDELLIN":
+                    if tipo == "BARRIO" and barrio_vereda and barrio_vereda not in ["NONE", "NAN"]:
+                        nombres.append(barrio_vereda)
+                        
+                elif nivel == "VEREDA" and mpio == "MEDELLIN":
+                    # 🔥 REGLA ESTRICTA: Solo mostramos los Corregimientos matrices, 
+                    # porque las veredas individuales no tienen datos de edades en el censo.
+                    if tipo == "CORREGIMIENTO":
+                        if comuna_correg and comuna_correg not in ["NONE", "NAN"]:
+                            nombres.append(comuna_correg)
+                            
+            if nombres:
+                return sorted(list(set(nombres)))
+    except Exception:
+        pass
+        
+    return []
 
 # ==============================================================================
 # 🗺️ RENDERIZADOR DE MINIMAPA RADAR (Contexto Espacial Inercial)

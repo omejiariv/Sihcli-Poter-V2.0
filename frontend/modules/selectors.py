@@ -235,8 +235,9 @@ def renderizar_menu_navegacion(pagina_actual):
             "🧩 Regiones (Subregiones)": "REGIONAL",
             "🦅 Autoridades (CARs)": "CAR",
             "💧 Cuencas Hidrográficas": "CUENCA",
-            "🏘️ Barrios (Medellín)": "BARRIO",   # 🚀 NUEVO
-            "🛤️ Veredas (Antioquia)": "VEREDA"   # 🚀 NUEVO
+            "🏘️ Comunas (Medellín)": "COMUNA",
+            "🏘️ Barrios (Medellín)": "BARRIO",
+            "🛤️ Veredas (Antioquia)": "VEREDA"
         }
         
         escala_sel = st.radio("Escala de Análisis:", list(niveles.keys()), index=1, key="menu_escala_aleph")
@@ -265,46 +266,30 @@ def renderizar_menu_navegacion(pagina_actual):
         elif nivel_backend == "CAR":
             territorio_final = st.selectbox("Autoridad Ambiental:", sorted(LISTA_CARS), key="menu_car_aleph")
             
-        # 🚀 NUEVO: Conexión al backend (GeoJSON de Medellín) para Barrios y Corregimientos
-        elif nivel_backend in ["BARRIO", "VEREDA"]:
+        # ---------------------------------------------------------------------
+        # 🚀 ESCALAS MICRO: Barrios, Comunas y Veredas (Conexión Centralizada)
+        # ---------------------------------------------------------------------
+        elif nivel_backend in ["BARRIO", "COMUNA", "VEREDA"]:
             opciones_territorio = []
             try:
-                import requests
-                url_geo = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PoblacionBarrioCorregimiento_optimizado.geojson"
-                resp = requests.get(url_geo, timeout=10)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    nombres = []
-                    for f in data.get("features", []):
-                        nom = f.get("properties", {}).get("NombreBarr", "")
-                        nom_str = str(nom).strip().upper()
-                        
-                        # Si es Barrio, excluimos los que dicen "Corregimiento"
-                        if nivel_backend == "BARRIO":
-                            if "CORREGIMIENTO" not in nom_str and "SN_" not in nom_str:
-                                nombres.append(nom_str)
-                        # Si es Vereda, incluimos SOLO los que dicen "Corregimiento"
-                        elif nivel_backend == "VEREDA":
-                            if "CORREGIMIENTO" in nom_str:
-                                nombres.append(nom_str.replace("CORREGIMIENTO DE ", "").strip())
-                                
-                    opciones_territorio = sorted(list(set(nombres)))
+                from modules.utils import obtener_listado_territorios
+                opciones_territorio = obtener_listado_territorios(nivel_backend)
             except Exception:
                 pass
                 
-            # Salvavidas final
             if not opciones_territorio:
-                opciones_territorio = ["EL POBLADO"] if nivel_backend == "BARRIO" else ["SANTA ELENA"]
+                opciones_territorio = ["EL POBLADO"] if nivel_backend in ["BARRIO", "COMUNA"] else ["SANTA ELENA"]
                 
-            titulo_selector = "Barrio / Comuna (Medellín):" if nivel_backend == "BARRIO" else "Corregimiento (Medellín):"
+            if nivel_backend == "COMUNA":
+                titulo_selector = "Comuna (Medellín):"
+            elif nivel_backend == "BARRIO":
+                titulo_selector = "Barrio (Medellín):"
+            else:
+                titulo_selector = "Corregimiento (Medellín):"
+                
             territorio_final = st.selectbox(titulo_selector, opciones_territorio, key=f"menu_{nivel_backend.lower()}_aleph")
             
-            # Re-ensamblamos el nombre para que el buscador interno lo encuentre en el GeoJSON
-            if nivel_backend == "VEREDA" and territorio_final != "SANTA ELENA" and "CORREGIMIENTO" not in territorio_final:
-                st.session_state['aleph_lugar_oculto'] = f"Corregimiento de {territorio_final.title()}"
-            else:
-                st.session_state['aleph_lugar_oculto'] = territorio_final
-                
+            st.session_state['aleph_lugar_oculto'] = territorio_final
             st.success(f"Territorio fijado: {territorio_final}")
             
         elif nivel_backend == "CUENCA":

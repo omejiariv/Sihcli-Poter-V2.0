@@ -141,172 +141,26 @@ def main():
         st.error(f"Error cargando datos base: {e}")
         st.stop()
 
-    # --- C. CEREBRO ESTRUCTURAL (PARACAÍDAS) ---
+    # --- C. CEREBRO ESTRUCTURAL (EL ALEPH) ---
     gdf_zona = None
     
-    # 🚀 FIX: Detección inteligente del tipo de variable en memoria
+    # 1. Verificamos si el Aleph ya nos dejó el polígono listo en memoria (GeoDataFrame)
     if 'aleph_poligono' in st.session_state and st.session_state['aleph_poligono'] is not None:
         poligono_memoria = st.session_state['aleph_poligono']
-        
-        # Si es un DataFrame de Pandas/GeoPandas, comprobamos que no esté .empty
-        if hasattr(poligono_memoria, 'empty'):
-            if not poligono_memoria.empty:
-                gdf_zona = poligono_memoria
-        # Si es un diccionario (JSON), comprobamos su longitud
-        elif isinstance(poligono_memoria, dict):
-            if len(poligono_memoria) > 0:
-                gdf_zona = poligono_memoria
-
-    # Si gdf_zona sigue siendo None o si (siendo DataFrame) está vacío
+        if hasattr(poligono_memoria, 'empty') and not poligono_memoria.empty:
+            gdf_zona = poligono_memoria
+            
+    # 2. Si no está en memoria, usamos el Cargador Espacial Unificado
     if gdf_zona is None or (hasattr(gdf_zona, 'empty') and gdf_zona.empty):
-        with st.spinner("🪂 Sincronizando topología estricta..."):
-            def norm_text(t):
-                if not isinstance(t, str) or pd.isna(t): return ""
-                return unicodedata.normalize('NFKD', t.lower().strip()).encode('ascii', 'ignore').decode('utf-8')
+        from modules.utils import cargar_capa_espacial_cache
+        with st.spinner("🌍 Extrayendo geometría desde Territorio Maestro..."):
+            nombre_busqueda = st.session_state.get('aleph_lugar_oculto', nombre_zona)
+            gdf_zona = cargar_capa_espacial_cache(nombre_busqueda, nivel_jerarquico)
 
-            ALIASES_MUNICIPIOS = {
-                "el carmen de viboral": "EL CARMEN DE VIBORAL", "carmen de viboral": "EL CARMEN DE VIBORAL",
-                "el penol": "PEÑOL", "penol": "PEÑOL", "el retiro": "RETIRO", "retiro": "RETIRO",
-                "carolina del principe": "CAROLINA", "carolina": "CAROLINA",
-                "santa fe de antioquia": "Santa Fe De Antioquia", "santafe de antioquia": "Santa Fe De Antioquia",
-                "pueblo rico": "PUEBLORRICO", "pueblorrico": "PUEBLORRICO",
-                "san jose de la montana": "SAN JOSE DE LA MONTAÑA", "san andres de cuerquia": "SAN ANDRES DE CUERQUIA",
-                "san vicente": "SAN VICENTE FERRER", "san vicente ferrer": "SAN VICENTE FERRER",
-                "ciudad bolivar": "CIUDAD BOLIVAR", "bolivar": "CIUDAD BOLIVAR", "canasgordas": "CAÑASGORDAS"
-            }
-
-            lugar_crudo = str(nombre_zona).replace("CAR: ", "").strip()
-            lugar_norm_inicial = norm_text(lugar_crudo)
-            
-            if lugar_norm_inicial in ALIASES_MUNICIPIOS:
-                terr_norm = norm_text(ALIASES_MUNICIPIOS[lugar_norm_inicial])
-                lugar_limpio_exacto = ALIASES_MUNICIPIOS[lugar_norm_inicial] 
-            else:
-                terr_norm = norm_text(lugar_crudo)
-                lugar_limpio_exacto = lugar_crudo
-
-            nivel_norm = str(nivel_jerarquico).upper().strip()
-            
-            es_nacional = "NACION" in nivel_norm
-            es_departamento = "DEPARTAMENTO" in nivel_norm or "DEPARTAMENTAL" in nivel_norm or "COLOMBIA" in terr_norm
-            es_municipio = "MUNICIPAL" in nivel_norm or "MUNICIPIO" in nivel_norm
-            es_region = "REGION" in nivel_norm or "SUBREGION" in nivel_norm
-            es_car = "CAR" in nivel_norm or "AUTORIDAD" in nivel_norm
-            es_cuenca = "CUENCA" in nivel_norm or "NSS" in nivel_norm or "SZH" in nivel_norm
-            
-            encontrado = False
-
-            if es_cuenca and gdf_subcuencas is not None and not gdf_subcuencas.empty:
-                codigo_match = re.search(r'\((.*?)\)', str(nombre_zona))
-                cod_ideam = codigo_match.group(1).strip() if codigo_match else None
-                if cod_ideam:
-                    cols_cod = [c for c in gdf_subcuencas.columns if c.lower() in ['nss1', 'nss2', 'nss3', 'szh', 'zh', 'ah']]
-                    for col in cols_cod:
-                        mask_ideam = gdf_subcuencas[col].astype(str).str.strip() == cod_ideam
-                        if mask_ideam.any():
-                            gdf_zona_tmp = gdf_subcuencas[mask_ideam]
-                            gdf_zona = gpd.GeoDataFrame(geometry=[gdf_zona_tmp.unary_union], crs=gdf_subcuencas.crs)
-                            encontrado = True
-                            break
-                if not encontrado:
-                    def limpiar_texto(t):
-                        if not isinstance(t, str): return ""
-                        return re.sub(r'[^A-Z0-9]', '', ''.join(c for c in unicodedata.normalize('NFD', t.upper()) if unicodedata.category(c) != 'Mn'))
-                    mask_c = gdf_subcuencas.apply(lambda row: limpiar_texto(lugar_crudo) in limpiar_texto(str(row.to_dict().values())), axis=1)
-                    if mask_c.any():
-                        gdf_zona_tmp = gdf_subcuencas[mask_c]
-                        # =========================================================================
-                        # 🛡️ INTERCEPTOR ESPACIAL ESTRICTO (MATA CLONES)
-                        # =========================================================================
-                        codigo_unico = st.session_state.get('aleph_codigo_cuenca', 'N/A')
-                    
-                        # Solo aplicamos la cirugía si el Aleph nos mandó un código IDEAM válido
-                        if codigo_unico != 'N/A':
-                            # Sobreescribimos la búsqueda por nombre con una búsqueda exacta por cédula
-                            mask_estricta = (gdf_subcuencas['NSS3'] == codigo_unico) | \
-                                            (gdf_subcuencas['NSS2'] == codigo_unico) | \
-                                            (gdf_subcuencas['NSS1'] == codigo_unico)
-                        
-                            if mask_estricta.any():
-                                gdf_zona_tmp = gdf_subcuencas[mask_estricta]
-                            
-                            # 🔪 SEGURO ANTI-FRANKENSTEIN: 
-                            # Una microcuenca específica SOLO puede tener un polígono. Si hay más, cortamos.
-                            if len(gdf_zona_tmp) > 1:
-                                gdf_zona_tmp = gdf_zona_tmp.iloc[[0]]
-                        # =========================================================================
-                    
-                        gdf_zona = gpd.GeoDataFrame(geometry=[gdf_zona_tmp.unary_union], crs=gdf_subcuencas.crs)
-                        encontrado = True
-
-            if not encontrado and not es_cuenca:
-                # 🚀 FIX 1: Traemos la función indestructible de descarga directa
-                @st.cache_data(ttl=86400, show_spinner=False)
-                def get_territorio_maestro():
-                    import requests, io
-                    url = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
-                    try:
-                        res = requests.get(url, timeout=20)
-                        if res.status_code == 200:
-                            return gpd.read_file(io.BytesIO(res.content))
-                    except Exception:
-                        pass
-                    return gpd.GeoDataFrame()
-
-                gdf_tm = get_territorio_maestro()
-                
-                if not gdf_tm.empty:
-                    # Estandarizar columnas a minúsculas
-                    gdf_tm.columns = [c.lower() for c in gdf_tm.columns]
-                    
-                    # 🚀 FIX 2: Blindaje absoluto contra mayúsculas/minúsculas
-                    lugar_seguro = str(locals().get('nombre_zona', locals().get('lugar_crudo', '')))
-                    es_antioquia = "ANTIOQUIA" in lugar_seguro.upper() or "ANTIOQUIA" in str(terr_norm).upper()
-                    
-                    if es_nacional or es_departamento or es_antioquia:
-                        # Buscamos la columna de departamento
-                        col_depto = next((col for col in gdf_tm.columns if col in ['dpto_cnmbr', 'departamento']), None)
-                        
-                        if col_depto and not es_nacional:
-                            # Filtro indestructible
-                            mask = gdf_tm[col_depto].astype(str).str.upper().str.strip() == 'ANTIOQUIA'
-                        else:
-                            mask = pd.Series(True, index=gdf_tm.index)
-                            
-                        if mask.any():
-                            # Reparamos geometrías y fusionamos
-                            gdf_tm['geometry'] = gdf_tm.geometry.make_valid()
-                            gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
-                            encontrado = True
-                            
-                    elif es_region:
-                        col_sub = 'subregion'
-                        if col_sub in gdf_tm.columns:
-                            mask = gdf_tm[col_sub].apply(norm_text) == terr_norm
-                            if mask.any():
-                                gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
-                                encontrado = True
-                    
-                    elif es_car:
-                        col_car = 'car'
-                        if col_car in gdf_tm.columns:
-                            if terr_norm == "amva": mask = gdf_tm[col_car].apply(norm_text).str.contains("amva|aburra", na=False)
-                            elif terr_norm == "corantioquia":
-                                mask_corantioquia = gdf_tm[col_car].apply(norm_text).str.contains("corantioquia", na=False)
-                                mask_no_amva = ~gdf_tm['mpio_cnmbr'].apply(norm_text).isin(['medellin', 'bello', 'itagui', 'envigado', 'sabaneta', 'copacabana', 'la estrella', 'girardota', 'caldas', 'barbosa'])
-                                mask = mask_corantioquia & mask_no_amva
-                            else: mask = gdf_tm[col_car].apply(norm_text).str.contains(terr_norm, na=False)
-                            if mask.any():
-                                gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
-                                encontrado = True
-                    
-                    elif es_municipio:
-                        col_mpio = 'mpio_cnmbr' if 'mpio_cnmbr' in gdf_tm.columns else 'municipio'
-                        if col_mpio in gdf_tm.columns:
-                            mask = (gdf_tm[col_mpio].apply(norm_text) == terr_norm) | (gdf_tm[col_mpio] == lugar_limpio_exacto)
-                            if mask.any():
-                                gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
-                                encontrado = True
+    # 3. Muro de Seguridad Final
+    if gdf_zona is None or (hasattr(gdf_zona, 'empty') and gdf_zona.empty):
+        st.error("🚨 Error: No se pudo cargar el polígono del territorio. Asegúrate de tener conexión.")
+        st.stop()
 
     # --- D. CRUCE GEOGRÁFICO FINAL (CON BUFFER MÉTRICO Y LIMPIEZA) ---
     ids_estaciones = []
