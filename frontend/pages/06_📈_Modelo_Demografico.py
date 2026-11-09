@@ -75,17 +75,15 @@ territorio_puro = re.sub(r'\s*-\s*\(.*?\)', '', str(territorio_sel)).strip()
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def extraer_datos_geojson_medellin(nombre_territorio, nivel_solicitado):
-    import unicodedata
     import requests
     import pandas as pd
     from modules.demografia_tools import calcular_poblacion_al_vuelo
     from modules.utils import normalizar_texto
-    import re
     
     target = normalizar_texto(nombre_territorio)
     url_geo = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PoblacionBarrioCorregimiento_optimizado.geojson"
     
-    # 🔥 DICCIONARIO MAESTRO: Ahora incluye los códigos de los Corregimientos
+    # 🔥 DICCIONARIO MAESTRO: Comunas y Corregimientos con sus códigos oficiales
     dict_comunas = {
         "01": "POPULAR", "02": "SANTA CRUZ", "03": "MANRIQUE", "04": "ARANJUEZ",
         "05": "CASTILLA", "06": "DOCE DE OCTUBRE", "07": "ROBLEDO", "08": "VILLA HERMOSA",
@@ -95,12 +93,13 @@ def extraer_datos_geojson_medellin(nombre_territorio, nivel_solicitado):
         "80": "SAN ANTONIO DE PRADO", "90": "SANTA ELENA"
     }
     
-    codigo_comuna_target = None
+    # Detectar el código maestro para Comunas y Veredas (Corregimientos)
+    codigo_target = None
     if nivel_solicitado in ["COMUNA", "VEREDA"]:
         for cod, nom in dict_comunas.items():
             nom_norm = normalizar_texto(nom)
             if nom_norm == target or target in nom_norm or nom_norm in target:
-                codigo_comuna_target = cod
+                codigo_target = cod
                 break
                 
     try:
@@ -108,13 +107,7 @@ def extraer_datos_geojson_medellin(nombre_territorio, nivel_solicitado):
         if resp.status_code == 200:
             features = resp.json().get("features", [])
             
-            pob_total_medellin_geo = 0
-            for f in features:
-                for cp in ["POBLACION", "TOTAL_POB", "Pob_Total", "poblacion"]:
-                    if cp in f.get("properties", {}) and f["properties"][cp]:
-                        try: pob_total_medellin_geo += int(float(f["properties"][cp])); break
-                        except: pass
-
+            pob_total_medellin = sum(int(float(f["properties"].get("Pob_Total", 0) or 0)) for f in features if "Pob_Total" in f.get("properties", {}))
             barrios_agrupados = []
             
             for f in features:
@@ -129,26 +122,27 @@ def extraer_datos_geojson_medellin(nombre_territorio, nivel_solicitado):
                                 barrios_agrupados.append(props)
                                 break
                                 
-                # Para Comunas y Corregimientos, buscamos y sumamos por código (Infalible)
+                # Para Comunas y Corregimientos, buscamos y sumamos por código SIN alterar el formato
                 elif nivel_solicitado in ["COMUNA", "VEREDA"] and codigo_comuna_target:
-                    cod_b = str(props.get("Cod_Barrio", "")).zfill(4)
-                    if cod_b.startswith(codigo_comuna_target):
+                    cod_b = str(props.get("Cod_Barrio", ""))
+                    # Extraemos los dos primeros dígitos reales para hacer el cruce seguro
+                    cod_limpio = cod_b.strip()[:2] if len(cod_b.strip()) >= 2 else cod_b.strip().zfill(2)
+                    
+                    if cod_limpio == codigo_comuna_target:
                         barrios_agrupados.append(props)
                         
             if not barrios_agrupados: return None
             
+            # Consolidación Matemática
             pob_total_consolidada = 0
             area_consolidada = 0
             rangos = [f"Edad_{str(i).zfill(2)}_{str(i+4).zfill(2)}" for i in range(0, 80, 5)] + ["Edad_80ym"]
             suma_edades = {r: 0.0 for r in rangos}
             
             for b in barrios_agrupados:
-                for cp in ["POBLACION", "TOTAL_POB", "Pob_Total"]:
-                    if cp in b and b[cp]:
-                        try: pob_total_consolidada += int(float(b[cp])); break
-                        except: pass
-                area_consolidada += float(b.get("Shape_Area", 0))
-                for r in rangos: suma_edades[r] += float(b.get(r, 0))
+                pob_total_consolidada += int(float(b.get("Pob_Total", 0) or 0))
+                area_consolidada += float(b.get("Shape_Area", 0) or 0)
+                for r in rangos: suma_edades[r] += float(b.get(r, 0) or 0)
                 
             if pob_total_consolidada == 0: return None
             
@@ -161,7 +155,7 @@ def extraer_datos_geojson_medellin(nombre_territorio, nivel_solicitado):
                 fila_edades[col_h], fila_edades[col_m] = val_mitad, val_mitad
                 cols_h.append(col_h); cols_m.append(col_m)
                 
-            factor_escala = pob_total_consolidada / pob_total_medellin_geo if pob_total_medellin_geo > 0 else 0
+            factor_escala = pob_total_consolidada / pob_total_medellin if pob_total_medellin > 0 else 0
             datos_medellin = calcular_poblacion_al_vuelo("MEDELLIN", "MUNICIPAL", "Total")
             
             if datos_medellin and 'hist_anios' in datos_medellin:

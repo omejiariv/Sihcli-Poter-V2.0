@@ -359,7 +359,10 @@ import geopandas as gpd
 @st.cache_data(ttl=86400, show_spinner=False)
 def cargar_capa_espacial_cache(query_sql, _arg2=None, geom_col="geometry", **kwargs):
     import requests
+    import json
+    from modules.utils import normalizar_texto
     
+    # 1. RUTA POSTGIS (Consultas SQL puras)
     if isinstance(query_sql, str) and "SELECT" in query_sql.upper():
         if isinstance(_arg2, str): geom_col = _arg2
         try:
@@ -371,37 +374,67 @@ def cargar_capa_espacial_cache(query_sql, _arg2=None, geom_col="geometry", **kwa
                 return gpd.read_postgis(text(query_sql), conn, geom_col=geom_col)
         except Exception: return None
 
-    from modules.utils import normalizar_texto
     target = normalizar_texto(str(query_sql))
     nivel = str(_arg2).upper() if _arg2 else ""
-    
-    try:
-        url_geo = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
-        resp = requests.get(url_geo, timeout=20)
-        
-        if resp.status_code == 200:
-            poligonos_encontrados = []
+    es_micro = nivel in ["BARRIO", "COMUNA", "VEREDA"]
+
+    # 2. RUTA MICRO ESCALAS (Barrios, Comunas, Corregimientos desde TerritorioMaestro)
+    if es_micro:
+        try:
+            url_geo = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
+            resp = requests.get(url_geo, timeout=20)
             
-            for f in resp.json().get("features", []):
-                props = f.get("properties", {})
-                mpio = normalizar_texto(props.get("mpio_cnmbr", ""))
-                
-                if mpio == "MEDELLIN":
-                    tipo = str(props.get("tipo", "")).upper()
-                    nom_barrio = normalizar_texto(props.get("bar_ccnmbr", ""))
-                    nom_comuna = normalizar_texto(props.get("comu_nmbre", ""))
-                    
-                    if nivel == "BARRIO" and tipo == "BARRIO" and nom_barrio == target:
-                        poligonos_encontrados.append(f)
-                    elif nivel == "VEREDA" and tipo == "CORREGIMIENTO" and nom_comuna == target:
-                        poligonos_encontrados.append(f)
-                    elif nivel == "COMUNA" and tipo == "BARRIO" and nom_comuna == target:
-                        poligonos_encontrados.append(f)
+            if resp.status_code == 200:
+                poligonos_encontrados = []
+                for f in resp.json().get("features", []):
+                    props = f.get("properties", {})
+                    if normalizar_texto(props.get("mpio_cnmbr", "")) == "MEDELLIN":
+                        tipo = str(props.get("tipo", "")).upper()
+                        nom_barrio = normalizar_texto(props.get("bar_ccnmbr", ""))
+                        nom_comuna = normalizar_texto(props.get("comu_nmbre", ""))
                         
-            if poligonos_encontrados:
-                # 🔥 FIX: Devolvemos el GeoDataFrame completo sin hacer fusiones pesadas
-                return gpd.GeoDataFrame.from_features(poligonos_encontrados).set_crs("EPSG:4326")
-                
+                        if nivel == "BARRIO" and tipo == "BARRIO" and nom_barrio == target:
+                            poligonos_encontrados.append(f)
+                        elif nivel == "VEREDA" and tipo == "CORREGIMIENTO" and nom_comuna == target:
+                            poligonos_encontrados.append(f)
+                        elif nivel == "COMUNA" and tipo == "BARRIO" and nom_comuna == target:
+                            poligonos_encontrados.append(f)
+                            
+                if poligonos_encontrados:
+                    gdf_temp = gpd.GeoDataFrame.from_features(poligonos_encontrados).set_crs("EPSG:4326")
+                    # Fusión indispensable para que Geomorfología acepte las Comunas y Corregimientos
+                    if len(gdf_temp) > 1:
+                        gdf_temp['geometry'] = gdf_temp.geometry.make_valid()
+                        return gpd.GeoDataFrame(geometry=[gdf_temp.unary_union], crs="EPSG:4326")
+                    return gdf_temp
+            return None
+        except Exception: return None
+
+    # 3. RUTA MACRO ESCALAS RESTAURADA (Departamentos, Municipios, Subregiones, CARs, Cuencas)
+    url_sb = st.secrets.get("SUPABASE_URL") or st.secrets.get("supabase", {}).get("SUPABASE_URL")
+    key_sb = st.secrets.get("SUPABASE_KEY") or st.secrets.get("supabase", {}).get("SUPABASE_KEY")
+    if not url_sb or not key_sb: return None
+
+    headers = {"apikey": key_sb, "Authorization": f"Bearer {key_sb}", "Accept": "application/json"}
+    
+    tabla, col_filtro = "municipios_geom", "nombre"
+    if nivel == "DEPARTAMENTAL": tabla = "departamentos_geom"
+    elif nivel in ["REGIONAL", "SUBREGIONAL", "SUBREGION"]: tabla = "subregiones_geom"
+    elif nivel in ["CAR", "AUTORIDAD"]: tabla, col_filtro = "cars_geom", "sigla"
+    elif nivel == "CUENCA": tabla = "cuencas_geom"
+
+    url_query = f"{url_sb}/rest/v1/{tabla}?select=*,geojson:geom"
+
+    try:
+        resp = requests.get(url_query, headers=headers, timeout=20)
+        if resp.status_code == 200:
+            for row in resp.json():
+                if target in normalizar_texto(row.get(col_filtro, "")) or target in normalizar_texto(row.get('llave_universal', "")):
+                    geo_obj = row.get("geojson", {})
+                    if isinstance(geo_obj, str): geo_obj = json.loads(geo_obj)
+                    if geo_obj.get("type") != "FeatureCollection":
+                        geo_obj = {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {k: v for k, v in row.items() if k != "geojson"}, "geometry": geo_obj}]}
+                    return gpd.GeoDataFrame.from_features(geo_obj["features"]).set_crs("EPSG:4326")
         return None
     except Exception: return None
 
