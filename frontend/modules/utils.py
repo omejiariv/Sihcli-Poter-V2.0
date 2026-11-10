@@ -349,7 +349,7 @@ def display_plotly_download_buttons(fig, file_prefix):
 
 
 # ==============================================================================
-# 🚀 CIRUGÍA MAESTRA: CARGADOR ESPACIAL UNIFICADO (Single Source of Truth)
+# 🚀 CIRUGÍA MAESTRA: CARGADOR ESPACIAL UNIFICADO (Vía PostGIS y GeoJSON)
 # ==============================================================================
 import plotly.express as px
 import pandas as pd
@@ -359,50 +359,65 @@ import geopandas as gpd
 @st.cache_data(ttl=86400, show_spinner=False)
 def cargar_capa_espacial_cache(query_sql, _arg2=None, geom_col="geometry", **kwargs):
     import requests
-    import json
+    import io
+    import unicodedata
     
-    # 1. RUTA POSTGIS (Consultas SQL puras)
-    if isinstance(query_sql, str) and "SELECT" in query_sql.upper():
-        if isinstance(_arg2, str): geom_col = _arg2
+    # 🚀 FIX RAÍZ: Forzamos la conversión a texto puro para que no se le escape el "SELECT"
+    query_str = str(query_sql).strip()
+    
+    # 1. RUTA POSTGIS DIRECTA (Cuando la app pide una tabla completa, ej. "SELECT * FROM cuencas")
+    if "SELECT" in query_str.upper():
+        if isinstance(_arg2, str) and _arg2: 
+            geom_col = _arg2
         try:
             from sqlalchemy import text
             from modules.db_manager import get_engine
-            engine_geo = get_engine() 
-            with engine_geo.connect() as conn:
-                conn.execute(text("SET statement_timeout = '600000';")) 
-                return gpd.read_postgis(text(query_sql), conn, geom_col=geom_col)
-        except Exception: return None
+            engine = get_engine() 
+            
+            # Usamos una conexión fresca para evitar el temido 'InFailedSqlTransaction'
+            with engine.connect() as conn:
+                return gpd.read_postgis(text(query_str), conn, geom_col=geom_col)
+        except Exception as e:
+            st.error(f"🚨 Error cargando capa SQL ({geom_col}): {e}")
+            return None
 
-    # 2. RUTA NIVELES ESTÁNDAR (Departamentos, Municipios, Subregiones, CARs, Cuencas)
-    target = normalizar_texto(str(query_sql))
-    nivel = str(_arg2).upper() if _arg2 else ""
-
-    url_sb = st.secrets.get("SUPABASE_URL") or st.secrets.get("supabase", {}).get("SUPABASE_URL")
-    key_sb = st.secrets.get("SUPABASE_KEY") or st.secrets.get("supabase", {}).get("SUPABASE_KEY")
-    if not url_sb or not key_sb: return None
-
-    headers = {"apikey": key_sb, "Authorization": f"Bearer {key_sb}", "Accept": "application/json"}
+    # 2. RUTA TERRITORIO MAESTRO (Para búsquedas de nombres como "MEDELLIN", "ANTIOQUIA")
+    # Normalizamos la palabra que estamos buscando
+    target = ''.join(c for c in unicodedata.normalize('NFD', query_str.upper()) if unicodedata.category(c) != 'Mn')
     
-    tabla, col_filtro = "municipios_geom", "nombre"
-    if nivel == "DEPARTAMENTAL": tabla = "departamentos_geom"
-    elif nivel in ["REGIONAL", "SUBREGIONAL", "SUBREGION"]: tabla = "subregiones_geom"
-    elif nivel in ["CAR", "AUTORIDAD"]: tabla, col_filtro = "cars_geom", "sigla"
-    elif nivel == "CUENCA": tabla = "cuencas_geom"
-
-    url_query = f"{url_sb}/rest/v1/{tabla}?select=*,geojson:geom"
-
+    url_tm = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
     try:
-        resp = requests.get(url_query, headers=headers, timeout=20)
+        resp = requests.get(url_tm, timeout=20)
         if resp.status_code == 200:
-            for row in resp.json():
-                if target in normalizar_texto(row.get(col_filtro, "")) or target in normalizar_texto(row.get('llave_universal', "")):
-                    geo_obj = row.get("geojson", {})
-                    if isinstance(geo_obj, str): geo_obj = json.loads(geo_obj)
-                    if geo_obj.get("type") != "FeatureCollection":
-                        geo_obj = {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {k: v for k, v in row.items() if k != "geojson"}, "geometry": geo_obj}]}
-                    return gpd.GeoDataFrame.from_features(geo_obj["features"]).set_crs("EPSG:4326")
+            gdf_tm = gpd.read_file(io.BytesIO(resp.content))
+            
+            # Buscamos el nombre (ej. "MEDELLIN") en TODAS las columnas de texto del archivo
+            for col in gdf_tm.select_dtypes(include=['object', 'string']).columns:
+                # Normalizamos la columna completa para comparar manzanas con manzanas
+                col_norm = gdf_tm[col].astype(str).str.upper().apply(
+                    lambda x: ''.join(c for c in unicodedata.normalize('NFD', x) if unicodedata.category(c) != 'Mn')
+                )
+                
+                # Búsqueda exacta
+                if (col_norm == target).any():
+                    gdf_final = gdf_tm[col_norm == target].copy()
+                    if gdf_final.crs is None: gdf_final = gdf_final.set_crs("EPSG:4326")
+                    return gdf_final
+                    
+                # Búsqueda parcial (ej. "MUNICIPIO DE MEDELLIN")
+                if col_norm.str.contains(target).any():
+                    gdf_final = gdf_tm[col_norm.str.contains(target)].copy()
+                    if gdf_final.crs is None: gdf_final = gdf_final.set_crs("EPSG:4326")
+                    return gdf_final
+                    
+            st.error(f"🚨 Error: No se encontró '{target}' en el Territorio Maestro.")
+            return None
+        else:
+            st.error(f"🚨 Error descargando Territorio Maestro: HTTP {resp.status_code}")
+            return None
+    except Exception as e:
+        st.error(f"🚨 Error de conexión con Territorio Maestro: {e}")
         return None
-    except Exception: return None
 
 # ==============================================================================
 # 🗺️ RENDERIZADOR DE MINIMAPA RADAR (Contexto Espacial Inercial)
