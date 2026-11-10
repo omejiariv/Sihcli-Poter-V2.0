@@ -2343,19 +2343,18 @@ def display_climate_forecast_tab(df_enso, **kwargs):
                                 # Pico estimado en Nov/Dic 2026, seguido de disipación natural.
                                 noaa_forecast_oni = [1.5, 1.8, 2.1, 2.3, 2.4, 2.2, 1.8, 1.3, 0.8]
                                 
+                                # 4. Proyección Autoregresiva Pura (Vuelo libre del modelo XGBoost)
+                                ventana_actual = list(valores[-lags_memoria:])
+                                predicciones = []
+                                
                                 for i in range(months_future):
-                                    # Verificamos si estamos proyectando el ONI y si aún tenemos datos oficiales de la NOAA
-                                    if selected_label == "ONI (Oceanic Niño Index)" and i < len(noaa_forecast_oni):
-                                        # FASE 1: ASIMILACIÓN NOAA (Inyección directa del pronóstico oficial)
-                                        pred_real = float(noaa_forecast_oni[i])
-                                    else:
-                                        # FASE 2: VUELO LIBRE XGBOOST (Predicción autoregresiva basada en inercia)
-                                        X_pred = np.array([ventana_actual[-lags_memoria:]])
-                                        pred_real = float(modelo_xgb.predict(X_pred)[0])
-                                        
+                                    # El modelo mira hacia atrás (ventana_actual) para predecir el siguiente mes
+                                    X_pred = np.array([ventana_actual[-lags_memoria:]])
+                                    pred_real = float(modelo_xgb.predict(X_pred)[0])
+                                    
                                     predicciones.append(pred_real)
                                     
-                                    # Inyectar el dato (sea NOAA o XGBoost) en la memoria para el siguiente paso temporal
+                                    # Inyectar el dato predicho en la memoria para el siguiente paso temporal
                                     ventana_actual.append(pred_real)
                                 
                                 # 5. Construcción del DataFrame de Resultados

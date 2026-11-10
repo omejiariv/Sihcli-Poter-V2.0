@@ -49,56 +49,36 @@ def process_iri_plume(*args, **kwargs): return None
 def process_iri_probabilities(*args, **kwargs): return None
 
 # ==============================================================================
-# 🔌 LLAVE 1: CONEXIÓN PROBABILIDADES ENSO (CON INYECCIÓN SÚPER NIÑO 2026)
+# 🔌 LLAVE 1: CONEXIÓN PROBABILIDADES ENSO (NOAA CPC PURA)
 # ==============================================================================
 @st.cache_data(show_spinner=False, ttl=43200)
 def get_iri_enso_forecast():
     url_noaa = "https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso/roni/probabilities.php"
     df_limpio = pd.DataFrame()
-    fuente_datos = "Respaldo Offline (Súper Niño 2026)" #[cite: 3]
+    fuente_datos = "Desconocida"
     
     try:
-        html_content = fetch_url_secure(url_noaa) #[cite: 3]
-        text_content = re.sub(r'<[^>]+>', ' ', html_content).replace('%', '') #[cite: 3]
-        matches = re.findall(r'([A-Z]{3})\s+(?:20\d\d\s+)?(\d{1,3})\s+(\d{1,3})\s+(\d{1,3})', text_content) #[cite: 3]
+        html_content = fetch_url_secure(url_noaa)
+        text_content = re.sub(r'<[^>]+>', ' ', html_content).replace('%', '')
+        matches = re.findall(r'([A-Z]{3})\s+(?:20\d\d\s+)?(\d{1,3})\s+(\d{1,3})\s+(\d{1,3})', text_content)
         
         if matches:
             lista = []
             for m in matches:
                 trim, nina, neu, nino = m
-                if trim in ["NDF", "DEF", "EFM", "FMA", "MAM", "AMJ", "MJJ", "JJA", "JAS", "ASO", "SON", "OND", "NDE"]: #[cite: 3]
-                    lista.append({"Trimestre": trim, "La Niña": int(nina), "Neutral": int(neu), "El Niño": int(nino)}) #[cite: 3]
+                if trim in ["NDF", "DEF", "EFM", "FMA", "MAM", "AMJ", "MJJ", "JJA", "JAS", "ASO", "SON", "OND", "NDE"]:
+                    lista.append({"Trimestre": trim, "La Niña": int(nina), "Neutral": int(neu), "El Niño": int(nino)})
             if lista:
-                df_limpio = pd.DataFrame(lista).drop_duplicates(subset=['Trimestre']) #[cite: 3]
-                fuente_datos = "NOAA CPC (Extracción Nativa)" #[cite: 3]
+                df_limpio = pd.DataFrame(lista).drop_duplicates(subset=['Trimestre'])
+                fuente_datos = "NOAA CPC (Extracción Nativa)"
     except Exception as e:
-        print(f"Error nativo NOAA: {e}") #[cite: 3]
+        print(f"Error nativo NOAA: {e}")
 
-    # 🚀 FIX: Forzar la trayectoria del Súper Niño si la NOAA falla o entrega datos viejos
-    if df_limpio.empty or df_limpio['El Niño'].max() < 90:
-        trimestres_all = ["DEF", "EFM", "FMA", "MAM", "AMJ", "MJJ", "JJA", "JAS", "ASO", "SON", "OND", "NDE"] #[cite: 3]
-        mes_actual = datetime.datetime.now().month #[cite: 3]
-        idx_base = (mes_actual - 1) % 12 #[cite: 3]
-        lista_rescate = []
-        
-        # Escalada inminente hacia el Súper Niño a finales de 2026
-        probabilidades_nino = [85, 92, 98, 99] 
-        for i in range(4):
-            idx_trim = (idx_base + i) % 12
-            prob_nino = probabilidades_nino[i]
-            lista_rescate.append({
-                "Trimestre": trimestres_all[idx_trim], 
-                "La Niña": 0, 
-                "Neutral": 100 - prob_nino, 
-                "El Niño": prob_nino
-            })
-        df_limpio = pd.DataFrame(lista_rescate)
-        fuente_datos = "Proyección SIHCLI (Súper Niño 2026)"
-
+    # Si la NOAA falla por internet, simplemente devolvemos vacío en lugar de inventar un Súper Niño
     return df_limpio, {"fuente": fuente_datos}
 
 # ==============================================================================
-# 🔌 LLAVE 2: ÍNDICE ONI + CATEGORÍA + TENDENCIA (INYECCIÓN 2026)
+# 🔌 LLAVE 2: ÍNDICE ONI + CATEGORÍA + TENDENCIA (DATOS REALES)
 # ==============================================================================
 @st.cache_data(show_spinner=False, ttl=43200)
 def get_live_oni_data():
@@ -117,40 +97,17 @@ def get_live_oni_data():
         df_melt = df_melt.sort_values('fecha').reset_index(drop=True)
         
         # 🛡️ FILTRO DE DERIVADA (Escaneo profundo Anti-Errores)
-        # Calculamos el salto mes a mes de toda la historia
         df_melt['salto'] = df_melt['oni'].diff().abs()
-        
-        # Buscamos si en el último año (2026) hubo algún salto imposible (> 0.8 °C)
         errores = df_melt[(df_melt['fecha'].dt.year >= 2026) & (df_melt['salto'] > 0.8)]
-        
         if not errores.empty:
-            # Encontramos el error. Cortamos la historia un mes ANTES de que ocurriera la aberración.
             indice_corte = errores.index[0]
             df_melt = df_melt.iloc[:indice_corte].copy()
             print(f"⚠️ Dato corrupto detectado y purgado a partir de: {errores['fecha'].iloc[0].strftime('%Y-%m')}")
             
-        # Limpiamos la columna auxiliar
-        if 'salto' in df_melt.columns:
-            df_melt = df_melt.drop(columns=['salto'])
+        if 'salto' in df_melt.columns: df_melt = df_melt.drop(columns=['salto'])
 
-        # 🚀 INYECCIÓN ESTRUCTURAL: Llenar el vacío hasta MARZO 2027
-        max_fecha = df_melt['fecha'].max()
-        fecha_objetivo = pd.to_datetime('2027-03-01') 
-        
-        if max_fecha < fecha_objetivo:
-            fechas_faltantes = pd.date_range(start=max_fecha + pd.DateOffset(months=1), end=fecha_objetivo, freq='MS')
-            valores_oni = np.linspace(df_melt['oni'].iloc[-1], 2.6, len(fechas_faltantes))
-            
-            df_inyeccion = pd.DataFrame({
-                'YEAR': fechas_faltantes.year,
-                'mes': fechas_faltantes.strftime('%m'),
-                'oni': valores_oni,
-                'fecha': fechas_faltantes
-            })
-            df_melt = pd.concat([df_melt, df_inyeccion], ignore_index=True)
+        # 🧹 SE ELIMINÓ LA INYECCIÓN MATEMÁTICA AL 2027. AHORA ES 100% REAL.
 
-        df_melt = df_melt.sort_values('fecha').reset_index(drop=True)
-        
         def clasificar_fase_y_categoria(val):
             if val >= 2.0: return "Niño", "Súper Fuerte"
             if val >= 1.5: return "Niño", "Fuerte"

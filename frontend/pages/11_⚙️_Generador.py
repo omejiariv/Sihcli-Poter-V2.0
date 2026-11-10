@@ -84,7 +84,8 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "🗜️ 3. Compresor/Extractor ZIP",
     "🔁 4. Convertidor GeoJSON a SHP + Atributos",
     "🔗 5. Homologador de Veredas",
-    "🌧️ 6. Fusión Hidrometeorológica"
+    "🌧️ 6. Fusión Hidrometeorológica",
+    "📡 7. Puente SIATA (Tiempo Real)"
 ])
 
 # =====================================================================
@@ -778,6 +779,77 @@ def extraer_ideam_datos_abiertos(lista_estaciones, limite_registros=50000):
         return df_final
     else:
         return pd.DataFrame()
+
+        # =====================================================================
+# 📡 PESTAÑA 7: PUENTE SIATA (CONEXIÓN EN TIEMPO REAL VALLE DE ABURRÁ)
+# =====================================================================
+with tab7:
+    st.header("📡 Puente SIATA: Ingestión en Tiempo Real (Valle de Aburrá)")
+    st.markdown("""
+    Este módulo conecta tu red histórica del IDEAM (alojada en Supabase) con los sensores en vivo del SIATA.
+    Extrae tu catálogo maestro directamente de la base de datos, realiza un **cruce espacial automático (Nearest Neighbor < 200m)** y descarga la lluvia reciente mes a mes.
+    """)
+    
+    if st.button("🚀 Iniciar Sincronización Automática SIATA", type="primary", width="stretch"):
+        from modules import siata_api
+        from modules.db_manager import get_engine
+        from sqlalchemy import text
+        import geopandas as gpd
+        
+        # --- 1. LECTURA DEL CATÁLOGO DIRECTO DESDE SUPABASE ---
+        with st.spinner("1. Leyendo catálogo oficial de estaciones IDEAM desde Supabase..."):
+            try:
+                engine = get_engine()
+                with engine.connect() as conn:
+                    # Descargamos las estaciones con su geometría original
+                    query = "SELECT id_estacion as codigo, nombre, latitud as lat, longitud as lon, geom FROM estaciones WHERE geom IS NOT NULL"
+                    gdf_ideam = gpd.read_postgis(text(query), conn, geom_col="geom")
+                    
+                    if gdf_ideam.crs is None:
+                        gdf_ideam = gdf_ideam.set_crs("EPSG:4326")
+            except Exception as e:
+                st.error(f"🚨 Error conectando a la tabla 'estaciones' en Supabase: {e}")
+                st.stop()
+                
+        # --- 2. DESCARGA DEL CATÁLOGO SIATA ---
+        with st.spinner("2. Conectando al API del SIATA y descargando catálogo de sensores en vivo..."):
+            gdf_siata = siata_api.descargar_catalogo_siata()
+            if gdf_siata is None or gdf_siata.empty:
+                st.error("🚨 No se pudo descargar el catálogo del SIATA. El servidor podría estar inactivo.")
+                st.stop()
+                
+        # --- 3. CRUCE ESPACIAL (NEAREST NEIGHBOR) ---
+        with st.spinner("3. Ejecutando Cruce Espacial (Buscando gemelas a menos de 200m)..."):
+            dict_homologacion = siata_api.homologar_por_proximidad(gdf_ideam, gdf_siata, umbral_metros=200)
+            
+            if not dict_homologacion:
+                st.warning("⚠️ No se encontraron estaciones del SIATA a menos de 200m de las del IDEAM.")
+                st.stop()
+                
+            st.success(f"🎯 ¡Cruce Exitoso! La Inteligencia Espacial emparejó **{len(dict_homologacion)}** estaciones.")
+            with st.expander("Ver Diccionario de Homologación (IDEAM -> SIATA)"):
+                st.json(dict_homologacion)
+            
+        # --- 4. EXTRACCIÓN DE DATOS DE PRECIPITACIÓN ---
+        with st.spinner("4. Descargando datos pluviométricos (Últimos 6 meses) y consolidando..."):
+            df_lluvia_siata = siata_api.extraer_lluvia_reciente_siata(dict_homologacion, meses_atras=6)
+            
+            if not df_lluvia_siata.empty:
+                st.success("✅ ¡Datos descargados y consolidados mensualmente!")
+                st.dataframe(df_lluvia_siata, width="stretch")
+                
+                csv_siata = df_lluvia_siata.to_csv(sep=';', decimal=',', index=False).encode('utf-8-sig')
+                st.download_button(
+                    label="📥 Descargar Matriz SIATA (Lista para Gemelo Digital)",
+                    data=csv_siata,
+                    file_name="Datos_SIATA_Recientes_Mes.csv",
+                    mime="text/csv",
+                    type="primary",
+                    width="stretch"
+                )
+                st.info("💡 **Último paso:** Descarga este archivo CSV y súbelo en la pestaña **'6. Fusión Hidrometeorológica'** (casilla 'Transición Reciente'). El sistema unirá esta data viva con tu historia del IDEAM.")
+            else:
+                st.warning("Se emparejaron estaciones, pero el servidor del SIATA no reportó lluvia válida para este semestre.")
 
 # ==========================================
 # 🚀 ZONA DE PRUEBAS
