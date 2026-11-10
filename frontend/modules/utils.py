@@ -360,7 +360,6 @@ import geopandas as gpd
 def cargar_capa_espacial_cache(query_sql, _arg2=None, geom_col="geometry", **kwargs):
     import requests
     import json
-    from modules.utils import normalizar_texto
     
     # 1. RUTA POSTGIS (Consultas SQL puras)
     if isinstance(query_sql, str) and "SELECT" in query_sql.upper():
@@ -374,43 +373,10 @@ def cargar_capa_espacial_cache(query_sql, _arg2=None, geom_col="geometry", **kwa
                 return gpd.read_postgis(text(query_sql), conn, geom_col=geom_col)
         except Exception: return None
 
+    # 2. RUTA NIVELES ESTÁNDAR (Departamentos, Municipios, Subregiones, CARs, Cuencas)
     target = normalizar_texto(str(query_sql))
     nivel = str(_arg2).upper() if _arg2 else ""
-    es_micro = nivel in ["BARRIO", "COMUNA", "VEREDA"]
 
-    # 2. RUTA MICRO ESCALAS (Barrios, Comunas, Corregimientos desde TerritorioMaestro)
-    if es_micro:
-        try:
-            url_geo = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
-            resp = requests.get(url_geo, timeout=20)
-            
-            if resp.status_code == 200:
-                poligonos_encontrados = []
-                for f in resp.json().get("features", []):
-                    props = f.get("properties", {})
-                    if normalizar_texto(props.get("mpio_cnmbr", "")) == "MEDELLIN":
-                        tipo = str(props.get("tipo", "")).upper()
-                        nom_barrio = normalizar_texto(props.get("bar_ccnmbr", ""))
-                        nom_comuna = normalizar_texto(props.get("comu_nmbre", ""))
-                        
-                        if nivel == "BARRIO" and tipo == "BARRIO" and nom_barrio == target:
-                            poligonos_encontrados.append(f)
-                        elif nivel == "VEREDA" and tipo == "CORREGIMIENTO" and nom_comuna == target:
-                            poligonos_encontrados.append(f)
-                        elif nivel == "COMUNA" and tipo == "BARRIO" and nom_comuna == target:
-                            poligonos_encontrados.append(f)
-                            
-                if poligonos_encontrados:
-                    gdf_temp = gpd.GeoDataFrame.from_features(poligonos_encontrados).set_crs("EPSG:4326")
-                    # Fusión indispensable para que Geomorfología acepte las Comunas y Corregimientos
-                    if len(gdf_temp) > 1:
-                        gdf_temp['geometry'] = gdf_temp.geometry.make_valid()
-                        return gpd.GeoDataFrame(geometry=[gdf_temp.unary_union], crs="EPSG:4326")
-                    return gdf_temp
-            return None
-        except Exception: return None
-
-    # 3. RUTA MACRO ESCALAS RESTAURADA (Departamentos, Municipios, Subregiones, CARs, Cuencas)
     url_sb = st.secrets.get("SUPABASE_URL") or st.secrets.get("supabase", {}).get("SUPABASE_URL")
     key_sb = st.secrets.get("SUPABASE_KEY") or st.secrets.get("supabase", {}).get("SUPABASE_KEY")
     if not url_sb or not key_sb: return None
@@ -437,55 +403,6 @@ def cargar_capa_espacial_cache(query_sql, _arg2=None, geom_col="geometry", **kwa
                     return gpd.GeoDataFrame.from_features(geo_obj["features"]).set_crs("EPSG:4326")
         return None
     except Exception: return None
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def obtener_listado_territorios(nivel):
-    """
-    Escanea el TerritorioMaestro.geojson y devuelve la lista exacta de nombres
-    usando las propiedades 'tipo', 'bar_ccnmbr' y 'comu_nmbre'.
-    """
-    import requests
-    
-    # Rutas rápidas
-    if nivel == "DEPARTAMENTAL":
-        return ["ANTIOQUIA", "BOGOTA, D.C.", "CUNDINAMARCA", "VALLE DEL CAUCA"]
-        
-    # 🔥 REGLA ESTRICTA: Solo mostramos los Corregimientos matrices
-    if nivel == "VEREDA":
-        return ["ALTAVISTA", "PALMITAS", "SAN ANTONIO DE PRADO", "SAN CRISTOBAL", "SANTA ELENA"]
-    
-    url_geo = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
-    nombres = []
-    
-    try:
-        resp = requests.get(url_geo, timeout=20)
-        if resp.status_code == 200:
-            for f in resp.json().get("features", []):
-                props = f.get("properties", {})
-                
-                mpio = str(props.get("mpio_cnmbr", "")).strip().upper()
-                tipo = str(props.get("tipo", "")).strip().upper()
-                
-                if mpio == "MEDELLIN":
-                    # Nombre de la unidad menor (Barrio o Vereda)
-                    barrio_vereda = str(props.get("bar_ccnmbr", "")).strip().upper()
-                    # Nombre de la unidad mayor (Comuna o Corregimiento)
-                    comuna_correg = str(props.get("comu_nmbre", "")).strip().upper()
-                    
-                    if nivel == "BARRIO" and tipo == "BARRIO":
-                        if barrio_vereda and barrio_vereda not in ["NONE", "NAN"]:
-                            nombres.append(barrio_vereda)
-                            
-                    elif nivel == "COMUNA" and tipo == "BARRIO":
-                        if comuna_correg and comuna_correg not in ["NONE", "NAN"]:
-                            nombres.append(comuna_correg)
-                            
-            if nombres:
-                return sorted(list(set(nombres)))
-    except Exception:
-        pass
-        
-    return []
 
 # ==============================================================================
 # 🗺️ RENDERIZADOR DE MINIMAPA RADAR (Contexto Espacial Inercial)

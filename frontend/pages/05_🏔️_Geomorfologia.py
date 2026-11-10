@@ -6,6 +6,7 @@ os.environ["PROJ_LIB"] = "/home/omejiariv/Sihcli-Poter-V2.0/venv/lib/python3.10/
 import sys
 import numpy as np
 import pandas as pd
+import streamlit.components.v1 as components
 import geopandas as gpd
 import rasterio
 from rasterio.mask import mask

@@ -2,13 +2,13 @@
 
 import streamlit as st
 import pandas as pd
+import streamlit.components.v1 as components
 import numpy as np
 import plotly.graph_objects as go
 from sqlalchemy import text
 import geopandas as gpd
 import os
 import sys
-
 
 import folium
 from folium.features import DivIcon

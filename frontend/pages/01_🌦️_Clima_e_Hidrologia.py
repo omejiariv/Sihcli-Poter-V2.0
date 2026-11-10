@@ -144,35 +144,33 @@ def main():
     # --- C. CEREBRO ESTRUCTURAL (EL ALEPH) ---
     gdf_zona = None
     
-    # 1. Verificamos si el Aleph ya nos dejó el polígono listo en memoria (GeoDataFrame)
+    # 1. Recuperar de memoria (si el menú ya lo validó)
     if 'aleph_poligono' in st.session_state and st.session_state['aleph_poligono'] is not None:
         poligono_memoria = st.session_state['aleph_poligono']
         if hasattr(poligono_memoria, 'empty') and not poligono_memoria.empty:
             gdf_zona = poligono_memoria
             
-    # 2. Si no está en memoria, usamos el Cargador Espacial Unificado
+    # 2. Si no está en memoria, invocar al Cargador Espacial Universal
     if gdf_zona is None or (hasattr(gdf_zona, 'empty') and gdf_zona.empty):
         from modules.utils import cargar_capa_espacial_cache
         with st.spinner("🌍 Extrayendo geometría desde Territorio Maestro..."):
             nombre_busqueda = st.session_state.get('aleph_lugar_oculto', nombre_zona)
             gdf_zona = cargar_capa_espacial_cache(nombre_busqueda, nivel_jerarquico)
+            if gdf_zona is not None and not gdf_zona.empty:
+                st.session_state['aleph_poligono'] = gdf_zona
 
     # 3. Muro de Seguridad Final
-    if gdf_zona is None or (hasattr(gdf_zona, 'empty') and gdf_zona.empty):
+    if gdf_zona is None or (hasattr(gdf_zona, 'empty') and gdf_zona.empty) or (isinstance(gdf_zona, dict) and not gdf_zona):
         st.error("🚨 Error: No se pudo cargar el polígono del territorio. Asegúrate de tener conexión.")
         st.stop()
 
+    # =========================================================================
     # --- D. CRUCE GEOGRÁFICO FINAL (CON BUFFER MÉTRICO Y LIMPIEZA) ---
+    # =========================================================================
     ids_estaciones = []
-    
-    # 🚀 FIX 1: Verificación temprana. Si el territorio falla, avisamos de inmediato.
-    # 🚀 FIX 1: Verificación temprana y segura del polígono
-    if gdf_zona is None or (hasattr(gdf_zona, 'empty') and gdf_zona.empty) or (isinstance(gdf_zona, dict) and not gdf_zona):
-        st.error("🚨 Error: No se pudo cargar el polígono del territorio. Asegúrate de tener conexión o de haber seleccionado un territorio válido.")
-        st.stop()
         
     if gdf_stations is not None and not gdf_stations.empty:
-        # 🚀 FIX 2: Asignar sistema de coordenadas base (WGS84) ANTES de proyectar a metros
+        # Asignar sistema de coordenadas base (WGS84) ANTES de proyectar a metros
         if gdf_zona.crs is None:
             gdf_zona = gdf_zona.set_crs(epsg=4326)
         if gdf_stations.crs is None:
@@ -183,32 +181,32 @@ def main():
         gdf_stations_proj = gdf_stations.to_crs(epsg=3116)
         
         cols_drop = [c for c in gdf_stations_proj.columns if c in ['index_right', 'index_left']]
-        if cols_drop: gdf_stations_proj = gdf_stations_proj.drop(columns=cols_drop)
+        if cols_drop: 
+            gdf_stations_proj = gdf_stations_proj.drop(columns=cols_drop)
         
         if buffer_km > 0:
-            # 🚀 FIX 3: Reparar geometrías inválidas antes de inflar el buffer
+            # Reparar geometrías inválidas antes de inflar el buffer
             gdf_zona_proj['geometry'] = gdf_zona_proj.geometry.make_valid()
             gdf_zona_proj['geometry'] = gdf_zona_proj.geometry.buffer(buffer_km * 1000)
         
         # Cruce espacial estricto
         estaciones_dentro = gpd.sjoin(gdf_stations_proj, gdf_zona_proj, how="inner", predicate='intersects')
         
-        # 🚀 FIX 4: Usar .unique() para evitar que una estación cuente doble si toca múltiples sub-polígonos
+        # Usar .unique() para evitar que una estación cuente doble si toca múltiples sub-polígonos
         ids_estaciones = estaciones_dentro['id_estacion'].unique().tolist()
 
     if not ids_estaciones:
-        st.warning(f"⚠️ No se encontraron estaciones meteorológicas a menos de {buffer_km} km de la zona.")
-        st.info("💡 Sugerencia: Aumenta el 'Radio de Búsqueda' en el panel lateral.")
-        st.stop()
+        st.warning(f"⚠️ No se encontraron estaciones meteorológicas a menos de {buffer_km} km del territorio: {nombre_zona}.")
+        st.info("💡 Sugerencia: El polígono es pequeño o no hay infraestructura IDEAM en esta zona. Aumenta el 'Radio de Búsqueda' en el panel lateral.")
+        # Quitamos el st.stop() aquí para permitir que la página siga cargando otros módulos (si los hay) 
+        # o puedes dejarlo si Clima e Hidrología depende exclusivamente de las estaciones.
+        st.stop() 
 
     # =========================================================================
-    # --- C. DESCARGA DINÁMICA DE LLUVIAS (EL FIX ARQUITECTÓNICO) ---
+    # --- E. DESCARGA DINÁMICA DE LLUVIAS ---
     # =========================================================================
-    # En lugar de descargar millones de datos, le pedimos a Supabase SOLO 
-    # los datos de las estaciones que caen en nuestra cuenca.
     with st.spinner(f"☁️ Descargando historial de precipitaciones para {len(ids_estaciones)} estaciones..."):
         try:
-            # 🛡️ FIX: Importaciones locales blindadas para evitar el error de "local variable 'text'"
             from sqlalchemy import text
             from modules.db_manager import get_engine
 
@@ -220,7 +218,6 @@ def main():
                 df_all_rain = pd.read_sql(q_lluvia, conn)
             
             if not df_all_rain.empty:
-                # Damos formato a las columnas
                 df_all_rain['id_estacion'] = df_all_rain['id_estacion'].astype(str).str.strip()
                 df_all_rain = df_all_rain.rename(columns={'fecha': Config.DATE_COL, 'valor': Config.PRECIPITATION_COL})
                 df_all_rain[Config.DATE_COL] = pd.to_datetime(df_all_rain[Config.DATE_COL])
@@ -229,7 +226,6 @@ def main():
                 df_all_rain[Config.YEAR_COL] = df_all_rain[Config.DATE_COL].dt.year
                 df_all_rain[Config.MONTH_COL] = df_all_rain[Config.DATE_COL].dt.month
                 
-                # Unimos con los nombres de las estaciones
                 df_long = pd.merge(
                     df_all_rain,
                     gdf_stations[["id_estacion", Config.STATION_NAME_COL]],

@@ -234,10 +234,7 @@ def renderizar_menu_navegacion(pagina_actual):
             "🏢 Municipal": "MUNICIPAL",
             "🧩 Regiones (Subregiones)": "REGIONAL",
             "🦅 Autoridades (CARs)": "CAR",
-            "💧 Cuencas Hidrográficas": "CUENCA",
-            "🏘️ Comunas (Medellín)": "COMUNA",
-            "🏘️ Barrios (Medellín)": "BARRIO",
-            "🛤️ Veredas (Antioquia)": "VEREDA"
+            "💧 Cuencas Hidrográficas": "CUENCA"
         }
         
         escala_sel = st.radio("Escala de Análisis:", list(niveles.keys()), index=1, key="menu_escala_aleph")
@@ -265,32 +262,6 @@ def renderizar_menu_navegacion(pagina_actual):
 
         elif nivel_backend == "CAR":
             territorio_final = st.selectbox("Autoridad Ambiental:", sorted(LISTA_CARS), key="menu_car_aleph")
-            
-        # ---------------------------------------------------------------------
-        # 🚀 ESCALAS MICRO: Barrios, Comunas y Veredas (Conexión Centralizada)
-        # ---------------------------------------------------------------------
-        elif nivel_backend in ["BARRIO", "COMUNA", "VEREDA"]:
-            opciones_territorio = []
-            try:
-                from modules.utils import obtener_listado_territorios
-                opciones_territorio = obtener_listado_territorios(nivel_backend)
-            except Exception:
-                pass
-                
-            if not opciones_territorio:
-                opciones_territorio = ["EL POBLADO"] if nivel_backend in ["BARRIO", "COMUNA"] else ["SANTA ELENA"]
-                
-            if nivel_backend == "COMUNA":
-                titulo_selector = "Comuna (Medellín):"
-            elif nivel_backend == "BARRIO":
-                titulo_selector = "Barrio (Medellín):"
-            else:
-                titulo_selector = "Corregimiento (Medellín):"
-                
-            territorio_final = st.selectbox(titulo_selector, opciones_territorio, key=f"menu_{nivel_backend.lower()}_aleph")
-            
-            st.session_state['aleph_lugar_oculto'] = territorio_final
-            st.success(f"Territorio fijado: {territorio_final}")
             
         elif nivel_backend == "CUENCA":
             df_c = obtener_catalogo_cuencas()

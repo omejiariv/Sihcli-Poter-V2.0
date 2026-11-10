@@ -63,129 +63,19 @@ año_sel = st.sidebar.slider("Año Base para Pirámides y Mapas:", 1985, 2042, 2
 anio_destino = st.sidebar.slider("Horizonte de Proyección (Curvas):", 2025, 2100, 2050)
 
 # ==========================================
-# 🛡️ PURIFICADOR Y ENRUTADOR DEMOGRÁFICO (Censo vs. Datos Micro)
+# 🛡️ PURIFICADOR Y ENRUTADOR DEMOGRÁFICO
 # ==========================================
 import re
 import unicodedata
 import json
 import requests
 import pandas as pd
+from modules.demografia_tools import calcular_poblacion_al_vuelo
 
 territorio_puro = re.sub(r'\s*-\s*\(.*?\)', '', str(territorio_sel)).strip()
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def extraer_datos_geojson_medellin(nombre_territorio, nivel_solicitado):
-    import requests
-    import pandas as pd
-    from modules.demografia_tools import calcular_poblacion_al_vuelo
-    from modules.utils import normalizar_texto
-    
-    target = normalizar_texto(nombre_territorio)
-    url_geo = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PoblacionBarrioCorregimiento_optimizado.geojson"
-    
-    # 🔥 DICCIONARIO MAESTRO: Comunas y Corregimientos con sus códigos oficiales
-    dict_comunas = {
-        "01": "POPULAR", "02": "SANTA CRUZ", "03": "MANRIQUE", "04": "ARANJUEZ",
-        "05": "CASTILLA", "06": "DOCE DE OCTUBRE", "07": "ROBLEDO", "08": "VILLA HERMOSA",
-        "09": "BUENOS AIRES", "10": "LA CANDELARIA", "11": "LAURELES - ESTADIO", "12": "LA AMERICA",
-        "13": "SAN JAVIER", "14": "EL POBLADO", "15": "GUAYABAL", "16": "BELEN",
-        "50": "PALMITAS", "60": "SAN CRISTOBAL", "70": "ALTAVISTA", 
-        "80": "SAN ANTONIO DE PRADO", "90": "SANTA ELENA"
-    }
-    
-    # Detectar el código maestro para Comunas y Veredas (Corregimientos)
-    codigo_target = None
-    if nivel_solicitado in ["COMUNA", "VEREDA"]:
-        for cod, nom in dict_comunas.items():
-            nom_norm = normalizar_texto(nom)
-            if nom_norm == target or target in nom_norm or nom_norm in target:
-                codigo_target = cod
-                break
-                
-    try:
-        resp = requests.get(url_geo, timeout=20)
-        if resp.status_code == 200:
-            features = resp.json().get("features", [])
-            
-            pob_total_medellin = sum(int(float(f["properties"].get("Pob_Total", 0) or 0)) for f in features if "Pob_Total" in f.get("properties", {}))
-            barrios_agrupados = []
-            
-            for f in features:
-                props = f.get("properties", {})
-                
-                # Para Barrios individuales, buscamos exactitud en el nombre
-                if nivel_solicitado == "BARRIO":
-                    for cn in ["NOMBRE", "BARRIO", "SECTOR", "Comuna", "NombreBarr"]:
-                        if cn in props:
-                            val_json = normalizar_texto(props[cn])
-                            if val_json == target:
-                                barrios_agrupados.append(props)
-                                break
-                                
-                # Para Comunas (ej. código "04") y Corregimientos (ej. código "90")
-                elif nivel_solicitado in ["COMUNA", "VEREDA"] and codigo_comuna_target:
-                    cod_b = str(props.get("Cod_Barrio", "")).strip()
-                    if cod_b:
-                        # Si es un barrio (ej. "401"), zfill lo hace "0401", empieza por "04".
-                        # Si es el corregimiento entero (ej. "90"), es exactamente igual a "90".
-                        if cod_b.zfill(4).startswith(codigo_comuna_target) or cod_b == codigo_comuna_target:
-                            barrios_agrupados.append(props)
-                        
-            if not barrios_agrupados: return None
-            
-            # Consolidación Matemática
-            pob_total_consolidada = 0
-            area_consolidada = 0
-            rangos = [f"Edad_{str(i).zfill(2)}_{str(i+4).zfill(2)}" for i in range(0, 80, 5)] + ["Edad_80ym"]
-            suma_edades = {r: 0.0 for r in rangos}
-            
-            for b in barrios_agrupados:
-                pob_total_consolidada += int(float(b.get("Pob_Total", 0) or 0))
-                area_consolidada += float(b.get("Shape_Area", 0) or 0)
-                for r in rangos: suma_edades[r] += float(b.get(r, 0) or 0)
-                
-            if pob_total_consolidada == 0: return None
-            
-            fila_edades = {'año': 2024}
-            cols_h, cols_m = [], []
-            for r in rangos:
-                edad_num = r.split("_")[1][:2]
-                val_mitad = suma_edades[r] / 2.0
-                col_h, col_m = f"Hombres_{edad_num}", f"Mujeres_{edad_num}"
-                fila_edades[col_h], fila_edades[col_m] = val_mitad, val_mitad
-                cols_h.append(col_h); cols_m.append(col_m)
-                
-            factor_escala = pob_total_consolidada / pob_total_medellin if pob_total_medellin > 0 else 0
-            datos_medellin = calcular_poblacion_al_vuelo("MEDELLIN", "MUNICIPAL", "Total")
-            
-            if datos_medellin and 'hist_anios' in datos_medellin:
-                anios_hist = datos_medellin['hist_anios']
-                pob_hist_calc = [p * factor_escala for p in datos_medellin['hist_pob']]
-            else:
-                anios_hist = list(range(1985, 2061))
-                pob_hist_calc = [pob_total_consolidada] * len(anios_hist)
-                
-            return {
-                'hist_anios': anios_hist, 'hist_pob': pob_hist_calc, 'total_actual': pob_total_consolidada,
-                'df_edades': pd.DataFrame([fila_edades]), 'cols_hombres': cols_h, 'cols_mujeres': cols_m, 'area_geo': area_consolidada
-            }
-    except Exception: pass
-    return None
-
-# 🚀 Enrutador de Escalas (Barrios, Comunas y Corregimientos)
-es_escala_micro = nivel_backend in ["BARRIO", "COMUNA", "VEREDA"]
-datos_modelo = None
-
-if es_escala_micro:
-    # Usamos el nombre oculto si es un corregimiento para que haga match exacto en el GeoJSON
-    nombre_busqueda = st.session_state.get('aleph_lugar_oculto', territorio_puro)
-    
-    with st.spinner(f"🔍 Consolidando estructura poblacional de {nombre_busqueda}..."):
-        # 🔥 FIX: Le pasamos también el 'nivel_backend' para que sepa si debe sumar una Comuna o leer un Barrio
-        datos_modelo = extraer_datos_geojson_medellin(nombre_busqueda, nivel_backend)
-        
-else:
-    datos_modelo = calcular_poblacion_al_vuelo(territorio_puro, nivel_backend, area_global)
+# Calculador original (Directo a la matriz matemática)
+datos_modelo = calcular_poblacion_al_vuelo(territorio_puro, nivel_backend, area_global)
 
 # ==========================================
 # 📊 PESTAÑAS DE LA INTERFAZ
@@ -740,44 +630,20 @@ with tab_modelos:
             st.markdown(f"**Proyección Comparativa: {año_comp}**")
             
             try:
-                # 🔥 FIX: Verificamos explícitamente el nivel_backend
-                es_micro_real = nivel_backend in ["BARRIO", "COMUNA", "VEREDA"]
+                datos_comp = calcular_poblacion_al_vuelo(territorio_puro, nivel_backend, area_global, anio_especifico=año_comp)
+                if datos_comp is None or datos_comp.empty:
+                    st.warning(f"No hay datos de proyección matemática disponibles para el año {año_comp}.")
+                    st.stop()
+                    
+                fila_comp = datos_comp.iloc[0]
+                df_ch, df_cm = [], []
+                for c_h, c_m in zip(datos_modelo['cols_hombres'], datos_modelo['cols_mujeres']):
+                    edad_num = int(re.search(r'\d+', c_h).group())
+                    df_ch.append({'Edad': edad_num, 'Valor': fila_comp[c_h]})
+                    df_cm.append({'Edad': edad_num, 'Valor': fila_comp[c_m]})
                 
-                if es_micro_real and datos_modelo and 'hist_anios' in datos_modelo:
-                    if año_comp in datos_modelo['hist_anios']:
-                        idx_comp = datos_modelo['hist_anios'].index(año_comp)
-                        pob_futura = datos_modelo['hist_pob'][idx_comp]
-                    else:
-                        pob_futura = datos_modelo['total_actual']
-                        
-                    factor_futuro = pob_futura / datos_modelo['total_actual'] if datos_modelo['total_actual'] > 0 else 0
-                    
-                    df_ch, df_cm = [], []
-                    for c_h, c_m in zip(datos_modelo['cols_hombres'], datos_modelo['cols_mujeres']):
-                        edad_num = int(re.search(r'\d+', c_h).group())
-                        val_h = float(datos_modelo['df_edades'][c_h].iloc[0]) * factor_futuro
-                        val_m = float(datos_modelo['df_edades'][c_m].iloc[0]) * factor_futuro
-                        df_ch.append({'Edad': edad_num, 'Valor': val_h})
-                        df_cm.append({'Edad': edad_num, 'Valor': val_m})
-                        
-                    df_ch = pd.DataFrame(df_ch)
-                    df_cm = pd.DataFrame(df_cm)
-                    
-                else:
-                    datos_comp = calcular_poblacion_al_vuelo(territorio_puro, nivel_backend, area_global, anio_especifico=año_comp)
-                    if datos_comp is None or datos_comp.empty:
-                        st.warning(f"No hay datos de proyección matemática disponibles para el año {año_comp}.")
-                        st.stop()
-                        
-                    fila_comp = datos_comp.iloc[0]
-                    df_ch, df_cm = [], []
-                    for c_h, c_m in zip(datos_modelo['cols_hombres'], datos_modelo['cols_mujeres']):
-                        edad_num = int(re.search(r'\d+', c_h).group())
-                        df_ch.append({'Edad': edad_num, 'Valor': fila_comp[c_h]})
-                        df_cm.append({'Edad': edad_num, 'Valor': fila_comp[c_m]})
-                    
-                    df_ch = pd.DataFrame(df_ch)
-                    df_cm = pd.DataFrame(df_cm)
+                df_ch = pd.DataFrame(df_ch)
+                df_cm = pd.DataFrame(df_cm)
 
                 if not df_ch.empty:
                     df_ch['Rango'] = pd.cut(df_ch['Edad'], bins=list(range(0, 105, 5)) + [200], labels=[f"{i}-{i+4}" for i in range(0, 100, 5)] + ["100+"], right=False)

@@ -5,6 +5,7 @@ import sys
 import os
 import io
 import pandas as pd
+import streamlit.components.v1 as components
 import numpy as np
 import geopandas as gpd
 import rasterio
