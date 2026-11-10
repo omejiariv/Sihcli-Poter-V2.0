@@ -876,7 +876,7 @@ with tab_forestal:
             c_lat = gdf_zona.to_crs(4326).geometry.centroid.y.mean() if gdf_zona is not None else 6.5
             c_lon = gdf_zona.to_crs(4326).geometry.centroid.x.mean() if gdf_zona is not None else -75.5
             
-            m_usos = folium.Map(location=[c_lat, c_lon], zoom_start=12, tiles="CartoDB positron")
+            m_usos = folium.Map(location=[c_lat, c_lon], zoom_start=12, tiles="OpenStreetMap")
             
             if gdf_zona is not None and not gdf_zona.empty:
                 folium.GeoJson(

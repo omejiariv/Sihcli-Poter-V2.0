@@ -1095,8 +1095,6 @@ if gdf_zona_seleccionada is not None:
                     m_pour.add_child(folium.LatLngPopup())
                     folium.LayerControl().add_to(m_pour)
                     
-                    # 🚀 FIX CRÍTICO: st_folium limpio e interactivo 
-                    # El mapa debe atrapar el click ('last_clicked') y refrescar la variable 'mapa_clic'
                     mapa_clic = st_folium(
                         m_pour, 
                         height=550, 

@@ -136,7 +136,7 @@ def render_sigacal_analysis(gdf_predios=None):
     else:
         center_lat, center_lon = 6.59, -75.45 # Coordenadas por defecto (Río Grande)
 
-    m = folium.Map(location=[center_lat, center_lon], zoom_start=11, tiles="CartoDB positron")
+    m = folium.Map(location=[center_lat, center_lon], zoom_start=11, tiles="OpenStreetMap")
     plugins.Fullscreen(position='topright').add_to(m)
     plugins.LocateControl(auto_start=False).add_to(m)
     

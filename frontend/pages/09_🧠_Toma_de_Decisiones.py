@@ -917,7 +917,7 @@ with st.spinner("Sincronizando inventario predial de Supabase..."):
         else:
             centro_y, centro_x = 6.2442, -75.5812
 
-        m = folium.Map(location=[centro_y, centro_x], zoom_start=11, tiles="CartoDB positron")
+        m = folium.Map(location=[centro_y, centro_x], zoom_start=11, tiles="OpenStreetMap")
         folium.TileLayer(tiles='https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', attr='Google', name='Google Satellite', overlay=False, control=True).add_to(m)
         
         # 🚀 FIX: Prevenir caída de Folium validando que gdf_zona exista, tenga datos y CRS válido

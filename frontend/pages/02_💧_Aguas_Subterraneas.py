@@ -832,7 +832,7 @@ if gdf_zona is not None:
             min_lat, max_lat = df_puntos['latitud'].min(), df_puntos['latitud'].max()
             min_lon, max_lon = df_puntos['longitud'].min(), df_puntos['longitud'].max()
             
-            m = folium.Map(location=[(min_lat+max_lat)/2, (min_lon+max_lon)/2], zoom_start=11, tiles="CartoDB positron")
+            m = folium.Map(location=[(min_lat+max_lat)/2, (min_lon+max_lon)/2], zoom_start=11, tiles="OpenStreetMap")
             m.fit_bounds([[min_lat-pad, min_lon-pad], [max_lat+pad, max_lon+pad]])
 
             st.markdown("<style>.leaflet-tooltip {white-space: normal !important; max-width: 300px;}</style>", unsafe_allow_html=True)
@@ -948,7 +948,7 @@ if gdf_zona is not None:
                 # Fallback: Solo puntos
                 if len(df_valid) > 0:
                     c_lat, c_lon = df_valid['latitud'].mean(), df_valid['longitud'].mean()
-                    m_recarga_fallback = folium.Map(location=[c_lat, c_lon], zoom_start=10, tiles='cartodbpositron')
+                    m_recarga_fallback = folium.Map(location=[c_lat, c_lon], zoom_start=10, tiles='openstreetmap')
 
                     if gdf_zona is not None and not gdf_zona.empty:
                         folium.GeoJson(
@@ -968,7 +968,7 @@ if gdf_zona is not None:
                 with st.spinner("Calculando superficie de recarga (PNG Base64)..."):
                     try:
                         c_lat, c_lon = df_valid['latitud'].mean(), df_valid['longitud'].mean()
-                        m_recarga = folium.Map(location=[c_lat, c_lon], zoom_start=10, tiles='cartodbpositron')
+                        m_recarga = folium.Map(location=[c_lat, c_lon], zoom_start=10, tiles='openstreetmap')
 
                         # Dibujar el Límite EXACTO de la Cuenca
                         if gdf_limite_original is not None and not gdf_limite_original.empty:

@@ -125,7 +125,7 @@ def generar_mapa_interactivo(grid_data, bounds, gdf_stations, gdf_zona, gdf_buff
     
     # Capas Base
     folium.TileLayer(tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri", name="🛰️ Satélite", overlay=False).add_to(m)
-    folium.TileLayer(tiles="CartoDB positron", name="🗺️ Mapa Claro", overlay=False).add_to(m)
+    folium.TileLayer(tiles="OpenStreetMap", name="🗺️ Mapa Claro", overlay=False).add_to(m)
 
     # 1. RASTER (Imagen de Fondo)
     if grid_data is not None:

@@ -463,7 +463,7 @@ def _plot_panel_regional(rng, meth, col, tag, u_loc, df_long, gdf_stations):
                 m = folium.Map(
                     location=[center_lat, center_lon],
                     zoom_start=zoom,
-                    tiles="CartoDB positron",
+                    tiles="OpenStreetMap",
                 )
 
                 for _, row in df_m.iterrows():
@@ -1263,7 +1263,7 @@ def display_spatial_distribution_tab(
         m = folium.Map(location=location_center, zoom_start=zoom_level, control_scale=True)
 
         # Capas y Fondos
-        folium.TileLayer('cartodbpositron', name='Mapa Claro (Default)').add_to(m)
+        folium.TileLayer('openstreetmap', name='Mapa Claro (Default)').add_to(m)
         folium.TileLayer('openstreetmap', name='Callejero (OSM)').add_to(m)
         try:
             folium.TileLayer(
@@ -1878,9 +1878,9 @@ def display_satellite_imagery_tab(gdf_filtered):
 
                 m = folium.Map(location=[center_lat, center_lon], zoom_start=6)
 
-                # 1. Base: CartoDB Positron (Carga muy rápido y es limpia)
+                # 1. Base: OpenStreetMap (Carga muy rápido y es limpia)
                 folium.TileLayer(
-                    tiles="CartoDB positron",
+                    tiles="OpenStreetMap",
                     attr="CartoDB",
                     name="Mapa Base Claro",
                     overlay=False,
@@ -5025,7 +5025,7 @@ def display_land_cover_analysis_tab(df_long, gdf_stations, **kwargs):
                 bounds = [[lat_min, lon_min], [lat_max, lon_max]]
                 center = [(lat_min+lat_max)/2, (lon_min+lon_max)/2]
 
-                m = folium.Map(location=center, zoom_start=12 if view_mode=="Territorio" else 8, tiles="CartoDB positron")
+                m = folium.Map(location=center, zoom_start=12 if view_mode=="Territorio" else 8, tiles="OpenStreetMap")
                 
                 from folium import plugins
                 plugins.Fullscreen(position='topright', title='Pantalla completa', title_cancel='Salir', force_separate_button=True).add_to(m)
@@ -5100,8 +5100,8 @@ def display_land_cover_analysis_tab(df_long, gdf_stations, **kwargs):
                 )
                 
                 m_dual = DualMap(location=center, zoom_start=12 if view_mode=="Territorio" else 8)
-                folium.TileLayer("CartoDB positron").add_to(m_dual.m1)
-                folium.TileLayer("CartoDB positron").add_to(m_dual.m2)
+                folium.TileLayer("OpenStreetMap").add_to(m_dual.m1)
+                folium.TileLayer("OpenStreetMap").add_to(m_dual.m2)
                 
                 # --- MAPA IZQUIERDO (2020) ---
                 img_url_2020 = lc.get_raster_img_b64(data_2020, nodata=0)
@@ -6129,7 +6129,7 @@ def generar_mapa_interactivo(grid_data, bounds, gdf_stations, gdf_zona, gdf_buff
     
     # Capas Base
     folium.TileLayer(tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri", name="🛰️ Satélite", overlay=False).add_to(m)
-    folium.TileLayer(tiles="CartoDB positron", name="🗺️ Mapa Claro", overlay=False).add_to(m)
+    folium.TileLayer(tiles="OpenStreetMap", name="🗺️ Mapa Claro", overlay=False).add_to(m)
 
     # 1. RASTER (Imagen de Fondo)
     if grid_data is not None:
