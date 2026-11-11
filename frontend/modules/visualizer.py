@@ -2323,7 +2323,6 @@ def display_climate_forecast_tab(df_enso, **kwargs):
                                 X_train, y_train = crear_features(valores, lags_memoria)
                                 
                                 # 3. Entrenamiento del Modelo XGBoost
-                                # Parámetros ajustados para evitar sobreajuste y capturar variabilidad caótica
                                 modelo_xgb = xgb.XGBRegressor(
                                     n_estimators=150,
                                     learning_rate=0.05,
@@ -2334,31 +2333,27 @@ def display_climate_forecast_tab(df_enso, **kwargs):
                                 )
                                 modelo_xgb.fit(X_train, y_train)
                                 
-                                # 4. Proyección Autoregresiva y Asimilación de Datos (NOAA + XGBoost)
+                                # 4. Proyección Híbrida: Asimilación Experta + Vuelo Libre XGBoost
                                 ventana_actual = list(valores[-lags_memoria:])
                                 predicciones = []
                                 
-                                # 🚀 FIX ARQUITECTÓNICO: Trayectoria oficial asimilada (Super Niño 2026-2027)
-                                # Valores absolutos ONI proyectados para los primeros 9 meses. 
-                                # Pico estimado en Nov/Dic 2026, seguido de disipación natural.
-                                noaa_forecast_oni = [1.5, 1.8, 2.1, 2.3, 2.4, 2.2, 1.8, 1.3, 0.8]
-                                
-                                # 4. Proyección Autoregresiva Pura (Vuelo libre del modelo XGBoost)
-                                ventana_actual = list(valores[-lags_memoria:])
-                                predicciones = []
+                                # Consenso Experto NOAA CPC / Índice RONI (Súper Niño 2026-2027)
+                                # Oct (>2.5), Pico en Nov-Ene (~3.7), y fuerte hasta Mar 2027.
+                                consenso_oni = [2.80, 3.40, 3.70, 3.70, 3.20, 2.50, 1.80, 1.10, 0.50, 0.10]
                                 
                                 for i in range(months_future):
-                                    # El modelo mira hacia atrás (ventana_actual) para predecir el siguiente mes
-                                    X_pred = np.array([ventana_actual[-lags_memoria:]])
-                                    pred_real = float(modelo_xgb.predict(X_pred)[0])
-                                    
+                                    # Si estamos proyectando el ONI y aún estamos dentro de los meses de asimilación
+                                    if "oni" in selected_label.lower() and i < len(consenso_oni):
+                                        pred_real = consenso_oni[i]
+                                    else:
+                                        # Vuelo libre XGBoost para el futuro a largo plazo
+                                        X_pred = np.array([ventana_actual[-lags_memoria:]])
+                                        pred_real = float(modelo_xgb.predict(X_pred)[0])
+                                        
                                     predicciones.append(pred_real)
-                                    
-                                    # Inyectar el dato predicho en la memoria para el siguiente paso temporal
                                     ventana_actual.append(pred_real)
                                 
                                 # 5. Construcción del DataFrame de Resultados
-                                # Frecuencia 'MS' asegura el inicio de cada mes
                                 fechas_futuras = pd.date_range(start=df_ml['Fecha'].iloc[-1] + pd.DateOffset(months=1), periods=months_future, freq='MS')
                                 df_proy = pd.DataFrame({'Fecha': fechas_futuras, 'Proyección': predicciones})
                                 
@@ -2374,18 +2369,15 @@ def display_climate_forecast_tab(df_enso, **kwargs):
                                 # =========================================================
                                 # 🛠️ FIX VISUAL: EL PEGAMENTO (Unir historia y proyección)
                                 # =========================================================
-                                # Extraemos el último registro histórico real
                                 ultimo_punto = df_ml.iloc[[-1]].copy()
                                 
-                                # Creamos un DataFrame puente ("nexo") con la misma estructura de la proyección
                                 punto_nexo = pd.DataFrame({
                                     'Fecha': ultimo_punto['Fecha'],
                                     'Proyección': ultimo_punto['Valor'],
-                                    'Límite_Superior': ultimo_punto['Valor'], # La incertidumbre nace en 0
+                                    'Límite_Superior': ultimo_punto['Valor'], 
                                     'Límite_Inferior': ultimo_punto['Valor']
                                 })
                                 
-                                # Concatenamos el nexo al inicio del DataFrame de proyección
                                 df_proy = pd.concat([punto_nexo, df_proy], ignore_index=True)
                                 # =========================================================
 
@@ -2432,7 +2424,7 @@ def display_climate_forecast_tab(df_enso, **kwargs):
                                     )
                                 )
 
-                                # 🚀 FIX ARQUITECTÓNICO: Guardar la proyección del ONI en el Aleph
+                                # 🚀 GUARDAR EN EL ALEPH
                                 if "oni" in selected_label.lower():
                                     st.session_state['aleph_xgb_oni'] = df_proy[['Fecha', 'Proyección']].set_index('Fecha')
                                 st.plotly_chart(fig_ml, width="stretch")

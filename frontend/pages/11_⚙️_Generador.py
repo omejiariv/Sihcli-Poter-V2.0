@@ -78,7 +78,7 @@ def reconstruir_vacios(df, matriz_corr_path):
 # ==============================================================================
 
 # --- ACTUALIZACIÓN: AGREGAMOS LA CUARTA PESTAÑA ---
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "🧩 1. Intersecciones Espaciales (Cuencas)", 
     "🔄 2. Convertidor GeoJSON (Soporta ZIP y Simplificación)", 
     "🗜️ 3. Compresor/Extractor ZIP",
@@ -310,6 +310,88 @@ with tab3:
                             key=f"desc_{nombre_archivo}"
                         )
 
+    # -------------------------------------------------------------------------
+    # ⚡ SUPERPODER: PROCESADOR AUTOMÁTICO MASIVO DE ZIPs DEL SIATA
+    # -------------------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("🦸‍♂️ Procesador Automático Multi-ZIP (Lluvia SIATA)")
+    st.markdown("Sube **todos los archivos `.zip`** que hayas descargado del SIATA al mismo tiempo. El sistema devorará todas las estaciones, sumará la lluvia diaria y ensamblará una matriz consolidada única.")
+    
+    # 🔥 MAGIA ACTIVADA: accept_multiple_files=True
+    archivos_zip_siata = st.file_uploader("Sube uno o varios archivos .zip del SIATA:", type=['zip'], key="zips_siata", accept_multiple_files=True)
+    
+    if archivos_zip_siata and st.button("🚀 Extraer, Sumar y Consolidar Todo", type="primary"):
+        with st.spinner(f"Procesando {len(archivos_zip_siata)} archivos ZIP simultáneamente..."):
+            try:
+                import pandas as pd
+                import zipfile
+                import re
+                
+                lista_dataframes = []
+                
+                # Bucle maestro: Devorar cada ZIP subido
+                for archivo_zip in archivos_zip_siata:
+                    with zipfile.ZipFile(archivo_zip, 'r') as z:
+                        for nombre_archivo in z.namelist():
+                            if nombre_archivo.endswith(('.csv', '.tab', '.txt')):
+                                
+                                match_estacion = re.search(r'_(\d{1,4})_\d{4}', nombre_archivo)
+                                id_estacion = f"SIATA_{match_estacion.group(1)}" if match_estacion else "SIATA_Desconocida"
+                                
+                                with z.open(nombre_archivo) as f:
+                                    try:
+                                        df_temp = pd.read_csv(f, sep='\t')
+                                        if len(df_temp.columns) < 2:
+                                            f.seek(0)
+                                            df_temp = pd.read_csv(f, sep=';')
+                                            if len(df_temp.columns) < 2:
+                                                f.seek(0)
+                                                df_temp = pd.read_csv(f, sep=',')
+                                    except:
+                                        continue
+                                    
+                                if df_temp.empty: continue
+                                
+                                col_fecha = next((c for c in df_temp.columns if 'fecha' in c.lower() or 'date' in c.lower()), None)
+                                col_valor = next((c for c in df_temp.columns if 'valor' in c.lower() or 'precip' in c.lower()), None)
+                                
+                                if col_fecha and col_valor:
+                                    df_temp['fecha'] = pd.to_datetime(df_temp[col_fecha], errors='coerce')
+                                    # Limpieza de comas europeas a puntos americanos para matemáticas
+                                    df_temp[col_valor] = pd.to_numeric(df_temp[col_valor].astype(str).str.replace(',', '.'), errors='coerce')
+                                    df_temp = df_temp.dropna(subset=['fecha', col_valor])
+                                    
+                                    df_temp['mes_año'] = df_temp['fecha'].dt.to_period('M').dt.to_timestamp()
+                                    
+                                    df_mensual = df_temp.groupby('mes_año')[col_valor].sum().reset_index()
+                                    df_mensual.rename(columns={'mes_año': 'fecha', col_valor: id_estacion}, inplace=True)
+                                    
+                                    lista_dataframes.append(df_mensual)
+                
+                if lista_dataframes:
+                    # 2. Fusión de Súper-Matriz: Concatena todo y colapsa los vacíos
+                    df_master = pd.concat(lista_dataframes, ignore_index=True)
+                    df_final = df_master.groupby('fecha').sum(min_count=1).reset_index()
+                    df_final = df_final.sort_values('fecha')
+                    df_final['fecha'] = df_final['fecha'].dt.strftime('%Y-%m-%d')
+                    
+                    st.success(f"✅ ¡Multi-Magia completada! Se ensambló una súper-matriz a partir de {len(lista_dataframes)} meses de datos sueltos.")
+                    st.dataframe(df_final, width="stretch")
+                    
+                    csv_consolidado = df_final.to_csv(sep=';', decimal=',', index=False).encode('utf-8-sig')
+                    st.download_button(
+                        label="📥 Descargar Súper-Matriz Multi-Estación",
+                        data=csv_consolidado,
+                        file_name="Datos_SIATA_Multi_ZIP_Consolidado.csv",
+                        mime="text/csv",
+                        type="primary"
+                    )
+                else:
+                    st.warning("⚠️ No se encontraron archivos de lluvia válidos en los ZIP subidos.")
+                    
+            except Exception as e:
+                st.error(f"🚨 Error en el procesamiento masivo: {e}")
+                
 # =====================================================================
 # PESTAÑA 4: CONVERTIDOR GEOJSON A SHAPEFILE + VISOR DE ATRIBUTOS
 # =====================================================================
@@ -780,7 +862,7 @@ def extraer_ideam_datos_abiertos(lista_estaciones, limite_registros=50000):
     else:
         return pd.DataFrame()
 
-        # =====================================================================
+# =====================================================================
 # 📡 PESTAÑA 7: PUENTE SIATA (CONEXIÓN EN TIEMPO REAL VALLE DE ABURRÁ)
 # =====================================================================
 with tab7:
@@ -790,7 +872,15 @@ with tab7:
     Extrae tu catálogo maestro directamente de la base de datos, realiza un **cruce espacial automático (Nearest Neighbor < 200m)** y descarga la lluvia reciente mes a mes.
     """)
     
-    if st.button("🚀 Iniciar Sincronización Automática SIATA", type="primary", width="stretch"):
+    usar_csv_manual = st.checkbox("Usar catálogo SIATA local (Activar si el API del SIATA está caído o bloqueado)", value=False)
+    
+    archivo_siata = None
+    if usar_csv_manual:
+        st.info("💡 **Plan de Respaldo:** Sube el archivo JSON/GeoJSON que interceptaste del Geoportal del SIATA.")
+        # Actualizado para aceptar json y geojson
+        archivo_siata = st.file_uploader("Sube el catálogo del SIATA interceptado", type=['json', 'geojson', 'py'], key="siata_json_manual")
+        
+    if st.button("🚀 Iniciar Sincronización Espacial SIATA", type="primary", width="stretch"):
         from modules import siata_api
         from modules.db_manager import get_engine
         from sqlalchemy import text
@@ -801,7 +891,6 @@ with tab7:
             try:
                 engine = get_engine()
                 with engine.connect() as conn:
-                    # Descargamos las estaciones con su geometría original
                     query = "SELECT id_estacion as codigo, nombre, latitud as lat, longitud as lon, geom FROM estaciones WHERE geom IS NOT NULL"
                     gdf_ideam = gpd.read_postgis(text(query), conn, geom_col="geom")
                     
@@ -811,11 +900,46 @@ with tab7:
                 st.error(f"🚨 Error conectando a la tabla 'estaciones' en Supabase: {e}")
                 st.stop()
                 
-        # --- 2. DESCARGA DEL CATÁLOGO SIATA ---
-        with st.spinner("2. Conectando al API del SIATA y descargando catálogo de sensores en vivo..."):
-            gdf_siata = siata_api.descargar_catalogo_siata()
+        # --- 2. CARGA DEL CATÁLOGO SIATA (MANUAL O API) ---
+        gdf_siata = None
+        with st.spinner("2. Obteniendo catálogo de sensores del SIATA..."):
+            if usar_csv_manual and archivo_siata is not None:
+                try:
+                    # Leemos directamente el archivo espacial que hackeaste
+                    gdf_siata = gpd.read_file(archivo_siata)
+                    
+                    # Verificamos que tenga la columna código
+                    col_cod = next((c for c in gdf_siata.columns if 'cod' in c.lower() or 'id' in c.lower()), None)
+                    if col_cod:
+                        gdf_siata = gdf_siata.rename(columns={col_cod: 'codigo_siata'})
+                        if gdf_siata.crs is None:
+                            gdf_siata = gdf_siata.set_crs("EPSG:4326")
+                        st.success(f"✅ Catálogo interceptado procesado con éxito ({len(gdf_siata)} estaciones).")
+                        
+                        # NUEVO: Botón para descargar el catálogo completo del SIATA
+                        df_descarga_siata = gdf_siata.drop(columns=['geometry']).copy()
+                        csv_catalogo = df_descarga_siata.to_csv(index=False, sep=';', encoding='utf-8-sig').encode('utf-8-sig')
+                        st.download_button(
+                            label="📥 Descargar Catálogo Completo SIATA (CSV)",
+                            data=csv_catalogo,
+                            file_name="Catalogo_SIATA_Completo.csv",
+                            mime="text/csv"
+                        )
+                    else:
+                        st.error("🚨 El archivo subido no tiene una columna de código de estación.")
+                        st.stop()
+                except Exception as e:
+                    st.error(f"Error procesando el archivo del SIATA: {e}")
+                    st.stop()
+            elif usar_csv_manual and archivo_siata is None:
+                st.error("🚨 Seleccionaste carga manual pero no has subido ningún archivo a la cajita.")
+                st.stop()
+            else:
+                # Intento automático por API
+                gdf_siata = siata_api.descargar_catalogo_siata()
+                
             if gdf_siata is None or gdf_siata.empty:
-                st.error("🚨 No se pudo descargar el catálogo del SIATA. El servidor podría estar inactivo.")
+                st.error("🚨 No se pudo obtener el catálogo del SIATA. Activa la casilla de arriba y sube el archivo manualmente.")
                 st.stop()
                 
         # --- 3. CRUCE ESPACIAL (NEAREST NEIGHBOR) ---
@@ -831,7 +955,7 @@ with tab7:
                 st.json(dict_homologacion)
             
         # --- 4. EXTRACCIÓN DE DATOS DE PRECIPITACIÓN ---
-        with st.spinner("4. Descargando datos pluviométricos (Últimos 6 meses) y consolidando..."):
+        with st.spinner("4. Descargando datos pluviométricos y consolidando..."):
             df_lluvia_siata = siata_api.extraer_lluvia_reciente_siata(dict_homologacion, meses_atras=6)
             
             if not df_lluvia_siata.empty:
@@ -847,14 +971,144 @@ with tab7:
                     type="primary",
                     width="stretch"
                 )
-                st.info("💡 **Último paso:** Descarga este archivo CSV y súbelo en la pestaña **'6. Fusión Hidrometeorológica'** (casilla 'Transición Reciente'). El sistema unirá esta data viva con tu historia del IDEAM.")
             else:
-                st.warning("Se emparejaron estaciones, pero el servidor del SIATA no reportó lluvia válida para este semestre.")
+                st.warning("Se emparejaron estaciones, pero el servidor de datos de lluvia del SIATA no reportó valores válidos...")
+            
+    # -------------------------------------------------------------------------
+    # ⚡ MÓDULO DE EXPANSIÓN: INYECTAR SIATA A SUPABASE
+    # -------------------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("⚡ Integración Definitiva: Inyectar SIATA a Supabase")
+    st.markdown("Convierte las 185 estaciones interceptadas en estaciones oficiales de tu plataforma. Se les asignará el prefijo `SIATA_` (ej. `SIATA_10`) para blindarlas de los códigos del IDEAM.")
+    
+    if st.button("💉 Inyectar 185 Estaciones a la Base de Datos", type="primary"):
+        if archivo_siata is None:
+            st.error("🚨 Primero sube el archivo 'siata.json' en la cajita de arriba.")
+        else:
+            with st.spinner("Forjando nuevas estaciones espaciales en Supabase..."):
+                try:
+                    import geopandas as gpd
+                    from modules.db_manager import get_engine
+                    
+                    # 1. Leer el archivo interceptado
+                    gdf_in = gpd.read_file(archivo_siata)
+                    col_cod = next((c for c in gdf_in.columns if 'cod' in c.lower() or 'id' in c.lower()), None)
+                    
+                    # 2. Formatear IDs
+                    df_up = gdf_in.copy()
+                    df_up['id_estacion'] = 'SIATA_' + df_up[col_cod].astype(str)
+                    df_up['longitud'] = df_up.geometry.x
+                    df_up['latitud'] = df_up.geometry.y
+                    
+                    # 3. Conexión cruda directa (Bypass total de Pandas/SQLAlchemy)
+                    engine = get_engine()
+                    
+                    sql_queries = []
+                    for _, row in df_up.iterrows():
+                        nom = str(row.get('nombre', 'Sin Nombre')).strip().replace("'", "''")
+                        mun = str(row.get('ubicacion', 'Medellín')).upper().strip().replace("'", "''")
+                        lon = float(row['longitud'])
+                        lat = float(row['latitud'])
+                        id_est = str(row['id_estacion'])
+                        
+                        # ON CONFLICT DO NOTHING evita duplicados automáticamente en la base de datos
+                        q = f"""
+                        INSERT INTO estaciones 
+                        (id_estacion, nombre, longitud, latitud, municipio, departamento, subregion, geom)
+                        VALUES 
+                        ('{id_est}', '{nom}', {lon}, {lat}, '{mun}', 'ANTIOQUIA', 'VALLE DE ABURRÁ', ST_SetSRID(ST_MakePoint({lon}, {lat}), 4326))
+                        ON CONFLICT (id_estacion) DO NOTHING;
+                        """
+                        sql_queries.append(q)
+                        
+                    # Usamos raw_connection para saltarnos la capa problemática de las librerías
+                    raw_conn = engine.raw_connection()
+                    try:
+                        cursor = raw_conn.cursor()
+                        insertadas = 0
+                        for query in sql_queries:
+                            cursor.execute(query)
+                            if cursor.rowcount > 0:
+                                insertadas += 1
+                        raw_conn.commit()
+                        
+                        if insertadas > 0:
+                            st.success(f"✅ ¡Expansión Completada! {insertadas} estaciones del SIATA inyectadas permanentemente.")
+                            st.balloons()
+                        else:
+                            st.warning("⚠️ No se inyectaron estaciones nuevas (Ya existían previamente en Supabase).")
+                    finally:
+                        cursor.close()
+                        raw_conn.close()
+                        
+                except Exception as e:
+                    st.error(f"🚨 Error en la inyección cruda: {e}")
 
-# ==========================================
+    # -------------------------------------------------------------------------
+    # ⚡ MÓDULO DE FUSIÓN: INYECTAR DATOS DE LLUVIA SIATA A SUPABASE
+    # -------------------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("🌧️ Fusión de Lluvia: Actualizar Base Histórica")
+    st.markdown("Sube el archivo `Datos_SIATA_Recientes_Mes.csv` que descargaste arriba para inyectarlo en tu matriz principal de precipitaciones y darle vida a los gráficos.")
+    
+    archivo_csv_siata = st.file_uploader("Sube el CSV de lluvia reciente (Gemelo Digital):", type=['csv'])
+    
+    if st.button("💉 Inyectar Lluvia a Supabase (Tabla: precipitacion)", type="primary"):
+        if archivo_csv_siata is None:
+            st.error("🚨 Sube el archivo CSV primero.")
+        else:
+            with st.spinner("Inyectando lluvia fresca en la base de datos..."):
+                try:
+                    import pandas as pd
+                    from modules.db_manager import get_engine
+                    
+                    # 1. Leer y transformar (De formato Ancho a formato Largo)
+                    df_csv = pd.read_csv(archivo_csv_siata, sep=';', decimal=',')
+                    df_csv['fecha'] = pd.to_datetime(df_csv['fecha']).dt.strftime('%Y-%m-%d')
+                    
+                    # Derretir (Melt) la tabla para que encaje con la base de datos
+                    df_long = df_csv.melt(id_vars=['fecha'], var_name='id_estacion', value_name='valor')
+                    df_long = df_long.dropna(subset=['valor'])
+                    df_long['origen'] = 'SIATA (Gemelo Digital)'
+                    
+                    # 2. Conexión cruda anti-fallos a Supabase
+                    engine = get_engine()
+                    raw_conn = engine.raw_connection()
+                    
+                    try:
+                        cursor = raw_conn.cursor()
+                        insertados = 0
+                        
+                        for _, row in df_long.iterrows():
+                            f = row['fecha']
+                            est = str(row['id_estacion']).strip()
+                            val = float(row['valor'])
+                            ori = row['origen']
+                            
+                            # Borramos el dato si ya existe (para evitar duplicados ciegos)
+                            cursor.execute(f"DELETE FROM precipitacion WHERE fecha = '{f}' AND id_estacion = '{est}';")
+                            
+                            # Insertamos el dato fresco
+                            cursor.execute(f"INSERT INTO precipitacion (fecha, id_estacion, valor, origen) VALUES ('{f}', '{est}', {val}, '{ori}');")
+                            insertados += 1
+                            
+                        raw_conn.commit()
+                        
+                        st.success(f"✅ ¡Lluvia Inyectada! Se fusionaron {insertados} registros mensuales en la tabla principal.")
+                        st.balloons()
+                        
+                    finally:
+                        cursor.close()
+                        raw_conn.close()
+                        
+                except Exception as e:
+                    st.error(f"Error en la inyección de lluvia: {e}")                    
+
+# ==========================
 # 🚀 ZONA DE PRUEBAS
-# ==========================================
+# ==========================
 if __name__ == "__main__":
+
     # Pon aquí 3 o 4 códigos de estaciones que sepas que tienen vacíos post-2010
     mis_estaciones = ["23060110", "23080950", "27010810"] 
     

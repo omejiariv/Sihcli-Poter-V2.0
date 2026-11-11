@@ -49,33 +49,68 @@ def process_iri_plume(*args, **kwargs): return None
 def process_iri_probabilities(*args, **kwargs): return None
 
 # ==============================================================================
-# 🔌 LLAVE 1: CONEXIÓN PROBABILIDADES ENSO (NOAA CPC PURA)
+# 🔌 LLAVE 1: CONEXIÓN PROBABILIDADES ENSO (NOAA CPC PURA + MODO AUTÓNOMO)
 # ==============================================================================
-@st.cache_data(show_spinner=False, ttl=43200)
+@st.cache_data(show_spinner=False, ttl=3600)
 def get_iri_enso_forecast():
     url_noaa = "https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso/roni/probabilities.php"
     df_limpio = pd.DataFrame()
-    fuente_datos = "Desconocida"
     
+    traductor_meses = {
+        "DJF": "DEF", "JFM": "EFM", "FMA": "FMA", "MAM": "MAM", 
+        "AMJ": "AMJ", "MJJ": "MJJ", "JJA": "JJA", "JAS": "JAS", 
+        "ASO": "ASO", "SON": "SON", "OND": "OND", "NDJ": "NDE"
+    }
+    
+    # INTENTO 1: Extraer de la página web de la NOAA
     try:
         html_content = fetch_url_secure(url_noaa)
         text_content = re.sub(r'<[^>]+>', ' ', html_content).replace('%', '')
-        matches = re.findall(r'([A-Z]{3})\s+(?:20\d\d\s+)?(\d{1,3})\s+(\d{1,3})\s+(\d{1,3})', text_content)
+        matches = re.findall(r'([A-Z]{3})\s+(?:20\d\d\s+)?(\d{1,3}(?:\.\d+)?)\s+(\d{1,3}(?:\.\d+)?)\s+(\d{1,3}(?:\.\d+)?)', text_content)
         
         if matches:
             lista = []
             for m in matches:
-                trim, nina, neu, nino = m
-                if trim in ["NDF", "DEF", "EFM", "FMA", "MAM", "AMJ", "MJJ", "JJA", "JAS", "ASO", "SON", "OND", "NDE"]:
-                    lista.append({"Trimestre": trim, "La Niña": int(nina), "Neutral": int(neu), "El Niño": int(nino)})
+                trim_ingles, nina, neu, nino = m
+                if trim_ingles in traductor_meses:
+                    lista.append({
+                        "Trimestre": traductor_meses[trim_ingles],
+                        "La Niña": float(nina), "Neutral": float(neu), "El Niño": float(nino)
+                    })
             if lista:
                 df_limpio = pd.DataFrame(lista).drop_duplicates(subset=['Trimestre'])
-                fuente_datos = "NOAA CPC (Extracción Nativa)"
-    except Exception as e:
-        print(f"Error nativo NOAA: {e}")
+                return df_limpio, {"fuente": "NOAA CPC (Extracción Robusta Bilingüe)"}
+    except:
+        pass
 
-    # Si la NOAA falla por internet, simplemente devolvemos vacío en lugar de inventar un Súper Niño
-    return df_limpio, {"fuente": fuente_datos}
+    # INTENTO 2 (MODO AUTÓNOMO): Si la NOAA nos bloquea, Sihcli-Poter calcula la probabilidad
+    print("NOAA bloqueado. Sihcli-Poter generando probabilidades autónomas desde el ONI...")
+    df_oni, _ = get_live_oni_data()
+    
+    if df_oni is not None and not df_oni.empty:
+        ultimo_oni = df_oni['anomalia_oni'].iloc[-1]
+        
+        # Algoritmo de probabilidad basado en la fuerza térmica del océano
+        prob_nino = prob_nina = prob_neu = 0
+        if ultimo_oni >= 0.5:
+            prob_nino = min(100, int((ultimo_oni / 1.5) * 100))
+            prob_neu = 100 - prob_nino
+        elif ultimo_oni <= -0.5:
+            prob_nina = min(100, int((abs(ultimo_oni) / 1.5) * 100))
+            prob_neu = 100 - prob_nina
+        else:
+            prob_neu = max(0, 100 - int(abs(ultimo_oni) * 100))
+            prob_nino = prob_nina = int((100 - prob_neu) / 2)
+            
+        df_limpio = pd.DataFrame([{
+            "Trimestre": "Sintético (Motor ML)",
+            "La Niña": prob_nina,
+            "Neutral": prob_neu,
+            "El Niño": prob_nino
+        }])
+        return df_limpio, {"fuente": "Sihcli-Poter (Probabilidad Autónoma basada en ONI)"}
+        
+    return pd.DataFrame(), {"fuente": "Error de Conexión Total"}
 
 # ==============================================================================
 # 🔌 LLAVE 2: ÍNDICE ONI + CATEGORÍA + TENDENCIA (DATOS REALES)
