@@ -251,7 +251,7 @@ def main():
         if picos_mask.any():
             num_picos = picos_mask.sum()
             st.warning(f"⚠️ Alerta de Calidad: Se neutralizaron {num_picos} registros físicamente imposibles (> {umbral_maximo}mm) en esta zona. Han sido pasados a nulos para no sesgar la interpolación.")
-            df_long.loc[picos_mask, Config.PRECIPITATION_COL] = np.nan
+            df_long.loc[picos_mask, Config.PRECIPITATION_COL] = float('nan')
     
     # 3. 📍 Filtro de geometrías espaciales
     if gdf_stations is not None:

@@ -326,10 +326,10 @@ with tab3:
                 import pandas as pd
                 import zipfile
                 import re
+                from io import StringIO
                 
                 lista_dataframes = []
                 
-                # Bucle maestro: Devorar cada ZIP subido
                 for archivo_zip in archivos_zip_siata:
                     with zipfile.ZipFile(archivo_zip, 'r') as z:
                         for nombre_archivo in z.namelist():
@@ -340,58 +340,66 @@ with tab3:
                                 
                                 with z.open(nombre_archivo) as f:
                                     try:
-                                        df_temp = pd.read_csv(f, sep='\t')
-                                        if len(df_temp.columns) < 2:
-                                            f.seek(0)
-                                            df_temp = pd.read_csv(f, sep=';')
-                                            if len(df_temp.columns) < 2:
-                                                f.seek(0)
-                                                df_temp = pd.read_csv(f, sep=',')
-                                    except:
+                                        raw_bytes = f.read()
+                                        try:
+                                            texto = raw_bytes.decode('utf-8')
+                                        except UnicodeDecodeError:
+                                            texto = raw_bytes.decode('latin1')
+                                            
+                                        df_temp = pd.read_csv(StringIO(texto), sep=None, engine='python', on_bad_lines='skip')
+                                    except Exception:
                                         continue
                                     
                                 if df_temp.empty: continue
                                 
-                                col_fecha = next((c for c in df_temp.columns if 'fecha' in c.lower() or 'date' in c.lower()), None)
-                                col_valor = next((c for c in df_temp.columns if 'valor' in c.lower() or 'precip' in c.lower()), None)
+                                # 🔥 FIX 1: Agregamos 'p1' y 'p2' a la lista de búsqueda
+                                col_fecha = next((c for c in df_temp.columns if any(k in str(c).lower() for k in ['fech', 'date', 'time'])), None)
+                                col_valor = next((c for c in df_temp.columns if any(k in str(c).lower() for k in ['p1', 'p2', 'valor', 'precip', 'lluvia', 'p (mm)', 'acum', 'mm'])), None)
                                 
                                 if col_fecha and col_valor:
-                                    df_temp['fecha'] = pd.to_datetime(df_temp[col_fecha], errors='coerce')
-                                    # Limpieza de comas europeas a puntos americanos para matemáticas
+                                    # 🔥 FIX 2: dayfirst=True para que entienda que 23/04 es 23 de Abril
+                                    df_temp['fecha'] = pd.to_datetime(df_temp[col_fecha], dayfirst=True, errors='coerce')
                                     df_temp[col_valor] = pd.to_numeric(df_temp[col_valor].astype(str).str.replace(',', '.'), errors='coerce')
                                     df_temp = df_temp.dropna(subset=['fecha', col_valor])
+
+                                    # 🔥 NUEVO FILTRO DE RAÍZ: Eliminar códigos de error ANTES de sumar el mes
+                                    df_temp = df_temp[df_temp[col_valor] >= 0]
                                     
-                                    df_temp['mes_año'] = df_temp['fecha'].dt.to_period('M').dt.to_timestamp()
-                                    
-                                    df_mensual = df_temp.groupby('mes_año')[col_valor].sum().reset_index()
-                                    df_mensual.rename(columns={'mes_año': 'fecha', col_valor: id_estacion}, inplace=True)
-                                    
-                                    lista_dataframes.append(df_mensual)
+                                    if not df_temp.empty:
+                                        df_temp['mes_año'] = df_temp['fecha'].dt.to_period('M').dt.to_timestamp()
+                                        df_mensual = df_temp.groupby('mes_año')[col_valor].sum().reset_index()
+                                        
+                                        df_mensual.rename(columns={'mes_año': 'fecha', col_valor: id_estacion}, inplace=True)
+                                        lista_dataframes.append(df_mensual)
                 
                 if lista_dataframes:
-                    # 2. Fusión de Súper-Matriz: Concatena todo y colapsa los vacíos
+                    # Fusión masiva de todos los dataframes
                     df_master = pd.concat(lista_dataframes, ignore_index=True)
+                    # Colapsar las filas de la misma fecha en una sola fila ancha
                     df_final = df_master.groupby('fecha').sum(min_count=1).reset_index()
                     df_final = df_final.sort_values('fecha')
                     df_final['fecha'] = df_final['fecha'].dt.strftime('%Y-%m-%d')
                     
-                    st.success(f"✅ ¡Multi-Magia completada! Se ensambló una súper-matriz a partir de {len(lista_dataframes)} meses de datos sueltos.")
+                    # 🔥 FIX: Redondeo matemático para evitar el pánico de Excel
+                    df_final = df_final.round(2)
+                    
+                    st.success(f"✅ ¡Multi-Magia completada! Se procesaron {len(lista_dataframes)} meses de datos sueltos y se ensambló la súper-matriz.")
                     st.dataframe(df_final, width="stretch")
                     
                     csv_consolidado = df_final.to_csv(sep=';', decimal=',', index=False).encode('utf-8-sig')
                     st.download_button(
-                        label="📥 Descargar Súper-Matriz Multi-Estación",
+                        label="📥 Descargar Súper-Matriz Multi-Estación (Lista para Inyectar)",
                         data=csv_consolidado,
                         file_name="Datos_SIATA_Multi_ZIP_Consolidado.csv",
                         mime="text/csv",
                         type="primary"
                     )
                 else:
-                    st.warning("⚠️ No se encontraron archivos de lluvia válidos en los ZIP subidos.")
+                    st.warning("⚠️ No se encontraron archivos de lluvia válidos en los ZIP subidos (o la lluvia venía vacía).")
                     
             except Exception as e:
                 st.error(f"🚨 Error en el procesamiento masivo: {e}")
-                
+
 # =====================================================================
 # PESTAÑA 4: CONVERTIDOR GEOJSON A SHAPEFILE + VISOR DE ATRIBUTOS
 # =====================================================================
@@ -1045,76 +1053,209 @@ with tab7:
                     st.error(f"🚨 Error en la inyección cruda: {e}")
 
     # -------------------------------------------------------------------------
-    # ⚡ MÓDULO DE FUSIÓN: INYECTAR DATOS DE LLUVIA SIATA A SUPABASE
+    # ⚡ MÓDULO DE FUSIÓN: INYECTAR DATOS DE LLUVIA A SUPABASE (ALTA VELOCIDAD)
     # -------------------------------------------------------------------------
     st.markdown("---")
     st.subheader("🌧️ Fusión de Lluvia: Actualizar Base Histórica")
-    st.markdown("Sube el archivo `Datos_SIATA_Recientes_Mes.csv` que descargaste arriba para inyectarlo en tu matriz principal de precipitaciones y darle vida a los gráficos.")
+    st.markdown("Sube el archivo `Datos_SIATA_Multi_ZIP_Consolidado.csv` para inyectarlo en tu matriz principal. El sistema filtrará automáticamente estaciones huérfanas y fantasmas de Excel.")
     
-    archivo_csv_siata = st.file_uploader("Sube el CSV de lluvia reciente (Gemelo Digital):", type=['csv'])
+    archivo_csv_siata = st.file_uploader("Sube el CSV de lluvia consolidada:", type=['csv'])
     
     if st.button("💉 Inyectar Lluvia a Supabase (Tabla: precipitacion)", type="primary"):
         if archivo_csv_siata is None:
             st.error("🚨 Sube el archivo CSV primero.")
         else:
-            with st.spinner("Inyectando lluvia fresca en la base de datos..."):
+            with st.spinner("Realizando limpieza, filtrado espacial e inyección por lotes..."):
                 try:
                     import pandas as pd
                     from modules.db_manager import get_engine
                     
-                    # 1. Leer y transformar (De formato Ancho a formato Largo)
-                    df_csv = pd.read_csv(archivo_csv_siata, sep=';', decimal=',')
+                    # 1. Lectura ultra-precisa (Forzando punto y coma, coma decimal y formato de texto)
+                    df_csv = pd.read_csv(archivo_csv_siata, sep=';', decimal=',', encoding='utf-8-sig')
+                    df_csv = df_csv.loc[:, ~df_csv.columns.str.contains('^Unnamed')]
+                    
+                    # 2. Transformar de formato Ancho a formato Largo
                     df_csv['fecha'] = pd.to_datetime(df_csv['fecha']).dt.strftime('%Y-%m-%d')
-                    
-                    # Derretir (Melt) la tabla para que encaje con la base de datos
                     df_long = df_csv.melt(id_vars=['fecha'], var_name='id_estacion', value_name='valor')
+                    
+                    # 3. Filtros vitales de limpieza
                     df_long = df_long.dropna(subset=['valor'])
-                    df_long['origen'] = 'SIATA (Gemelo Digital)'
+                    df_long['valor'] = pd.to_numeric(df_long['valor'].astype(str).str.replace(',', '.'), errors='coerce')
+                    df_long = df_long.dropna(subset=['valor'])
+                    df_long = df_long[df_long['valor'] >= 0] # Filtro Anti-Error del SIATA
+                    df_long['origen'] = 'SIATA (Consolidado Histórico)'
                     
-                    # 2. Conexión cruda anti-fallos a Supabase
+                    # 4. Conexión a la base de datos
                     engine = get_engine()
-                    raw_conn = engine.raw_connection()
                     
-                    try:
-                        cursor = raw_conn.cursor()
-                        insertados = 0
-                        
-                        for _, row in df_long.iterrows():
-                            f = row['fecha']
-                            est = str(row['id_estacion']).strip()
-                            val = float(row['valor'])
-                            ori = row['origen']
+                    # 5. Blindaje Relacional: Filtrar solo estaciones que EXISTEN en tu catálogo actual
+                    df_catalogo = pd.read_sql("SELECT id_estacion FROM estaciones", engine)
+                    estaciones_validas = df_catalogo['id_estacion'].tolist()
+                    df_long = df_long[df_long['id_estacion'].isin(estaciones_validas)]
+                    
+                    if df_long.empty:
+                        st.warning("⚠️ No hay datos válidos para inyectar (revisa si las estaciones de este CSV ya se añadieron al catálogo).")
+                    else:
+                        # 6. Inyección por lotes (Bulk Insert) supersónica
+                        raw_conn = engine.raw_connection()
+                        try:
+                            cursor = raw_conn.cursor()
                             
-                            # Borramos el dato si ya existe (para evitar duplicados ciegos)
-                            cursor.execute(f"DELETE FROM precipitacion WHERE fecha = '{f}' AND id_estacion = '{est}';")
+                            pares_borrar = []
+                            filas_insertar = []
+                            for _, row in df_long.iterrows():
+                                pares_borrar.append(f"('{row['fecha']}', '{row['id_estacion']}')")
+                                filas_insertar.append(f"('{row['fecha']}', '{row['id_estacion']}', {row['valor']}, '{row['origen']}')")
                             
-                            # Insertamos el dato fresco
-                            cursor.execute(f"INSERT INTO precipitacion (fecha, id_estacion, valor, origen) VALUES ('{f}', '{est}', {val}, '{ori}');")
-                            insertados += 1
+                            chunk_size = 1500
+                            for i in range(0, len(pares_borrar), chunk_size):
+                                chunk_borrar = pares_borrar[i:i+chunk_size]
+                                chunk_insertar = filas_insertar[i:i+chunk_size]
+                                
+                                # Borrado masivo usando IN
+                                sql_delete = f"DELETE FROM precipitacion WHERE (fecha, id_estacion) IN ({','.join(chunk_borrar)});"
+                                cursor.execute(sql_delete)
+                                
+                                # Inserción masiva
+                                sql_insert = f"INSERT INTO precipitacion (fecha, id_estacion, valor, origen) VALUES {','.join(chunk_insertar)};"
+                                cursor.execute(sql_insert)
                             
-                        raw_conn.commit()
-                        
-                        st.success(f"✅ ¡Lluvia Inyectada! Se fusionaron {insertados} registros mensuales en la tabla principal.")
-                        st.balloons()
-                        
-                    finally:
-                        cursor.close()
-                        raw_conn.close()
-                        
+                            raw_conn.commit()
+                            st.success(f"✅ ¡Inyección Supersónica Completada! Se procesaron {len(filas_insertar)} registros mensuales sin sobrecargar la base de datos.")
+                            st.balloons()
+                            
+                        finally:
+                            cursor.close()
+                            raw_conn.close()
+                            
                 except Exception as e:
-                    st.error(f"Error en la inyección de lluvia: {e}")                    
+                    st.error(f"🚨 Error en la inyección de lluvia: {e}")
+
+    # ==============================================================================
+    # 🤖 BOT DE MINERÍA DATAVERSE: EXTRACCIÓN HISTÓRICA PROFUNDA (SIATA)
+    # ==============================================================================
+    st.markdown("<br>", unsafe_allow_html=True)
+    with st.expander("🤖 Máquina del Tiempo: Bot de Extracción API Dataverse (SIATA)", expanded=True):
+        st.markdown("Este bot se conecta por los túneles del servidor oficial del Repositorio SIATA. Busca las estaciones por código, localiza los IDs ocultos de los archivos de 2026, los descarga en memoria, los suma y genera la matriz consolidada.")
+        
+        ids_estaciones_input = st.text_input("Códigos de Estaciones a minar (separados por coma):", value="1, 5, 12, 19, 60, 69, 78, 775, 787, 816")
+        
+        if st.button("⛏️ Iniciar Minería de Datos Abiertos (Ene-Sep 2026)", type="primary"):
+            import requests
+            import pandas as pd
+            import time
+            import urllib3
+            from io import StringIO
+            
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            
+            lista_ids = [e.strip() for e in ids_estaciones_input.split(",")]
+            meses_objetivo = ['2026_01', '2026_02', '2026_03', '2026_04', '2026_05', '2026_06', '2026_07', '2026_08', '2026_09']
+            base_url = "https://datos.siata.gov.co/api"
+            HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            
+            lista_dataframes_bot = []
+            barra_progreso = st.progress(0)
+            estado_texto = st.empty()
+            
+            for idx, estacion in enumerate(lista_ids):
+                estado_texto.text(f"🔍 Rastreando DOI de la estación {estacion}...")
+                
+                try:
+                    # El salto de línea fantasma fue eliminado aquí
+                    url_search = f"{base_url}/search?q=\"{estacion} - \"&type=dataset&subtree=Pluviometrica"
+                    res_search = requests.get(url_search, headers=HEADERS, verify=False, timeout=15).json()
+                    
+                    items = res_search.get('data', {}).get('items', [])
+                    if not items:
+                        st.warning(f"⚠️ No se encontró la estación {estacion} en el repositorio.")
+                        continue
+                        
+                    doi_estacion = items[0]['global_id']
+                    estado_texto.text(f"📂 DOI encontrado ({doi_estacion}). Extrayendo archivos para estación {estacion}...")
+                    
+                    url_dataset = f"{base_url}/datasets/:persistentId/?persistentId={doi_estacion}"
+                    res_ds = requests.get(url_dataset, headers=HEADERS, verify=False, timeout=15).json()
+                    archivos_dataset = res_ds.get('data', {}).get('latestVersion', {}).get('files', [])
+                    
+                    for archivo in archivos_dataset:
+                        nombre_archivo = archivo.get('dataFile', {}).get('filename', '')
+                        file_id = archivo.get('dataFile', {}).get('id')
+                        
+                        if any(mes in nombre_archivo for mes in meses_objetivo):
+                            estado_texto.text(f"📥 Descargando e inyectando: {nombre_archivo}...")
+                            url_descarga = f"{base_url}/access/datafile/{file_id}"
+                            
+                            res_csv = requests.get(url_descarga, headers=HEADERS, verify=False, timeout=20)
+                            
+                            try:
+                                df_temp = pd.read_csv(StringIO(res_csv.text), sep='\t', on_bad_lines='skip')
+                                if len(df_temp.columns) < 2:
+                                    df_temp = pd.read_csv(StringIO(res_csv.text), sep=';', on_bad_lines='skip')
+                            except:
+                                continue
+                            
+                            col_fecha = next((c for c in df_temp.columns if 'fecha' in c.lower() or 'date' in c.lower()), None)
+                            col_valor = next((c for c in df_temp.columns if 'valor' in c.lower() or 'precip' in c.lower()), None)
+                            
+                            if col_fecha and col_valor:
+                                df_temp['fecha'] = pd.to_datetime(df_temp[col_fecha], errors='coerce')
+                                df_temp[col_valor] = pd.to_numeric(df_temp[col_valor].astype(str).str.replace(',', '.'), errors='coerce')
+                                df_temp = df_temp.dropna(subset=['fecha', col_valor])
+                                
+                                df_temp['mes_año'] = df_temp['fecha'].dt.to_period('M').dt.to_timestamp()
+                                df_mensual = df_temp.groupby('mes_año')[col_valor].sum().reset_index()
+                                
+                                df_mensual.rename(columns={'mes_año': 'fecha', col_valor: f"SIATA_{estacion}"}, inplace=True)
+                                lista_dataframes_bot.append(df_mensual)
+                                
+                            time.sleep(0.5) 
+                            
+                except Exception as e:
+                    st.error(f"Fallo crítico en estación {estacion}: {e}")
+                    
+                barra_progreso.progress((idx + 1) / len(lista_ids))
+            
+            estado_texto.text("✅ Minería completada. Ensamblando la Súper-Matriz...")
+            
+            if lista_dataframes_bot:
+                df_master_bot = pd.concat(lista_dataframes_bot, ignore_index=True)
+                df_bot_final = df_master_bot.groupby('fecha').sum(min_count=1).reset_index()
+                df_bot_final = df_bot_final.sort_values('fecha')
+                df_bot_final['fecha'] = df_bot_final['fecha'].dt.strftime('%Y-%m-%d')
+                
+                st.success("🎉 Súper-Matriz Histórica generada con éxito.")
+                st.dataframe(df_bot_final, width="stretch")
+                
+                csv_bot = df_bot_final.to_csv(sep=';', decimal=',', index=False).encode('utf-8-sig')
+                st.download_button(
+                    label="📥 Descargar Matriz de los 9 Meses (Lista para Inyectar)",
+                    data=csv_bot,
+                    file_name="Datos_SIATA_Mineria_2026.csv",
+                    mime="text/csv",
+                    type="primary"
+                )
+            else:
+                st.warning("No se pudo construir la matriz. El servidor bloqueó la descarga o no hay datos.")
 
 # ==========================
 # 🚀 ZONA DE PRUEBAS
 # ==========================
 if __name__ == "__main__":
-
-    # Pon aquí 3 o 4 códigos de estaciones que sepas que tienen vacíos post-2010
-    mis_estaciones = ["23060110", "23080950", "27010810"] 
+    st.markdown("---")
+    st.subheader("🧹 Limpieza de Emergencia de la Base de Datos")
+    st.markdown("Si entraron datos corruptos, valores negativos o monstruos decimales de Excel, usa este botón para purgar la base de datos.")
     
-    df_descarga = extraer_ideam_datos_abiertos(mis_estaciones)
-    
-    if not df_descarga.empty:
-        # Guardamos el botín para inspeccionarlo
-        df_descarga.to_csv("Botin_IDEAM_Directo.csv", index=False, sep=';', encoding='utf-8')
-        print(df_descarga.head())
+    if st.button("🧨 Purgar Anomalías y Valores Imposibles de Supabase", type="primary"):
+        from modules.db_manager import get_engine
+        from sqlalchemy import text
+        
+        try:
+            engine = get_engine()
+            with engine.begin() as conn:
+                # Borramos negativos y valores titánicos (> 8000mm)
+                res = conn.execute(text("DELETE FROM precipitacion WHERE valor < 0 OR valor > 8000;"))
+                st.success(f"✅ ¡Caza de monstruos completada! Se eliminaron {res.rowcount} registros residuales corruptos de Supabase.")
+                st.balloons()
+        except Exception as e:
+            st.error(f"Error en la purga: {e}")
