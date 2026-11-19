@@ -150,14 +150,62 @@ def main():
         if hasattr(poligono_memoria, 'empty') and not poligono_memoria.empty:
             gdf_zona = poligono_memoria
             
-    # 2. Si no está en memoria, invocar al Cargador Espacial Universal
+    # 2. Si no está en memoria, resolver Cuenca o Territorio Administrativo sin sobrescribir hallazgos
     if gdf_zona is None or (hasattr(gdf_zona, 'empty') and gdf_zona.empty):
+        import re, unicodedata
         from modules.utils import cargar_capa_espacial_cache
-        with st.spinner("🌍 Extrayendo geometría desde Territorio Maestro..."):
-            nombre_busqueda = st.session_state.get('aleph_lugar_oculto', nombre_zona)
-            gdf_zona = cargar_capa_espacial_cache(nombre_busqueda, nivel_jerarquico)
-            if gdf_zona is not None and not gdf_zona.empty:
-                st.session_state['aleph_poligono'] = gdf_zona
+
+        def _limp_cuenca(txt):
+            if not isinstance(txt, str):
+                return ""
+            s = unicodedata.normalize('NFKD', txt.upper().strip()).encode('ascii', 'ignore').decode('utf-8')
+            return re.sub(r'[^A-Z0-9]', '', s)
+
+        nivel_up = str(nivel_jerarquico).upper().strip()
+        es_cuenca_clima = any(k in nivel_up for k in ["CUENCA", "NSS", "SZH", "ZH", "AH", "HIDROG"])
+
+        if es_cuenca_clima:
+            gdf_c_base = gdf_subcuencas
+            if gdf_c_base is None or getattr(gdf_c_base, "empty", True):
+                try:
+                    gdf_c_base = cargar_capa_espacial_cache("SELECT * FROM cuencas", get_engine(), geom_col="geometry")
+                except Exception:
+                    gdf_c_base = None
+
+            if gdf_c_base is not None and not gdf_c_base.empty:
+                m_cod = re.search(r'\(([^()]+)\)\s*$', str(nombre_zona).strip())
+                cod_ideam = m_cod.group(1).strip() if m_cod else None
+                nom_limpio = _limp_cuenca(re.sub(r'\s*-\s*\([^()]+\)\s*$', '', str(nombre_zona)))
+
+                match_c = gpd.GeoDataFrame()
+                if cod_ideam:
+                    cols_cod = [c for c in gdf_c_base.columns if c.lower() in ['nss1', 'nss2', 'nss3', 'szh', 'zh', 'ah', 'codigo', 'cod_cuenca']]
+                    for col_c in cols_cod:
+                        m_sub = gdf_c_base[gdf_c_base[col_c].astype(str).str.strip() == cod_ideam]
+                        if not m_sub.empty:
+                            match_c = m_sub
+                            break
+
+                if match_c.empty and nom_limpio:
+                    cols_nom = [c for c in gdf_c_base.columns if any(k in c.lower() for k in ['nom', 'nombre', 'cuenca', 'subc', 'lbl'])]
+                    for col_n in cols_nom:
+                        m_nom = gdf_c_base[gdf_c_base[col_n].astype(str).apply(_limp_cuenca) == nom_limpio]
+                        if not m_nom.empty:
+                            match_c = m_nom
+                            break
+
+                if not match_c.empty:
+                    geom_u = match_c.geometry.make_valid().unary_union
+                    gdf_zona = gpd.GeoDataFrame(geometry=[geom_u], crs=gdf_c_base.crs)
+                    st.session_state['aleph_poligono'] = gdf_zona
+
+        if gdf_zona is None or (hasattr(gdf_zona, 'empty') and gdf_zona.empty):
+            with st.spinner("🌍 Extrayendo geometría desde Territorio Maestro..."):
+                nombre_busqueda = st.session_state.get('aleph_lugar_oculto', nombre_zona)
+                gdf_tm_res = cargar_capa_espacial_cache(nombre_busqueda, nivel_jerarquico)
+                if gdf_tm_res is not None and not getattr(gdf_tm_res, "empty", True):
+                    gdf_zona = gdf_tm_res
+                    st.session_state['aleph_poligono'] = gdf_zona
 
     # 3. Muro de Seguridad Final
     if gdf_zona is None or (hasattr(gdf_zona, 'empty') and gdf_zona.empty) or (isinstance(gdf_zona, dict) and not gdf_zona):
@@ -426,32 +474,68 @@ def main():
             # Fallback silencioso en caso de error de red
             pass
 
-    # 3. 🚀 NUEVO: Conexión directa a la Matriz Maestra (Supabase)
+    # 3. 🚀 NUEVO: Conexión robusta a Matrices Maestras (Inmune a tildes como Medellín/Medelln)
     try:
         from modules.db_manager import get_engine
         from sqlalchemy import text
         import pandas as pd
-        
-        zona_limpia = str(nombre_zona).replace("CAR: ", "").strip()
-        q_matriz = text('''
-            SELECT "Altitud_m" 
-            FROM matriz_hidrologica_maestra 
-            WHERE UPPER(TRIM("Territorio")) = UPPER(TRIM(:t_nom))
-            LIMIT 1
-        ''')
-        
-        df_matriz = pd.read_sql(q_matriz, get_engine(), params={"t_nom": zona_limpia})
-        
-        if not df_matriz.empty:
-            # Si el modelo ya se corrió, extraemos la altitud exacta del raster
-            alt_real = float(df_matriz['Altitud_m'].iloc[0])
-            st.session_state['aleph_altitud_m'] = alt_real
-            st.session_state['aleph_altitud_max'] = alt_real # Se emparejan por consistencia visual
-            st.session_state['aleph_altitud_min'] = alt_real
+        import unicodedata, re
+
+        def _norm_alt(txt):
+            s = unicodedata.normalize('NFKD', str(txt).upper().strip()).encode('ascii', 'ignore').decode('utf-8')
+            return re.sub(r'[^A-Z0-9]', '', s)
+
+        zona_limpia = str(nombre_zona).replace("CAR: ", "").split(" - (")[0].strip()
+        key_zona = _norm_alt(zona_limpia)
+        cons_zona = re.sub(r'[AEIOU]', '', key_zona)
+        eng_alt = get_engine()
+
+        alt_med_ok, alt_min_ok, alt_max_ok = 0.0, 0.0, 0.0
+
+        # A. Intentar primero Matriz Hidro-Geomorfológica (trae Mín, Media y Máx reales)
+        try:
+            with eng_alt.connect() as conn:
+                df_gm = pd.read_sql(text('SELECT "Territorio", "H_Minima", "H_Media", "H_Maxima" FROM matriz_hidrogeomorfologica_maestra'), conn)
+            if not df_gm.empty:
+                s_gm = df_gm['Territorio'].apply(_norm_alt)
+                m_gm = df_gm[s_gm == key_zona]
+                if m_gm.empty:
+                    m_gm = df_gm[s_gm.apply(lambda x: re.sub(r'[AEIOU]', '', x)) == cons_zona]
+                if not m_gm.empty:
+                    alt_med_ok = float(m_gm['H_Media'].iloc[0] or 0.0)
+                    alt_min_ok = float(m_gm['H_Minima'].iloc[0] or alt_med_ok)
+                    alt_max_ok = float(m_gm['H_Maxima'].iloc[0] or alt_med_ok)
+        except Exception:
+            pass
+
+        # B. Si no estuvo, intentar Matriz Hidrológica Maestra
+        if alt_med_ok <= 0:
+            with eng_alt.connect() as conn:
+                df_hm = pd.read_sql(text('SELECT "Territorio", "Altitud_m" FROM matriz_hidrologica_maestra'), conn)
+            if not df_hm.empty:
+                s_hm = df_hm['Territorio'].apply(_norm_alt)
+                m_hm = df_hm[s_hm == key_zona]
+                if m_hm.empty:
+                    m_hm = df_hm[s_hm.apply(lambda x: re.sub(r'[AEIOU]', '', x)) == cons_zona]
+                if not m_hm.empty:
+                    alt_med_ok = float(m_hm['Altitud_m'].iloc[0] or 0.0)
+                    alt_min_ok, alt_max_ok = alt_med_ok, alt_med_ok
+
+        # C. Respaldo final: altitud real de las estaciones filtradas en la zona
+        if alt_med_ok <= 0 and gdf_filtered is not None and not gdf_filtered.empty and 'altitud' in gdf_filtered.columns:
+            alts_est = pd.to_numeric(gdf_filtered['altitud'], errors='coerce').dropna()
+            alts_est = alts_est[alts_est > 0]
+            if not alts_est.empty:
+                alt_med_ok = float(alts_est.mean())
+                alt_min_ok = float(alts_est.min())
+                alt_max_ok = float(alts_est.max())
+
+        if alt_med_ok > 0:
+            st.session_state['aleph_altitud_m'] = alt_med_ok
+            st.session_state['aleph_altitud_min'] = alt_min_ok
+            st.session_state['aleph_altitud_max'] = alt_max_ok
         else:
-            # Si no está forjada en la BD, la forzamos a 0 para detonar la advertencia
-            if 'aleph_altitud_m' not in st.session_state or st.session_state['aleph_altitud_m'] == 1500.0:
-                st.session_state['aleph_altitud_m'] = 0.0
+            st.session_state['aleph_altitud_m'] = 0.0
     except Exception:
         pass
 
@@ -466,27 +550,27 @@ def main():
         elif area_actual_km2 > 0:
             st.session_state['aleph_pob_total'] = max((area_actual_km2 * 35.0), 10000.0)
 
-# =========================================================================
+    # =========================================================================
     # 🌟 INYECCIÓN DE CLIMA GLOBAL EN VIVO (BYPASS TABLAS ESTÁTICAS)
     # =========================================================================
-    # El sistema estaba usando un df_enso estático y viejo. Lo reemplazamos al vuelo:
     try:
-        from modules.climate_api import get_live_oni_data, get_live_soi_data, get_live_iod_data
+        from modules.climate_api import get_live_oni_data, get_live_soi_data, get_live_iod_data, get_live_sst_data
         
         df_oni_vivo, _ = get_live_oni_data()
         df_soi_vivo, _ = get_live_soi_data()
         df_iod_vivo, _ = get_live_iod_data()
+        df_sst_vivo, _ = get_live_sst_data()
         
         if df_oni_vivo is not None and not df_oni_vivo.empty:
             df_enso_vivo = df_oni_vivo.copy()
             
-            # Juntamos los tres índices en una sola tabla maestra actualizada
             if df_soi_vivo is not None and not df_soi_vivo.empty:
                 df_enso_vivo = pd.merge(df_enso_vivo, df_soi_vivo, on='fecha', how='left')
             if df_iod_vivo is not None and not df_iod_vivo.empty:
                 df_enso_vivo = pd.merge(df_enso_vivo, df_iod_vivo, on='fecha', how='left')
+            if df_sst_vivo is not None and not df_sst_vivo.empty:
+                df_enso_vivo = pd.merge(df_enso_vivo, df_sst_vivo, on='fecha', how='left')
                 
-            # 🚀 EL GOLPE MAESTRO: Sobreescribimos la variable vieja
             df_enso = df_enso_vivo
     except Exception as e:
         print(f"Error en bypass de clima: {e}")
@@ -1444,63 +1528,511 @@ def main():
             
     elif selected_module == "🌡️ Clima Futuro": viz.display_climate_scenarios_tab(**display_args)
     
-    # --- ISOYETAS HD (CORREGIDO) ---
+    # --- ISOYETAS HD (MOTOR FOLIUM - SIG COMPLETO, POLÍGONO TERRITORIAL Y BLINDAJE DE DATOS) ---
     elif selected_module == "✨ Mapas Isoyetas HD":
-        import numpy as np # 🚀 FIX: Importación segura dentro del bloque
+        import numpy as np
+        import geopandas as gpd
+        from shapely.geometry import Point
+        from modules.interpolation import interpolador_maestro
+        import folium
+        from streamlit_folium import st_folium
+        import matplotlib.pyplot as plt
+        import matplotlib.colors as mcolors
+        import scipy.linalg as la
+        import io
+        import base64
         
-        st.header("🗺️ Isoyetas Alta Definición (RBF)")
-        col1, col2 = st.columns([1,3])
-        year_iso = col1.selectbox("Año:", range(int(year_range[1]), int(year_range[0])-1, -1))
-        suavidad = col1.slider("Suavizado:", 0.0, 2.0, 0.5)
+        st.header("🗺️ Laboratorio Geoestadístico Dual (Visor SIG)")
+        
+        # --- 1. CAJA DE HERRAMIENTAS CARTOGRÁFICAS Y CLÍNICA DE DATOS ---
+        col_herramientas, col_clinica = st.columns([2, 1])
+        
+        with col_herramientas:
+            st.markdown("**Opciones de Diseño**")
+            hc1, hc2, hc3 = st.columns(3)
+            colorscale_sel = hc1.selectbox("🎨 Escala:", ["Viridis", "Turbo", "Plasma", "YlGnBu", "Spectral", "Inferno"])
+            suavidad = hc2.slider("🌫️ Transparencia:", 0.0, 1.0, 0.65)
+            mostrar_lineas = hc3.checkbox("📉 Líneas", value=True)
+            
+        with col_clinica:
+            st.markdown("**Motor de Inteligencia**")
+            c_btn1, c_btn2 = st.columns(2)
+            if c_btn1.button("✨ Activar Aleph", type="primary", use_container_width=True):
+                st.session_state['usar_aleph'] = True
+            if c_btn2.button("❌ Desactivar", use_container_width=True):
+                st.session_state['usar_aleph'] = False
+                
+        estado_aleph = st.session_state.get('usar_aleph', False)
+        if estado_aleph:
+            st.info("🧠 **El Aleph está ACTIVO:** Reconstruyendo meses faltantes y falsos ceros con la red espacial de estaciones vecinas.")
+        else:
+            st.caption("🔍 **Modo Observacional Puro:** Mostrando estaciones con >=80% de meses válidos en el año (sin ceros ni duplicados).")
+            
+        cmap_dict = {"Viridis": "viridis", "Turbo": "turbo", "Plasma": "plasma", "YlGnBu": "YlGnBu", "Spectral": "Spectral", "Inferno": "inferno"}
+        cmap_mpl = cmap_dict.get(colorscale_sel, "viridis")
+        
+        enso_historico = {
+            2010: "🌧️ La Niña Fuerte",
+            2011: "🌧️ La Niña Moderada",
+            2012: "⚖️ Neutro",
+            2013: "⚖️ Neutro",
+            2014: "⚖️ Neutro",
+            2015: "☀️ El Niño Muy Fuerte",
+            2016: "☀️ El Niño Fuerte / Transición",
+            2017: "🌧️ La Niña Débil / Neutro",
+            2018: "⚖️ Neutro",
+            2019: "☀️ El Niño Débil",
+            2020: "🌧️ La Niña Moderada",
+            2021: "🌧️ La Niña Moderada",
+            2022: "🌧️ La Niña Fuerte",
+            2023: "☀️ El Niño Fuerte",
+            2024: "☀️ El Niño / Neutro",
+            2025: "🌧️ La Niña Débil / Neutro Frío",
+            2026: "⚖️ Neutro"
+        }
+        
+        def obtener_etiqueta_enso(anio):
+            return enso_historico.get(int(anio), "⚖️ Neutro / Histórico")
+
+        # 🧭 BUSCADOR INTELIGENTE DE LA CAPA DEL TERRITORIO SELECCIONADO (Municipio, Cuenca, Región, CAR)
+        def obtener_poligono_territorio():
+            candidatos = [
+                'gdf_territorio', 'gdf_zona', 'gdf_poly', 'gdf_limite', 'gdf_limites',
+                'gdf_municipio', 'gdf_cuenca', 'gdf_region', 'gdf_car', 'gdf_context',
+                'gdf_mask', 'gdf_seleccion', 'poligono_seleccionado', 'zona_estudio', 'gdf_bound'
+            ]
+            for nombre in candidatos:
+                obj = st.session_state.get(nombre)
+                if obj is None:
+                    obj = globals().get(nombre)
+                if isinstance(obj, (gpd.GeoDataFrame, gpd.GeoSeries)) and not obj.empty:
+                    tipos = set(obj.geometry.geom_type.dropna().unique())
+                    if any('Polygon' in t for t in tipos):
+                        gdf_p = gpd.GeoDataFrame(geometry=obj.geometry, crs=obj.crs)
+                        if gdf_p.crs is not None and gdf_p.crs.to_epsg() != 4326:
+                            gdf_p = gdf_p.to_crs(epsg=4326)
+                        return gdf_p
+
+            for fuente in [st.session_state, globals()]:
+                for k, v in list(fuente.items()):
+                    if k == 'gdf_filtered':
+                        continue
+                    try:
+                        if isinstance(v, (gpd.GeoDataFrame, gpd.GeoSeries)) and not v.empty:
+                            tipos = set(v.geometry.geom_type.dropna().unique())
+                            if any('Polygon' in t for t in tipos) and len(v) <= 30:
+                                gdf_p = gpd.GeoDataFrame(geometry=v.geometry, crs=v.crs)
+                                if gdf_p.crs is not None and gdf_p.crs.to_epsg() != 4326:
+                                    gdf_p = gdf_p.to_crs(epsg=4326)
+                                return gdf_p
+                    except Exception:
+                        continue
+            return None
+        
+        st.markdown("---")
         
         ids_validos = tuple(gdf_filtered['id_estacion'].unique())
         
-        if len(ids_validos) > 2:
+        if len(ids_validos) > 3:
             try:
                 from modules.db_manager import get_engine
                 from sqlalchemy import text
+                import pandas as pd
                 
                 engine = get_engine()
                 ids_sql = str(ids_validos) if len(ids_validos) > 1 else f"('{ids_validos[0]}')"
                 
-                q = text(f"""
-                    SELECT e.nombre, e.latitud as lat, e.longitud as lon, SUM(p.valor) as valor
-                    FROM precipitacion p JOIN estaciones e ON p.id_estacion = e.id_estacion
-                    WHERE extract(year from p.fecha) = :y AND e.id_estacion IN {ids_sql}
-                    GROUP BY e.id_estacion, e.nombre, e.latitud, e.longitud
-                """)
-                
-                df_iso = pd.read_sql(q, engine, params={"y": year_iso})
-                
-                if not df_iso.empty:
-                    from scipy.interpolate import Rbf
-                    import plotly.graph_objects as go
+                # Función maestra para cargar datos (CON FILTRO SIN CEROS, ANTI-DUPLICADOS Y CONTROL DE ANOMALÍAS)
+                def cargar_datos_isoyetas(anio):
+                    # Agrupamos con AVG(p.valor) por (id_estacion, fecha) para evitar sumas duplicadas/triplicadas
+                    # y filtramos p.valor > 0 para descartar falsos ceros mensuales (como Jardín Botánico 27015270 en 2020)
+                    q_raw = text(f"""
+                        SELECT p.id_estacion,
+                               MAX(e.nombre) as nombre,
+                               p.fecha,
+                               AVG(p.valor) as valor,
+                               MAX(e.latitud) as latitud,
+                               MAX(e.longitud) as longitud
+                        FROM precipitacion p
+                        JOIN estaciones e ON p.id_estacion = e.id_estacion
+                        WHERE extract(year from p.fecha) = :y
+                          AND e.id_estacion IN {ids_sql}
+                          AND p.valor > 0
+                          AND p.valor <= 900
+                        GROUP BY p.id_estacion, p.fecha
+                    """)
+                    df_raw = pd.read_sql(q_raw, engine, params={"y": anio})
+                    if df_raw.empty:
+                        return pd.DataFrame(columns=['id_estacion', 'nombre', 'lat', 'lon', 'valor'])
                     
-                    minx, miny, maxx, maxy = gdf_filtered.total_bounds
+                    df_raw['fecha'] = pd.to_datetime(df_raw['fecha']).dt.to_period('M').dt.to_timestamp()
+                    cat_nombres = df_raw[['id_estacion', 'nombre', 'latitud', 'longitud']].drop_duplicates(subset=['id_estacion']).rename(
+                        columns={'latitud': 'lat', 'longitud': 'lon'}
+                    )
                     
-                    gx, gy = np.mgrid[minx:maxx:200j, miny:maxy:200j]
-                    
-                    rbf = Rbf(df_iso['lon'], df_iso['lat'], df_iso['valor'], function='thin_plate', smooth=suavidad)
-                    z = rbf(gx, gy)
-
-                    # Convertir NaNs a 0 para que el mapa no colapse
-                    z = np.nan_to_num(z, nan=0.0)
-                    
-                    fig = go.Figure(go.Contour(z=z.T, x=np.linspace(minx,maxx,200), y=np.linspace(miny,maxy,200), colorscale="Viridis"))
-                    
-                    if hasattr(viz, 'add_context_layers_ghost'):
-                        viz.add_context_layers_ghost(fig, gdf_filtered)
+                    if estado_aleph:
+                        from modules.data_clinic import sanar_matriz_espacial
+                        df_curado = sanar_matriz_espacial(
+                            df_raw, gdf_filtered, col_fecha='fecha', col_valor='valor', col_id='id_estacion', mostrar_alerta=False
+                        )
+                        df_final = df_curado.groupby('id_estacion', as_index=False)['valor'].sum()
+                        df_final = pd.merge(df_final, cat_nombres, on='id_estacion', how='left')
+                    else:
+                        meses_en_anio = df_raw['fecha'].nunique()
+                        min_meses = max(1, int(np.ceil(meses_en_anio * 0.8)))
                         
-                    fig.add_trace(go.Scatter(x=df_iso['lon'], y=df_iso['lat'], mode='markers', text=df_iso['nombre']))
-                    st.plotly_chart(fig, width="stretch")
+                        resumen = df_raw.groupby('id_estacion').agg(
+                            valor=('valor', 'sum'),
+                            n_meses=('fecha', 'nunique')
+                        ).reset_index()
+                        
+                        resumen = resumen[resumen['n_meses'] >= min_meses].drop(columns=['n_meses'])
+                        df_final = pd.merge(resumen, cat_nombres, on='id_estacion', how='left')
+                    
+                    df_final = df_final.dropna(subset=['lat', 'lon', 'valor'])
+                    # Cortafuegos anual: elimina estaciones con suma anual <= 100 mm o picos corruptos (> 5500 mm)
+                    df_final = df_final[(df_final['valor'] > 100.0) & (df_final['valor'] <= 5500.0)].copy()
+                    return df_final.reset_index(drop=True)
+
+                # --- 2. PANELES DE CONTROL DUALES ---
+                rango_anios = list(range(int(year_range[1]), int(year_range[0])-1, -1))
+                col_map1, col_map2 = st.columns(2)
                 
-                else: 
-                    st.warning("Datos insuficientes para interpolar (Mínimo 3 estaciones con datos en este año).")
-            
+                with col_map1:
+                    ph_titulo_a = st.empty()
+                    ph_caja_a = st.empty()
+                    c1a, c1b = st.columns(2)
+                    year_1 = c1a.selectbox("Año A:", rango_anios, key="y1")
+                    metodo_1 = c1b.selectbox("Método A:", ["rbf", "kriging", "idw", "spline", "trend"], format_func=lambda x: x.upper(), key="m1")
+                    
+                with col_map2:
+                    ph_titulo_b = st.empty()
+                    ph_caja_b = st.empty()
+                    c2a, c2b = st.columns(2)
+                    idx_y2 = 1 if len(rango_anios) > 1 else 0
+                    year_2 = c2a.selectbox("Año B:", rango_anios, index=idx_y2, key="y2")
+                    metodo_2 = c2b.selectbox("Método B:", ["kriging", "rbf", "idw", "spline", "trend"], format_func=lambda x: x.upper(), key="m2")
+
+                df_iso1 = cargar_datos_isoyetas(year_1)
+                df_iso2 = cargar_datos_isoyetas(year_2)
+
+                enso_1 = obtener_etiqueta_enso(year_1)
+                enso_2 = obtener_etiqueta_enso(year_2)
+                n_est_1 = len(df_iso1)
+                n_est_2 = len(df_iso2)
+                prom_1 = f"{df_iso1['valor'].mean():.0f} mm" if n_est_1 > 0 else "Sin datos"
+                prom_2 = f"{df_iso2['valor'].mean():.0f} mm" if n_est_2 > 0 else "Sin datos"
+
+                ph_titulo_a.subheader(f"Mapa A ({enso_1} | {n_est_1} estaciones)")
+                ph_caja_a.info(f"📌 **Año {year_1} ({enso_1})** — **{n_est_1}** estaciones válidas (sin ceros) | Promedio: **{prom_1}**")
+
+                ph_titulo_b.subheader(f"Mapa B ({enso_2} | {n_est_2} estaciones)")
+                ph_caja_b.info(f"📌 **Año {year_2} ({enso_2})** — **{n_est_2}** estaciones válidas (sin ceros) | Promedio: **{prom_2}**")
+
+                def calcular_kriging_ordinario(lons, lats, vals, gx, gy):
+                    coords = np.column_stack([lons, lats])
+                    _, unique_idx = np.unique(np.round(coords, 5), axis=0, return_index=True)
+                    unique_idx = np.sort(unique_idx)
+                    x, y, v = lons[unique_idx], lats[unique_idx], vals[unique_idx]
+                    n = len(v)
+                    if n < 3 or np.std(v) < 1e-6:
+                        return np.full_like(gx, np.mean(v))
+                        
+                    dist_mat = np.sqrt((x[:, None] - x[None, :])**2 + (y[:, None] - y[None, :])**2)
+                    rango = max(float(np.percentile(dist_mat, 65)), 1e-4)
+                    sill = max(float(np.var(v)), 1.0)
+                    nugget = 0.05 * sill
+                    
+                    def variograma(h):
+                        return np.where(h == 0, 0.0, nugget + sill * (1.0 - np.exp(-h / (rango / 2.5))))
+                        
+                    K = np.zeros((n + 1, n + 1))
+                    K[:n, :n] = variograma(dist_mat) + np.eye(n) * (1e-5 * sill)
+                    K[:n, n] = 1.0
+                    K[n, :n] = 1.0
+                    
+                    gx_flat, gy_flat = gx.ravel(), gy.ravel()
+                    dist_grid = np.sqrt((gx_flat[:, None] - x[None, :])**2 + (gy_flat[:, None] - y[None, :])**2)
+                    rhs = np.ones((len(gx_flat), n + 1))
+                    rhs[:, :n] = variograma(dist_grid)
+                    
+                    pesos = la.solve(K, rhs.T, assume_a='sym')
+                    z_pred = np.dot(pesos[:n, :].T, v).reshape(gx.shape)
+                    return np.clip(z_pred, max(0.0, float(np.min(v)) * 0.85), float(np.max(v)) * 1.10)
+
+                def renderizar_barra_leyenda_html(vmin, vmax, cmap_name, metodo_str, anio_str):
+                    cmap_obj = plt.get_cmap(cmap_name)
+                    hex_list = [mcolors.to_hex(cmap_obj(i)) for i in np.linspace(0, 1, 12)]
+                    gradiente_css = ", ".join(hex_list)
+                    ticks = np.linspace(vmin, vmax, 6)
+                    spans_ticks = "".join([f"<span style='font-weight:700; color:#0f172a; font-size:12.5px;'>{t:.0f} mm</span>" for t in ticks])
+                    return f"""
+                    <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:8px; padding:8px 14px; margin-top:2px; margin-bottom:12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+                        <div style="font-size:12px; font-weight:700; color:#1e293b; margin-bottom:5px; text-align:center;">
+                            🎨 Escala de Precipitación Estimada ({anio_str} — {metodo_str.upper()})
+                        </div>
+                        <div style="height:15px; width:100%; background: linear-gradient(to right, {gradiente_css}); border-radius:4px; border:1px solid #64748b;"></div>
+                        <div style="display:flex; justify-content:space-between; margin-top:5px;">
+                            {spans_ticks}
+                        </div>
+                    </div>
+                    """
+
+                gdf_poligono_actual = obtener_poligono_territorio()
+
+                def crear_mapa_folium(df_data, metodo, map_tag):
+                    if df_data.empty or len(df_data) < 3:
+                        return folium.Map(location=[6.25, -75.58], zoom_start=11), 0.0, 100.0
+                        
+                    geometry = [Point(xy) for xy in zip(df_data['lon'], df_data['lat'])]
+                    gdf_puntos = gpd.GeoDataFrame(df_data, geometry=geometry, crs="EPSG:4326")
+                    
+                    # Extensión de la malla: une el polígono del territorio con las estaciones filtradas
+                    minx, miny, maxx, maxy = gdf_puntos.total_bounds
+                    if gdf_poligono_actual is not None and not gdf_poligono_actual.empty:
+                        px1, py1, px2, py2 = gdf_poligono_actual.total_bounds
+                        minx, miny = min(minx, px1), min(miny, py1)
+                        maxx, maxy = max(maxx, px2), max(maxy, py2)
+                        
+                    pad_x = max((maxx - minx) * 0.05, 0.01)
+                    pad_y = max((maxy - miny) * 0.05, 0.01)
+                    minx, maxx = minx - pad_x, maxx + pad_x
+                    miny, maxy = miny - pad_y, maxy + pad_y
+                    gx, gy = np.mgrid[minx:maxx:150j, miny:maxy:150j]
+                    
+                    lons = df_data['lon'].values.astype(float)
+                    lats = df_data['lat'].values.astype(float)
+                    vals = df_data['valor'].values.astype(float)
+                    
+                    if metodo == "kriging":
+                        z = calcular_kriging_ordinario(lons, lats, vals, gx, gy)
+                    elif metodo == "rbf":
+                        from scipy.interpolate import Rbf
+                        rbf = Rbf(lons, lats, vals, function='thin_plate', smooth=0.08)
+                        z = np.clip(rbf(gx, gy), float(np.min(vals)) * 0.8, float(np.max(vals)) * 1.15)
+                    elif metodo == "idw":
+                        dist = np.sqrt((gx.ravel()[:, None] - lons[None, :])**2 + (gy.ravel()[:, None] - lats[None, :])**2)
+                        dist = np.where(dist < 1e-9, 1e-9, dist)
+                        w = 1.0 / (dist ** 2)
+                        z = (np.sum(w * vals[None, :], axis=1) / np.sum(w, axis=1)).reshape(gx.shape)
+                    else:
+                        try:
+                            z, _ = interpolador_maestro(gdf_puntos, 'valor', gx, gy, metodo=metodo)
+                            if z is None or np.nanstd(z) < 1e-3:
+                                z = calcular_kriging_ordinario(lons, lats, vals, gx, gy)
+                        except Exception:
+                            z = calcular_kriging_ordinario(lons, lats, vals, gx, gy)
+                            
+                    z = np.nan_to_num(z, nan=float(np.nanmean(vals)))
+                    vmin, vmax = float(np.min(z)), float(np.max(z))
+                    if abs(vmax - vmin) < 1e-2:
+                        vmin, vmax = float(np.min(vals)), float(np.max(vals))
+                        if abs(vmax - vmin) < 1e-2:
+                            vmax = vmin + 10.0
+                    
+                    fig_m = plt.figure(figsize=(6, 6), dpi=150)
+                    ax_m = fig_m.add_axes([0, 0, 1, 1])
+                    ax_m.axis('off')
+                    ax_m.set_xlim(minx, maxx)
+                    ax_m.set_ylim(miny, maxy)
+                    
+                    niveles = np.linspace(vmin, vmax, 16)
+                    ax_m.contourf(gx, gy, z, levels=niveles, cmap=cmap_mpl, alpha=suavidad, extend='both')
+                    if mostrar_lineas:
+                        ax_m.contour(gx, gy, z, levels=niveles, colors='black', linewidths=0.55, alpha=0.8)
+                    
+                    buf = io.BytesIO()
+                    plt.savefig(buf, format='png', transparent=True)
+                    plt.close(fig_m)
+                    
+                    encoded_img = base64.b64encode(buf.getvalue()).decode('utf-8')
+                    img_url = 'data:image/png;base64,' + encoded_img
+                    
+                    m = folium.Map(
+                        location=[(miny+maxy)/2, (minx+maxx)/2],
+                        zoom_start=11,
+                        tiles=None,
+                        scrollWheelZoom=True
+                    )
+                    
+                    folium.TileLayer('OpenStreetMap', name='Calles (OSM)', control=True).add_to(m)
+                    folium.TileLayer('CartoDB positron', name='Base Clara', control=True).add_to(m)
+                    folium.TileLayer(
+                        tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                        attr='Esri', name='Satélite', control=True
+                    ).add_to(m)
+                    
+                    folium.raster_layers.ImageOverlay(
+                        image=img_url,
+                        bounds=[[miny, minx], [maxy, maxx]],
+                        opacity=1.0,
+                        name='Capa de Isoyetas'
+                    ).add_to(m)
+                    
+                    # Capa del Territorio Seleccionado (Municipio, Cuenca, Región o CAR) reproyectada a EPSG:4326
+                    if gdf_poligono_actual is not None and not gdf_poligono_actual.empty:
+                        folium.GeoJson(
+                            gdf_poligono_actual.to_json(),
+                            name='Límite Territorial Seleccionado',
+                            style_function=lambda x: {
+                                'fillColor': 'transparent',
+                                'color': '#0f172a',
+                                'weight': 3.0,
+                                'dashArray': '5, 3'
+                            }
+                        ).add_to(m)
+                        
+                    station_group = folium.FeatureGroup(name="Estaciones Meteorológicas")
+                    for _, row in df_data.iterrows():
+                        folium.CircleMarker(
+                            location=[row['lat'], row['lon']],
+                            radius=4.5, color='black', weight=1.2, fill_color='white', fill_opacity=1.0,
+                            tooltip=f"<b>{row['nombre']}</b> ({row['id_estacion']})<br>Lluvia: {row['valor']:.1f} mm"
+                        ).add_to(station_group)
+                    station_group.add_to(m)
+                    
+                    import branca.colormap as cm
+                    cmap_obj = plt.get_cmap(cmap_mpl)
+                    colores_hex = [mcolors.to_hex(cmap_obj(i)) for i in np.linspace(0, 1, 8)]
+                    colormap = cm.LinearColormap(
+                        colors=colores_hex,
+                        vmin=round(vmin, 1),
+                        vmax=round(vmax, 1),
+                        caption=f'Precipitación (mm) - {metodo.upper()}'
+                    )
+                    m.add_child(colormap)
+                    
+                    sync_and_css = f"""
+                    <style>
+                        .legend {{
+                            background-color: rgba(255, 255, 255, 0.94) !important;
+                            padding: 6px 10px !important;
+                            border-radius: 6px !important;
+                            border: 1px solid #334155 !important;
+                            box-shadow: 0 2px 6px rgba(0,0,0,0.35) !important;
+                            font-weight: 700 !important;
+                            color: #0f172a !important;
+                        }}
+                        .legend svg text {{
+                            fill: #0f172a !important;
+                            font-weight: 700 !important;
+                            font-size: 11px !important;
+                        }}
+                    </style>
+                    <script>
+                    (function() {{
+                        var mapTag = "{map_tag}";
+                        var isSyncing = false;
+                        function findLeafletMap() {{
+                            for (var k in window) {{
+                                if (k.startsWith("map_") && window[k] && typeof window[k].getCenter === "function") {{
+                                    return window[k];
+                                }}
+                            }}
+                            return null;
+                        }}
+                        function setupSync() {{
+                            var myMap = findLeafletMap();
+                            if (!myMap) {{
+                                setTimeout(setupSync, 250);
+                                return;
+                            }}
+                            function broadcastView() {{
+                                if (isSyncing) return;
+                                var c = myMap.getCenter();
+                                var z = myMap.getZoom();
+                                var msg = {{ type: "SIHCLI_MAP_SYNC", source: mapTag, lat: c.lat, lng: c.lng, zoom: z }};
+                                try {{
+                                    for (var i = 0; i < window.parent.frames.length; i++) {{
+                                        window.parent.frames[i].postMessage(msg, "*");
+                                    }}
+                                }} catch (e) {{}}
+                            }}
+                            myMap.on("moveend", broadcastView);
+                            myMap.on("zoomend", broadcastView);
+
+                            window.addEventListener("message", function(event) {{
+                                var data = event.data;
+                                if (data && data.type === "SIHCLI_MAP_SYNC" && data.source !== mapTag) {{
+                                    isSyncing = true;
+                                    myMap.setView([data.lat, data.lng], data.zoom, {{ animate: false }});
+                                    setTimeout(function() {{ isSyncing = false; }}, 120);
+                                }}
+                            }});
+                        }}
+                        setupSync();
+                    }})();
+                    </script>
+                    """
+                    m.get_root().html.add_child(folium.Element(sync_and_css))
+                    
+                    folium.LayerControl().add_to(m)
+                    return m, vmin, vmax
+
+                with col_map1:
+                    m1, vmin1, vmax1 = crear_mapa_folium(df_iso1, metodo_1, "MAPA_A")
+                    st_folium(m1, use_container_width=True, height=580, returned_objects=[], key="fol_m1")
+                    st.markdown(renderizar_barra_leyenda_html(vmin1, vmax1, cmap_mpl, metodo_1, year_1), unsafe_allow_html=True)
+                
+                with col_map2:
+                    m2, vmin2, vmax2 = crear_mapa_folium(df_iso2, metodo_2, "MAPA_B")
+                    st_folium(m2, use_container_width=True, height=580, returned_objects=[], key="fol_m2")
+                    st.markdown(renderizar_barra_leyenda_html(vmin2, vmax2, cmap_mpl, metodo_2, year_2), unsafe_allow_html=True)
+
+                # --- 3. ZONA DE DESCARGAS ---
+                st.markdown("### 📥 Centro de Exportación Cartográfica")
+                c_d1, c_d2 = st.columns(2)
+                with c_d1:
+                    csv_data1 = df_iso1.to_csv(index=False, sep=';', decimal=',').encode('utf-8-sig')
+                    st.download_button(f"📄 CSV Estaciones {year_1}", data=csv_data1, file_name=f"estaciones_A_{year_1}.csv", mime="text/csv", use_container_width=True)
+                with c_d2:
+                    csv_data2 = df_iso2.to_csv(index=False, sep=';', decimal=',').encode('utf-8-sig')
+                    st.download_button(f"📄 CSV Estaciones {year_2}", data=csv_data2, file_name=f"estaciones_B_{year_2}.csv", mime="text/csv", use_container_width=True)
+                
+                # --- 4. FICHA TÉCNICA HISTÓRICA ---
+                st.markdown("---")
+                st.subheader("📊 Ficha Técnica Estacional (Métricas Históricas)")
+                
+                with st.spinner("Calculando estadísticas históricas integrales..."):
+                    q_stats = text(f"""
+                        SELECT id_estacion, extract(year from fecha) as anio, extract(month from fecha) as mes, valor 
+                        FROM precipitacion WHERE id_estacion IN {ids_sql}
+                    """)
+                    df_all = pd.read_sql(q_stats, engine)
+                    
+                    if not df_all.empty:
+                        stats = []
+                        for est in ids_validos:
+                            df_est = df_all[df_all['id_estacion'] == est]
+                            if df_est.empty: continue
+                            
+                            nombre_est = gdf_filtered[gdf_filtered['id_estacion'] == est]['nombre'].values[0]
+                            anios_disp = df_est['anio'].nunique()
+                            
+                            prom_mes = df_est['valor'].mean()
+                            std_mes = df_est['valor'].std()
+                            mes_max = df_est.loc[df_est['valor'].idxmax()]
+                            mes_min = df_est.loc[df_est['valor'].idxmin()]
+                            
+                            df_anios = df_est.groupby('anio')['valor'].sum().reset_index()
+                            prom_anual = df_anios['valor'].mean()
+                            anio_max = df_anios.loc[df_anios['valor'].idxmax()]
+                            anio_min = df_anios.loc[df_anios['valor'].idxmin()]
+                            
+                            stats.append({
+                                "Estación": nombre_est, "Años Hist.": anios_disp, "Prom. Anual": round(prom_anual, 1),
+                                "Año + Lluvioso": f"{anio_max['valor']:.1f} ({int(anio_max['anio'])})",
+                                "Año - Lluvioso": f"{anio_min['valor']:.1f} ({int(anio_min['anio'])})",
+                                "Prom. Mensual": round(prom_mes, 1), "Desv. Est.": round(std_mes, 1),
+                                "Mes + Lluvioso": f"{mes_max['valor']:.1f} ({int(mes_max['mes'])}/{int(mes_max['anio'])})",
+                                "Mes - Lluvioso": f"{mes_min['valor']:.1f} ({int(mes_min['mes'])}/{int(mes_min['anio'])})"
+                            })
+                        st.dataframe(pd.DataFrame(stats), use_container_width=True, hide_index=True)
+                        
             except Exception as e: 
-                st.error(f"Error en Isoyetas: {e}")
+                st.error(f"Error en el Motor del Laboratorio: {e}")
         else: 
-            st.warning("Se requieren mín. 3 estaciones para calcular isoyetas.")
+            st.warning("Se requieren mín. 3 estaciones espaciales para habilitar la malla geoestadística.")
 
     # --- REPORTE INTEGRADO (ACTUALIZADO) ---
     elif selected_module == "📄 Reporte":

@@ -58,7 +58,15 @@ if nivel_jerarquico != "Estaciones":
 
 buffer_km = st.sidebar.slider("🎯 Radio de Búsqueda (Buffer en km):", min_value=0.0, max_value=50.0, value=15.0, step=1.0)
 
-# 🪂 FUNCIÓN CACHEADA GLOBALMENTE
+# 🔗 ENLACE DE CONTEXTO DESDE GEOMORFOLOGÍA Y CALIDAD/VERTIMIENTOS
+ctx_geo_sim = st.session_state.get("sihcli_contexto_geomorfo")
+ctx_cal_sim = st.session_state.get("sihcli_contexto_calidad")
+if isinstance(ctx_geo_sim, dict) and ctx_geo_sim.get("tc_kirpich_min", 0) > 0:
+    st.sidebar.caption(f"⏱️ Tc Geomorfología: {ctx_geo_sim['tc_kirpich_min']:.0f} min | Pendiente: {ctx_geo_sim['pendiente_media_deg']:.1f}°")
+if isinstance(ctx_cal_sim, dict) and ctx_cal_sim.get("carga_dbo_ton_anual", 0) > 0:
+    st.sidebar.caption(f"☣️ Carga DBO5 (Calidad): {ctx_cal_sim['carga_dbo_ton_anual']:,.0f} Ton/año")
+
+# 🌎 FUNCIÓN CACHEADA GLOBALMENTE
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_territorio_maestro():
     import geopandas as gpd
@@ -403,17 +411,36 @@ else:
                 else:
                     factor_infiltracion, info_cobertura = 0.25, "Promedio Regional Andino"
 
-                st.sidebar.subheader("🌍 Escenarios Climáticos")
+                st.sidebar.subheader("🌍 Escenarios Climáticos (NOAA CPC)")
                 escenario_climatico = st.sidebar.selectbox(
                     "Simulación Prospectiva:",
-                    ["🟢 Condición Hidrológica Normal (Línea Base)", "🔴 Fenómeno de El Niño", "🔵 Fenómeno de La Niña", "🟡 SSP2-4.5 (2050)", "🔥 SSP5-8.5 (2050)"]
+                    [
+                        "🟢 Condición Hidrológica Normal (Línea Base)",
+                        "📡 Pronóstico Dinámico NOAA CPC (ONI en Vivo)",
+                        "🔴 Fenómeno de El Niño (Estándar)",
+                        "🔵 Fenómeno de La Niña (Estándar)",
+                        "🟡 SSP2-4.5 (2050)",
+                        "🔥 SSP5-8.5 (2050)"
+                    ]
                 )
 
                 factor_ppt, factor_etp = 1.0, 1.0
-                if "Niño" in escenario_climatico: factor_ppt, factor_etp = 0.65, 1.15
-                elif "Niña" in escenario_climatico: factor_ppt, factor_etp = 1.40, 0.90
-                elif "SSP2" in escenario_climatico: factor_ppt, factor_etp = 0.95, 1.10
-                elif "SSP5" in escenario_climatico: factor_ppt, factor_etp = 0.85, 1.25
+                if "Dinámico NOAA" in escenario_climatico:
+                    from modules.climate_api import get_live_oni_data
+                    df_oni_sim, _ = get_live_oni_data()
+                    oni_sim = float(df_oni_sim['anomalia_oni'].iloc[-1]) if (df_oni_sim is not None and not df_oni_sim.empty) else 3.25
+                    # Sensibilidad hidrológica andina acoplada a la anomalía ONI en tiempo real
+                    factor_ppt = float(np.clip(1.0 - (0.14 * oni_sim), 0.55, 1.45))
+                    factor_etp = float(np.clip(1.0 + (0.07 * oni_sim), 0.85, 1.25))
+                    st.sidebar.error(f"📡 **ONI Activo ({oni_sim:+.2f} °C):** Lluvia ajustada al **{factor_ppt*100:.0f}%** y ETP al **{factor_etp*100:.0f}%**.")
+                elif "Niño" in escenario_climatico:
+                    factor_ppt, factor_etp = 0.65, 1.15
+                elif "Niña" in escenario_climatico:
+                    factor_ppt, factor_etp = 1.40, 0.90
+                elif "SSP2" in escenario_climatico:
+                    factor_ppt, factor_etp = 0.95, 1.10
+                elif "SSP5" in escenario_climatico:
+                    factor_ppt, factor_etp = 0.85, 1.25
 
                 # =================================================================
                 # 🧠 NEXO CLIMÁTICO MAESTRO: Extracción Geoespacial Pura (IDEAM)

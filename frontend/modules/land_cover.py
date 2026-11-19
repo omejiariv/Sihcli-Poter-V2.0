@@ -15,6 +15,7 @@ import tempfile
 import streamlit as st
 import matplotlib.pyplot as plt
 import os
+import streamlit.components.v1 as components
 
 # =========================================================================
 # 🛡️ VACUNA ANTI-COLISIÓN PROJ 
@@ -242,15 +243,30 @@ def get_land_cover_at_point(lat, lon, raster_path):
 
 def calculate_cover_stats(gdf_geom, raster_path):
     safe_path = get_cached_raster(raster_path)
-    if gdf_geom is None or gdf_geom.empty or not safe_path: return {}
+    if gdf_geom is None or gdf_geom.empty or not safe_path:
+        return {}
     try:
         with rasterio.open(safe_path) as src:
-            if gdf_geom.crs != src.crs: gdf_geom = gdf_geom.to_crs(src.crs)
-            out_image, _ = mask(src, gdf_geom.geometry, crop=True, nodata=src.nodata)
-            valid_pixels = out_image[0][out_image[0] != src.nodata]
-            if valid_pixels.size == 0: return {}
+            if gdf_geom.crs != src.crs:
+                gdf_geom = gdf_geom.to_crs(src.crs)
+            out_image, _ = mask(src, gdf_geom.geometry, crop=True, nodata=255)
+            raw = out_image[0]
+            mascara_fuera = (raw == 255)
+            if src.nodata is not None:
+                mascara_fuera = mascara_fuera | (raw == src.nodata)
+
+            raw_limpio = np.where(mascara_fuera, 0, raw)
+            data = homologar_leyenda_satelite(raw_limpio)
+            data[mascara_fuera] = 0
+
+            valid_pixels = data[data > 0]
+            if valid_pixels.size == 0:
+                return {}
             unique, counts = np.unique(valid_pixels, return_counts=True)
-            return {LAND_COVER_LEGEND.get(int(v), f"Clase {int(v)}"): (c / valid_pixels.size) * 100 for v, c in zip(unique, counts)}
+            return {
+                LAND_COVER_LEGEND.get(int(v), f"Clase {int(v)}"): (c / valid_pixels.size) * 100
+                for v, c in zip(unique, counts)
+            }
     except Exception as e:
         print(f"Error stats: {e}")
         return {}
@@ -283,7 +299,7 @@ def obtener_imagen_folium_coberturas(gdf_zona, raster_path):
         with rasterio.open(safe_path) as src:
             if gdf_zona.crs != src.crs: gdf_zona = gdf_zona.to_crs(src.crs)
             out_image, out_transform = mask(src, gdf_zona.geometry, crop=True)
-            data = out_image[0]
+            data = homologar_leyenda_satelite(out_image[0])
             rgba = np.zeros((data.shape[0], data.shape[1], 4), dtype=np.uint8)
             for cat_id, hex_color in LAND_COVER_COLORS.items():
                 r, g, b = tuple(int(hex_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
@@ -294,17 +310,45 @@ def obtener_imagen_folium_coberturas(gdf_zona, raster_path):
             return rgba, [[miny, minx], [maxy, maxx]]
     except: return None, None
 
-def obtener_vector_coberturas_ligero(gdf_zona, raster_path, max_poly=1000):
+def obtener_vector_coberturas_ligero(gdf_zona, raster_path, max_dim=180):
     safe_path = get_cached_raster(raster_path)
-    if gdf_zona is None or not safe_path: return None
+    if gdf_zona is None or not safe_path:
+        return None
     try:
         with rasterio.open(safe_path) as src:
-            if gdf_zona.crs != src.crs: gdf_zona = gdf_zona.to_crs(src.crs)
-            out_image, out_transform = mask(src, gdf_zona.geometry, crop=True)
-            data = out_image[0]
-            geoms = list({'properties': {'val': v}, 'geometry': s} for i, (s, v) in enumerate(shapes(data, mask=(data != src.nodata) & (data > 0), transform=out_transform)) if i < max_poly)
-            if not geoms: return None
+            if gdf_zona.crs != src.crs:
+                gdf_zona = gdf_zona.to_crs(src.crs)
+            out_image, out_transform = mask(src, gdf_zona.geometry, crop=True, nodata=255)
+            raw = out_image[0]
+            mascara_fuera = (raw == 255)
+            if src.nodata is not None:
+                mascara_fuera = mascara_fuera | (raw == src.nodata)
+
+            raw_limpio = np.where(mascara_fuera, 0, raw)
+            data = homologar_leyenda_satelite(raw_limpio)
+            data[mascara_fuera] = 0
+
+            # Reducimos resolución por salto de paso para cubrir el 100% del municipio sin truncar
+            h, w = data.shape
+            step = max(1, int(max(h, w) / max_dim))
+            if step > 1:
+                data = data[::step, ::step]
+                out_transform = out_transform * out_transform.scale(step, step)
+
+            mask_valid = (data > 0)
+            geoms = [
+                {'properties': {'val': int(v)}, 'geometry': s}
+                for s, v in shapes(data.astype(np.int32), mask=mask_valid, transform=out_transform)
+            ]
+            if not geoms:
+                return None
+
             gdf_vector = gpd.GeoDataFrame.from_features(geoms, crs=src.crs)
+            # Disolvemos por clase: máximo 13 multipolígonos livianos cubriendo toda el área
+            gdf_vector = gdf_vector.dissolve(by='val').reset_index()
             gdf_vector['Cobertura'] = gdf_vector['val'].map(lambda x: LAND_COVER_LEGEND.get(int(x), f"Clase {int(x)}"))
+            gdf_vector['Color'] = gdf_vector['val'].map(lambda x: LAND_COVER_COLORS.get(int(x), "#808080"))
             return gdf_vector.to_crs("EPSG:4326")
-    except: return None
+    except Exception as e:
+        print(f"Error vectorizando coberturas: {e}")
+        return None

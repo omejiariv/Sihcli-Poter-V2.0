@@ -324,22 +324,32 @@ with tab3:
         with st.spinner(f"Procesando {len(archivos_zip_siata)} archivos ZIP simultáneamente..."):
             try:
                 import pandas as pd
+                import numpy as np
                 import zipfile
                 import re
+                import os
                 from io import StringIO
                 
                 lista_dataframes = []
+                codigos_nulos = [-999, -999.0, -99.9, 999, 999.9, 9999, -9999, -9999.0]
                 
                 for archivo_zip in archivos_zip_siata:
-                    with zipfile.ZipFile(archivo_zip, 'r') as z:
-                        for nombre_archivo in z.namelist():
-                            if nombre_archivo.endswith(('.csv', '.tab', '.txt')):
-                                
-                                match_estacion = re.search(r'_(\d{1,4})_\d{4}', nombre_archivo)
-                                id_estacion = f"SIATA_{match_estacion.group(1)}" if match_estacion else "SIATA_Desconocida"
-                                
-                                with z.open(nombre_archivo) as f:
-                                    try:
+                    try:
+                        with zipfile.ZipFile(archivo_zip, 'r') as z:
+                            for nombre_archivo in z.namelist():
+                                try:
+                                    nombre_base = os.path.basename(nombre_archivo).lower()
+                                    # Ignorar archivos que no sean de datos o catálogos de estaciones
+                                    if not nombre_base.endswith(('.csv', '.tab', '.txt')):
+                                        continue
+                                    if 'estaciones_pluviometro' in nombre_base or 'catalogo' in nombre_base or 'manifest' in nombre_base:
+                                        continue
+                                        
+                                    # 🔥 FIX 1: Captura tanto archivos modernos (_4_2026_01) como históricos 2010-2012 (_4_tm_2010_01)
+                                    match_estacion = re.search(r'_(\d{1,4})(?:_tm)?_(\d{4})[-_](\d{2})', nombre_base)
+                                    id_estacion = f"SIATA_{match_estacion.group(1)}" if match_estacion else "SIATA_Desconocida"
+                                    
+                                    with z.open(nombre_archivo) as f:
                                         raw_bytes = f.read()
                                         try:
                                             texto = raw_bytes.decode('utf-8')
@@ -347,58 +357,116 @@ with tab3:
                                             texto = raw_bytes.decode('latin1')
                                             
                                         df_temp = pd.read_csv(StringIO(texto), sep=None, engine='python', on_bad_lines='skip')
-                                    except Exception:
-                                        continue
-                                    
-                                if df_temp.empty: continue
-                                
-                                # 🔥 FIX 1: Agregamos 'p1' y 'p2' a la lista de búsqueda
-                                col_fecha = next((c for c in df_temp.columns if any(k in str(c).lower() for k in ['fech', 'date', 'time'])), None)
-                                col_valor = next((c for c in df_temp.columns if any(k in str(c).lower() for k in ['p1', 'p2', 'valor', 'precip', 'lluvia', 'p (mm)', 'acum', 'mm'])), None)
-                                
-                                if col_fecha and col_valor:
-                                    # 🔥 FIX 2: dayfirst=True para que entienda que 23/04 es 23 de Abril
-                                    df_temp['fecha'] = pd.to_datetime(df_temp[col_fecha], dayfirst=True, errors='coerce')
-                                    df_temp[col_valor] = pd.to_numeric(df_temp[col_valor].astype(str).str.replace(',', '.'), errors='coerce')
-                                    df_temp = df_temp.dropna(subset=['fecha', col_valor])
-
-                                    # 🔥 NUEVO FILTRO DE RAÍZ: Eliminar códigos de error ANTES de sumar el mes
-                                    df_temp = df_temp[df_temp[col_valor] >= 0]
-                                    
-                                    if not df_temp.empty:
-                                        df_temp['mes_año'] = df_temp['fecha'].dt.to_period('M').dt.to_timestamp()
-                                        df_mensual = df_temp.groupby('mes_año')[col_valor].sum().reset_index()
                                         
-                                        df_mensual.rename(columns={'mes_año': 'fecha', col_valor: id_estacion}, inplace=True)
-                                        lista_dataframes.append(df_mensual)
-                
+                                    if df_temp is None or df_temp.empty:
+                                        continue
+                                        
+                                    # Normalizar nombres de columnas (limpia BOM, espacios y pasa a minúsculas: 'P' -> 'p')
+                                    df_temp.columns = [str(c).replace('\ufeff', '').strip().lower() for c in df_temp.columns]
+                                    
+                                    # Si la columna 'codigo' viene dentro del archivo, usarla para garantizar el ID exacto
+                                    if 'codigo' in df_temp.columns and df_temp['codigo'].dropna().shape[0] > 0:
+                                        cod_interno = str(df_temp['codigo'].dropna().iloc[0]).split('.')[0].strip()
+                                        if cod_interno.isdigit():
+                                            id_estacion = f"SIATA_{cod_interno}"
+                                            
+                                    # 🔥 FIX 2: Detecta 'p1', 'p2' (2012-2026) y también la columna exacta 'p' (2010-2012)
+                                    col_fecha = next((c for c in df_temp.columns if any(k in c for k in ['fech', 'date', 'time'])), None)
+                                    col_valor = next(
+                                        (c for c in df_temp.columns if c in ['p1', 'p', 'p2'] or any(k in c for k in ['valor', 'precip', 'lluvia', 'p (mm)', 'acum', 'mm'])),
+                                        None
+                                    )
+                                    
+                                    if col_fecha and col_valor:
+                                        # 🔥 FIX 3: Reglas Oficiales de Calidad SIATA (Tabla 4 - P-GAA-SIATA-107)
+                                        if 'p1' in df_temp.columns:
+                                            p1 = pd.to_numeric(df_temp['p1'].astype(str).str.replace(',', '.'), errors='coerce').replace(codigos_nulos, np.nan)
+                                            p2 = (
+                                                pd.to_numeric(df_temp['p2'].astype(str).str.replace(',', '.'), errors='coerce').replace(codigos_nulos, np.nan)
+                                                if 'p2' in df_temp.columns else pd.Series(np.nan, index=df_temp.index)
+                                            )
+                                            serie_lluvia = p1.fillna(p2)
+                                            if 'calidad' in df_temp.columns:
+                                                cal = pd.to_numeric(df_temp['calidad'], errors='coerce').fillna(1).astype(int)
+                                                # Si p1 es dudoso (1511, 2511, 15110, 25110) -> tomar p2
+                                                mask_p1_malo = cal.isin([1511, 2511, 15110, 25110])
+                                                serie_lluvia.loc[mask_p1_malo] = p2.loc[mask_p1_malo]
+                                                # Si ambos son dudosos (151, 251, 1510, 2510) -> anular minuto
+                                                mask_ambos_malos = cal.isin([151, 251, 1510, 2510])
+                                                serie_lluvia.loc[mask_ambos_malos] = np.nan
+                                        else:
+                                            # Archivos 2010-2012 (columna 'p') u otros formatos
+                                            serie_lluvia = pd.to_numeric(df_temp[col_valor].astype(str).str.replace(',', '.'), errors='coerce').replace(codigos_nulos, np.nan)
+                                            if 'calidad' in df_temp.columns and col_valor == 'p':
+                                                cal = pd.to_numeric(df_temp['calidad'], errors='coerce').fillna(1).astype(int)
+                                                serie_lluvia.loc[~cal.isin([1, 2])] = np.nan
+                                                
+                                        # Filtro físico por registro minuto / 5-min (0 a 50 mm)
+                                        df_temp['lluvia_limpia'] = serie_lluvia.where((serie_lluvia >= 0) & (serie_lluvia < 50))
+                                        
+                                        # 🔥 FIX 4: Fecha mensual exacta sin el bug de dayfirst=True en fechas YYYY-MM-DD
+                                        if match_estacion and df_temp['lluvia_limpia'].notna().sum() > 0:
+                                            anio_arch, mes_arch = int(match_estacion.group(2)), int(match_estacion.group(3))
+                                            fecha_mes = pd.Timestamp(year=anio_arch, month=mes_arch, day=1)
+                                            df_mensual = pd.DataFrame({
+                                                'fecha': [fecha_mes],
+                                                id_estacion: [round(float(df_temp['lluvia_limpia'].sum()), 2)]
+                                            })
+                                            lista_dataframes.append(df_mensual)
+                                        else:
+                                            muestra_f = str(df_temp[col_fecha].dropna().iloc[0]).strip() if not df_temp[col_fecha].dropna().empty else ""
+                                            es_iso = bool(re.match(r'^\d{4}[-/]', muestra_f))
+                                            df_temp['fecha_dt'] = pd.to_datetime(df_temp[col_fecha], format='mixed', dayfirst=not es_iso, errors='coerce')
+                                            df_temp = df_temp.dropna(subset=['fecha_dt', 'lluvia_limpia'])
+                                            
+                                            if not df_temp.empty:
+                                                df_temp['mes_año'] = df_temp['fecha_dt'].dt.to_period('M').dt.to_timestamp()
+                                                df_mensual = df_temp.groupby('mes_año', as_index=False)['lluvia_limpia'].sum().round(2)
+                                                df_mensual = df_mensual.rename(columns={'mes_año': 'fecha', 'lluvia_limpia': id_estacion})
+                                                lista_dataframes.append(df_mensual)
+                                except Exception:
+                                    continue
+                    except Exception:
+                        continue
+
                 if lista_dataframes:
-                    # Fusión masiva de todos los dataframes
+                    # 1. Fusión masiva de todos los meses procesados
                     df_master = pd.concat(lista_dataframes, ignore_index=True)
-                    # Colapsar las filas de la misma fecha en una sola fila ancha
-                    df_final = df_master.groupby('fecha').sum(min_count=1).reset_index()
-                    df_final = df_final.sort_values('fecha')
+                    df_master['fecha'] = pd.to_datetime(df_master['fecha']).dt.to_period('M').dt.to_timestamp()
+                    
+                    # 2. Eliminar fragmentos idénticos (si subiste dos veces el mismo ZIP) y sumar por fecha
+                    df_master = df_master.drop_duplicates()
+                    df_final = df_master.groupby('fecha', as_index=False).sum(min_count=1)
+                    
+                    # 3. 🛡️ CORTAFUEGOS TEMPORAL: Solo permite entre Enero 2010 y el mes actual (bloquea Dic 2026)
+                    mes_actual_tope = pd.Timestamp.today().to_period('M').to_timestamp()
+                    df_final = df_final[
+                        (df_final['fecha'] >= pd.Timestamp('2010-01-01')) & 
+                        (df_final['fecha'] <= mes_actual_tope)
+                    ].copy()
+                    
+                    # 4. Ordenar cronológicamente y redondear antes de convertir la fecha a texto
+                    df_final = df_final.sort_values('fecha').reset_index(drop=True)
+                    cols_num = [c for c in df_final.columns if c != 'fecha']
+                    df_final[cols_num] = df_final[cols_num].round(2)
                     df_final['fecha'] = df_final['fecha'].dt.strftime('%Y-%m-%d')
                     
-                    # 🔥 FIX: Redondeo matemático para evitar el pánico de Excel
-                    df_final = df_final.round(2)
+                    st.success(f"✅ ¡Multi-Magia completada! Se procesaron {len(lista_dataframes)} archivos mensuales y se ensambló la súper-matriz ({len(cols_num)} estaciones).")
+                    st.dataframe(df_final, use_container_width=True)
                     
-                    st.success(f"✅ ¡Multi-Magia completada! Se procesaron {len(lista_dataframes)} meses de datos sueltos y se ensambló la súper-matriz.")
-                    st.dataframe(df_final, width="stretch")
-                    
-                    csv_consolidado = df_final.to_csv(sep=';', decimal=',', index=False).encode('utf-8-sig')
+                    csv_consolidado = df_final.to_csv(index=False, sep=';', decimal=',', encoding='utf-8-sig').encode('utf-8-sig')
                     st.download_button(
                         label="📥 Descargar Súper-Matriz Multi-Estación (Lista para Inyectar)",
                         data=csv_consolidado,
                         file_name="Datos_SIATA_Multi_ZIP_Consolidado.csv",
                         mime="text/csv",
-                        type="primary"
+                        type="primary",
+                        use_container_width=True
                     )
                 else:
-                    st.warning("⚠️ No se encontraron archivos de lluvia válidos en los ZIP subidos (o la lluvia venía vacía).")
-                    
+                    st.warning("⚠️ No se encontraron datos válidos de precipitación dentro de los archivos ZIP.")
             except Exception as e:
-                st.error(f"🚨 Error en el procesamiento masivo: {e}")
+                st.error(f"❌ Error al procesar los archivos ZIP: {e}")
 
 # =====================================================================
 # PESTAÑA 4: CONVERTIDOR GEOJSON A SHAPEFILE + VISOR DE ATRIBUTOS
@@ -631,114 +699,203 @@ with tab6:
                     df_sat = leer_csv_seguro(file_satelital) 
 
                     # ----------------------------------------------------------
-                    # 🛡️ CINTURÓN DE SEGURIDAD Y ESTANDARIZACIÓN
+                    # 🛡️ CINTURÓN DE SEGURIDAD Y ESTANDARIZACIÓN (MULTIRRED)
                     # ----------------------------------------------------------
                     import numpy as np
-                    codigos_falsos = [999.9, 999.0, 999, 9999.9, 9999.0, 9999, -99.9, -99.0, -999.0, -9999.0]
-                    dfs_procesados = []
-                    
-                    archivos = [df_m, df_p1, df_auto, df_sat]
-                    for df_temp in [f for f in archivos if f is not None]:
+                    import re
+                    import os
+
+                    codigos_falsos = [999.9, 999.0, 999, 9999.9, 9999.0, 9999, -99.9, -99.0, -999.0, -9999.0, -999]
+                    cols_ignorar = {'fecha', 'date', 'fecha_hora', 'datetime', 'año', 'anio', 'year', 'mes', 'month', 'dia', 'day', 'id', 'index'}
+                    mes_actual_tope = pd.Timestamp.today().to_period('M').to_timestamp()
+
+                    def detectar_columnas_estaciones(columnas):
+                        """Detecta tanto códigos numéricos (IDEAM) como alfanuméricos (SIATA_446, EPM, etc.)."""
+                        validas = []
+                        for c in columnas:
+                            c_str = str(c).replace('\ufeff', '').strip()
+                            c_low = c_str.lower()
+                            if c_low in cols_ignorar or c_low.startswith('unnamed'):
+                                continue
+                            if any(ch.isdigit() for ch in c_str):
+                                validas.append(c_str)
+                        return validas
+
+                    def parsear_fechas_seguras(df_t):
+                        """Parsea fechas fila por fila sin confundir DD/MM/YYYY con YYYY-MM-DD."""
+                        # Si el archivo ya trae columnas 'año' y 'mes' limpias, verificarlas como respaldo
+                        s_raw = df_t['fecha'].astype(str).str.replace('\ufeff', '', regex=False).str.strip()
+                        es_iso = s_raw.str.match(r'^\d{4}[-/]')
                         
-                        df_temp.columns = [str(c).strip().replace('"', '').replace('.0', '') for c in df_temp.columns]
-                        if 'date' in df_temp.columns: df_temp.rename(columns={'date': 'fecha'}, inplace=True)
-                        if 'fecha' not in df_temp.columns: continue
-                        
-                        # Fechas robustas
-                        df_temp['fecha'] = pd.to_datetime(df_temp['fecha'], dayfirst=True, errors='coerce')
+                        fechas = pd.Series(pd.NaT, index=df_t.index, dtype='datetime64[ns]')
+                        if es_iso.any():
+                            fechas.loc[es_iso] = pd.to_datetime(s_raw.loc[es_iso], format='mixed', dayfirst=False, errors='coerce')
+                        if (~es_iso).any():
+                            fechas.loc[~es_iso] = pd.to_datetime(s_raw.loc[~es_iso], format='mixed', dayfirst=True, errors='coerce')
+                            
+                        # Si existen columnas explícitas de año y mes, usarlas para corregir cualquier ambigüedad
+                        cols_lower = {c.lower(): c for c in df_t.columns}
+                        col_y = cols_lower.get('año') or cols_lower.get('anio') or cols_lower.get('year')
+                        col_m = cols_lower.get('mes') or cols_lower.get('month')
+                        if col_y and col_m:
+                            y_num = pd.to_numeric(df_t[col_y], errors='coerce')
+                            m_num = pd.to_numeric(df_t[col_m], errors='coerce')
+                            mask_ym = y_num.between(1900, 2100) & m_num.between(1, 12)
+                            if mask_ym.any():
+                                fechas_ym = pd.to_datetime(
+                                    y_num[mask_ym].astype(int).astype(str) + '-' +
+                                    m_num[mask_ym].astype(int).astype(str).str.zfill(2) + '-01',
+                                    format='%Y-%m-%d', errors='coerce'
+                                )
+                                fechas.loc[mask_ym] = fechas_ym
+                        return fechas
+
+                    def limpiar_dataframe_red(df_in):
+                        """Limpia y estandariza un DataFrame sin perder su posición en la jerarquía."""
+                        if df_in is None or df_in.empty:
+                            return pd.DataFrame()
+
+                        df_temp = df_in.copy()
+                        # Limpiar BOM (\ufeff), comillas y sufijos '.0' en los nombres de columnas
+                        df_temp.columns = [
+                            re.sub(r'\.0$', '', str(c).replace('\ufeff', '').strip().replace('"', ''))
+                            for c in df_temp.columns
+                        ]
+
+                        # Normalizar nombre de la columna de fecha (insensible a mayúsculas)
+                        for c in list(df_temp.columns):
+                            if c.lower() in {'fecha', 'date', 'fecha_hora', 'datetime'} and 'fecha' not in df_temp.columns:
+                                df_temp.rename(columns={c: 'fecha'}, inplace=True)
+                            elif c.lower() == 'fecha' and c != 'fecha':
+                                df_temp.rename(columns={c: 'fecha'}, inplace=True)
+
+                        if 'fecha' not in df_temp.columns:
+                            return pd.DataFrame()
+
+                        # Descartar filas de resumen de Excel ("Promedio", "Anual", "max", "min", etc.)
+                        s_fecha = df_temp['fecha'].astype(str).str.strip()
+                        mask_fecha_valida = s_fecha.str.contains(r'\d{4}', regex=True, na=False)
+                        df_temp = df_temp[mask_fecha_valida].copy()
+                        if df_temp.empty:
+                            return pd.DataFrame()
+
+                        # 🔥 LECTURA VECTORIZADA DE FECHAS (Inmune a mezcla de formatos)
+                        df_temp['fecha'] = parsear_fechas_seguras(df_temp)
                         df_temp.dropna(subset=['fecha'], inplace=True)
-                        
-                        cols_est = [c for c in df_temp.columns if c != 'fecha' and str(c).replace('.','',1).isdigit()]
-                        
+                        if df_temp.empty:
+                            return pd.DataFrame()
+
+                        # Normalizar siempre al día 1 de cada mes y cortar fechas futuras (> mes actual)
+                        df_temp['fecha'] = df_temp['fecha'].dt.to_period('M').dt.to_timestamp()
+                        df_temp = df_temp[df_temp['fecha'] <= mes_actual_tope].copy()
+                        if df_temp.empty:
+                            return pd.DataFrame()
+
+                        cols_est = detectar_columnas_estaciones(df_temp.columns)
+                        if not cols_est:
+                            return pd.DataFrame()
+
                         for col in cols_est:
                             if df_temp[col].dtype == object:
-                                df_temp[col] = df_temp[col].astype(str).str.replace(',', '.', regex=False)
+                                df_temp[col] = df_temp[col].astype(str).str.replace(',', '.', regex=False).str.strip()
                             df_temp[col] = pd.to_numeric(df_temp[col], errors='coerce')
-                            
-                            # 🛡️ BLINDAJE MENSUAL: Mata ceros falsos (0.0) y diluvios irreales (>1500)
-                            df_temp.loc[df_temp[col].isin(codigos_falsos) | 
-                                        (df_temp[col] < 0) | 
-                                        (df_temp[col] > 1500) | 
-                                        (df_temp[col] == 0), col] = np.nan
-                        
-                        df_temp = df_temp.groupby('fecha')[cols_est].sum(min_count=1)
-                        df_temp = df_temp.sort_index()
-                        dfs_procesados.append(df_temp)
 
-                    # Despaquetado
-                    df_m_clean = dfs_procesados[0] if len(dfs_procesados) > 0 else pd.DataFrame()
-                    df_p1_clean = dfs_procesados[1] if len(dfs_procesados) > 1 else pd.DataFrame()
-                    df_auto_clean = dfs_procesados[2] if len(dfs_procesados) > 2 else pd.DataFrame()
-                    
+                            # 🛡️ BLINDAJE MENSUAL: Mata códigos de error (-999), ceros falsos (0.0) y diluvios irreales (>1500)
+                            df_temp.loc[
+                                df_temp[col].isin(codigos_falsos) |
+                                (df_temp[col] <= 0) |
+                                (df_temp[col] > 1500),
+                                col
+                            ] = np.nan
+
+                        df_temp = df_temp.groupby('fecha')[cols_est].sum(min_count=1)
+                        return df_temp.sort_index()
+
+                    # Desempaquetado seguro (respeta la posición aunque falte algún archivo)
+                    df_m_clean = limpiar_dataframe_red(df_m)
+                    df_p1_clean = limpiar_dataframe_red(df_p1)
+                    df_auto_clean = limpiar_dataframe_red(df_auto)
+                    df_sat_clean = limpiar_dataframe_red(df_sat)
+
                     # ==========================================================
                     # 🌍 PASO 1: CONSOLIDACIÓN SECUENCIAL CIENTÍFICA
                     # ==========================================================
-                    # 🥇 PRIORIDAD MÁXIMA a las Automáticas (df_auto_clean)
+                    # 🥇 PRIORIDAD MÁXIMA a las Automáticas / SIATA (df_auto_clean)
                     # 🥈 PRIORIDAD MEDIA al Parche 2010-2025 (df_p1_clean)
                     # 🥉 PRIORIDAD BAJA al Histórico viejo (df_m_clean)
-                    df_terrestre = df_auto_clean.combine_first(df_p1_clean).combine_first(df_m_clean)
-                    
-                    cols_totales = [c for c in df_terrestre.columns if str(c).isnumeric()]
+                    df_terrestre = pd.DataFrame()
+                    for df_capa in [df_auto_clean, df_p1_clean, df_m_clean]:
+                        if not df_capa.empty:
+                            df_terrestre = df_capa.copy() if df_terrestre.empty else df_terrestre.combine_first(df_capa)
+
+                    cols_totales = detectar_columnas_estaciones(df_terrestre.columns)
                     limites_nacimiento = {}
                     for col in cols_totales:
                         datos_validos = df_terrestre[col].dropna()
-                        limites_nacimiento[col] = datos_validos.index.min() if not datos_validos.empty else None
+                        fecha_min_dato = datos_validos.index.min() if not datos_validos.empty else None
+                        # Ninguna estación SIATA puede nacer antes de 2010-01-01 (inicio oficial de la red)
+                        if str(col).upper().startswith('SIATA_') and pd.notna(fecha_min_dato):
+                            fecha_min_dato = max(fecha_min_dato, pd.Timestamp('2010-01-01'))
+                        limites_nacimiento[col] = fecha_min_dato
 
                     # ==========================================================
                     # 🛡️ PASO 2: BISTURÍ TEMPORAL (INMUNIZADO)
                     # ==========================================================
                     AÑO_RUPTURA = 2010
                     log_homogeneidad = 0
-                    df_terrestre.index = pd.to_datetime(df_terrestre.index)
-                    
-                    for col in cols_totales:
-                        serie_col = df_terrestre[col].dropna()
-                        serie_hist = serie_col[serie_col.index.year < AÑO_RUPTURA]
-                        serie_reciente = serie_col[serie_col.index.year >= AÑO_RUPTURA]
-                        
-                        if len(serie_hist) > 24 and len(serie_reciente) > 12:
-                            media_hist = serie_hist.mean()
-                            media_reciente = serie_reciente.mean()
-                            
-                            if pd.notna(media_hist) and pd.notna(media_reciente) and media_reciente > 0:
-                                factor = media_hist / media_reciente
-                                if 0.5 < factor < 2.0: 
-                                    df_terrestre.loc[df_terrestre.index.year >= AÑO_RUPTURA, col] *= factor
-                                    log_homogeneidad += 1
-                                    
+                    if not df_terrestre.empty:
+                        df_terrestre.index = pd.to_datetime(df_terrestre.index)
+
+                        for col in cols_totales:
+                            # No aplicar reescalado pre-2010 a estaciones de la red SIATA
+                            if str(col).upper().startswith('SIATA_'):
+                                continue
+
+                            serie_col = df_terrestre[col].dropna()
+                            serie_hist = serie_col[serie_col.index.year < AÑO_RUPTURA]
+                            serie_reciente = serie_col[serie_col.index.year >= AÑO_RUPTURA]
+
+                            if len(serie_hist) > 24 and len(serie_reciente) > 12:
+                                media_hist = serie_hist.mean()
+                                media_reciente = serie_reciente.mean()
+
+                                if pd.notna(media_hist) and pd.notna(media_reciente) and media_reciente > 0:
+                                    factor = media_hist / media_reciente
+                                    if 0.5 < factor < 2.0:
+                                        df_terrestre.loc[df_terrestre.index.year >= AÑO_RUPTURA, col] *= factor
+                                        log_homogeneidad += 1
+
                     st.success(f"⚖️ Homogeneidad Terrestre: Se calibró el bloque moderno de {log_homogeneidad} estaciones.")
-                    
+
                     df_final = df_terrestre.copy()
-                    mensaje_estatus = "Ecosistema unificado basado en 3 redes del IDEAM priorizadas."
+                    mensaje_estatus = "Ecosistema unificado basado en redes terrestres priorizadas (IDEAM / SIATA)."
 
                     # ==========================================================
                     # 🛰️ PASO 3: INGESTIÓN SATELITAL (OPCIONAL)
                     # ==========================================================
-                    if df_sat is not None and len(dfs_procesados) > 3:
-                        df_satelite = dfs_procesados[3]
+                    if not df_sat_clean.empty:
                         st.info("🛰️ Datos satelitales detectados. Integrando capa adicional...")
-                        # (La lógica satelital se mantiene idéntica a tu código original)
-                        # ... [Omitido por brevedad visual, pero se asume idéntica si envías el Satelital]
-                        df_final = df_terrestre.combine_first(df_satelite)
-                        mensaje_estatus = "Ecosistema unificado Híbrido (3 Redes IDEAM + Copernicus)."
+                        df_final = df_sat_clean.copy() if df_final.empty else df_final.combine_first(df_sat_clean)
+                        mensaje_estatus = "Ecosistema unificado Híbrido (Redes Terrestres + Copernicus)."
 
                     df_final = df_final[df_final.index <= pd.Timestamp.today()]
 
                     # ==========================================================
-                    # 🧩 PASO 4: GEMELO DIGITAL (IMPUTACIÓN ESPACIAL)
+                    # 🧩 PASO 4: GEMELO DIGITAL (IMPUTACIÓN ESPACIAL + ENSO)
                     # ==========================================================
-                    cols_estaciones = [c for c in df_final.columns if str(c).isnumeric()]
-                    
-                    if usar_imputacion:
+                    cols_estaciones = detectar_columnas_estaciones(df_final.columns)
+
+                    if usar_imputacion and cols_estaciones:
                         with st.spinner("2. Levantando Gemelo Digital: Interconectando estaciones..."):
-                            from modules import climate_api  
-                            
+                            from modules import climate_api
+
                             Q1_mes = df_final.groupby(df_final.index.month)[cols_estaciones].transform(lambda x: x.quantile(0.25))
                             Q3_mes = df_final.groupby(df_final.index.month)[cols_estaciones].transform(lambda x: x.quantile(0.75))
-                            techo_mensual = Q3_mes + (3 * (Q3_mes - Q1_mes))
+                            techo_mensual = Q3_mes + (3.0 * (Q3_mes - Q1_mes))
 
                             for col in cols_estaciones:
-                                df_final.loc[df_final[col] > np.maximum(250.0, techo_mensual[col]), col] = np.nan
+                                limite_col = techo_mensual[col].clip(lower=450.0).fillna(800.0)
+                                df_final.loc[df_final[col] > limite_col, col] = np.nan
 
                             MIN_DATOS_REALES = 24
                             conteo_reales = df_final[cols_estaciones].notna().sum()
@@ -748,37 +905,43 @@ with tab6:
                                 matriz_corr = df_final[estaciones_robustas].corr(method='pearson')
                                 climatologia_mensual = df_final.groupby(df_final.index.month)[estaciones_robustas].mean()
                                 UMBRAL_CORRELACION = 0.65
-                                
+
                                 df_imputado_espacial = df_final[cols_estaciones].copy()
-                                
+
                                 for estacion in estaciones_robustas:
                                     registros_vacios = df_final[df_final[estacion].isna()].index
                                     if len(registros_vacios) > 0:
-                                        vecinas_ordenadas = matriz_corr[estacion].drop(estacion).sort_values(ascending=False)
+                                        vecinas_ordenadas = matriz_corr[estacion].drop(estacion, errors='ignore').sort_values(ascending=False)
                                         vecinas_validas = vecinas_ordenadas[vecinas_ordenadas >= UMBRAL_CORRELACION].index.tolist()
-                                        
+
                                         for fecha_idx in registros_vacios:
                                             mes_actual = fecha_idx.month
                                             for vecina in vecinas_validas:
                                                 valor_vecina = df_final.loc[fecha_idx, vecina]
-                                                if not np.isnan(valor_vecina):
+                                                if pd.notna(valor_vecina):
                                                     media_target = climatologia_mensual.loc[mes_actual, estacion]
                                                     media_vecina = climatologia_mensual.loc[mes_actual, vecina]
-                                                    if media_vecina > 0:
+                                                    if pd.notna(media_vecina) and media_vecina > 0 and pd.notna(media_target):
                                                         df_imputado_espacial.loc[fecha_idx, estacion] = valor_vecina * (media_target / media_vecina)
-                                                        break 
-                                
+                                                        break
+
                                 df_final[cols_estaciones] = df_imputado_espacial
 
-                            if estaciones_robustas:
+                                # Respaldo Climático con Fase ENSO (Niño / Niña / Neutro)
                                 df_clima_vivo = climate_api.get_live_oni_data()
                                 if df_clima_vivo is not None and not df_clima_vivo.empty:
-                                    df_clima_vivo.set_index('fecha', inplace=True)
-                                    df_final = df_final.join(df_clima_vivo[['fase_enso']], how='left')
-                                    df_promedios_enso = df_final.groupby([df_final.index.month, 'fase_enso'])[estaciones_robustas].transform('mean')
-                                    df_final[estaciones_robustas] = df_final[estaciones_robustas].fillna(df_promedios_enso)
-                                    df_final.drop(columns=['fase_enso'], inplace=True)
-                                
+                                    df_oni = df_clima_vivo.copy()
+                                    if 'fecha' in df_oni.columns:
+                                        df_oni['fecha'] = pd.to_datetime(df_oni['fecha'], errors='coerce').dt.to_period('M').dt.to_timestamp()
+                                        df_oni.set_index('fecha', inplace=True)
+                                    df_oni = df_oni[~df_oni.index.duplicated(keep='first')]
+
+                                    if 'fase_enso' in df_oni.columns:
+                                        df_final = df_final.join(df_oni[['fase_enso']], how='left')
+                                        df_promedios_enso = df_final.groupby([df_final.index.month, 'fase_enso'])[estaciones_robustas].transform('mean')
+                                        df_final[estaciones_robustas] = df_final[estaciones_robustas].fillna(df_promedios_enso)
+                                        df_final.drop(columns=['fase_enso'], inplace=True)
+
                                 df_promedios_mensuales = df_final.groupby(df_final.index.month)[estaciones_robustas].transform('mean')
                                 df_final[estaciones_robustas] = df_final[estaciones_robustas].fillna(df_promedios_mensuales)
 
@@ -786,34 +949,35 @@ with tab6:
                     if cols_estaciones:
                         for col in cols_estaciones:
                             inicio = limites_nacimiento.get(col)
-                            if inicio:
+                            if pd.notna(inicio):
                                 df_final.loc[df_final.index < inicio, col] = np.nan
                         df_final.dropna(subset=cols_estaciones, how='all', inplace=True)
-                    
+
+                    df_final[cols_estaciones] = df_final[cols_estaciones].round(2)
                     df_final = df_final.sort_index().reset_index()
-                    df_final['fecha'] = df_final['fecha'].dt.strftime('%Y-%m-%d')
-                    
-                    st.session_state['csv_fusionado_data'] = df_final.to_csv(sep=';', decimal=',', index=False, encoding='utf-8-sig').encode('utf-8')
-                    st.session_state['fusion_resumen'] = f"✅ Operación Exitosa. {mensaje_estatus}"
+                    df_final['fecha'] = pd.to_datetime(df_final['fecha']).dt.strftime('%Y-%m-%d')
+
+                    st.session_state['csv_fusionado_data'] = df_final.to_csv(sep=';', decimal=',', index=False, encoding='utf-8-sig').encode('utf-8-sig')
+                    st.session_state['fusion_resumen'] = f"✅ Operación Exitosa ({len(cols_estaciones)} estaciones integradas). {mensaje_estatus}"
                     st.session_state['fusion_preview'] = df_final.tail(10)
-                    
+
                 except Exception as e:
                     st.error(f"❌ Ocurrió un error procesando los archivos: {e}")
 
     # Renderizado
-    if st.session_state['csv_fusionado_data'] is not None:
+    if st.session_state.get('csv_fusionado_data') is not None:
         st.markdown("---")
         st.success("✅ ¡Súper-Matriz Unificada Generada con Éxito!")
         st.info(st.session_state['fusion_resumen'])
-        st.dataframe(st.session_state['fusion_preview'], width="stretch")
-        
+        st.dataframe(st.session_state['fusion_preview'], use_container_width=True)
+
         st.download_button(
             label="📥 Descargar Matriz Definitiva Total (Apta para Supabase)",
             data=st.session_state['csv_fusionado_data'],
             file_name="DatosPptnmes_Maestro_Integral.csv",
             mime="text/csv",
             type="primary",
-            width="stretch"
+            use_container_width=True
         )
         
 # Extraer datos del IDEAM
@@ -871,391 +1035,400 @@ def extraer_ideam_datos_abiertos(lista_estaciones, limite_registros=50000):
         return pd.DataFrame()
 
 # =====================================================================
-# 📡 PESTAÑA 7: PUENTE SIATA (CONEXIÓN EN TIEMPO REAL VALLE DE ABURRÁ)
+# 📡 PESTAÑA 7: PUENTE SIATA (GESTIÓN INTEGRAL DE ESTACIONES Y LLUVIA)
 # =====================================================================
 with tab7:
-    st.header("📡 Puente SIATA: Ingestión en Tiempo Real (Valle de Aburrá)")
-    st.markdown("""
-    Este módulo conecta tu red histórica del IDEAM (alojada en Supabase) con los sensores en vivo del SIATA.
-    Extrae tu catálogo maestro directamente de la base de datos, realiza un **cruce espacial automático (Nearest Neighbor < 200m)** y descarga la lluvia reciente mes a mes.
-    """)
-    
-    usar_csv_manual = st.checkbox("Usar catálogo SIATA local (Activar si el API del SIATA está caído o bloqueado)", value=False)
-    
-    archivo_siata = None
-    if usar_csv_manual:
-        st.info("💡 **Plan de Respaldo:** Sube el archivo JSON/GeoJSON que interceptaste del Geoportal del SIATA.")
-        # Actualizado para aceptar json y geojson
-        archivo_siata = st.file_uploader("Sube el catálogo del SIATA interceptado", type=['json', 'geojson', 'py'], key="siata_json_manual")
-        
-    if st.button("🚀 Iniciar Sincronización Espacial SIATA", type="primary", width="stretch"):
-        from modules import siata_api
-        from modules.db_manager import get_engine
-        from sqlalchemy import text
-        import geopandas as gpd
-        
-        # --- 1. LECTURA DEL CATÁLOGO DIRECTO DESDE SUPABASE ---
-        with st.spinner("1. Leyendo catálogo oficial de estaciones IDEAM desde Supabase..."):
-            try:
-                engine = get_engine()
-                with engine.connect() as conn:
-                    query = "SELECT id_estacion as codigo, nombre, latitud as lat, longitud as lon, geom FROM estaciones WHERE geom IS NOT NULL"
-                    gdf_ideam = gpd.read_postgis(text(query), conn, geom_col="geom")
-                    
-                    if gdf_ideam.crs is None:
-                        gdf_ideam = gdf_ideam.set_crs("EPSG:4326")
-            except Exception as e:
-                st.error(f"🚨 Error conectando a la tabla 'estaciones' en Supabase: {e}")
-                st.stop()
-                
-        # --- 2. CARGA DEL CATÁLOGO SIATA (MANUAL O API) ---
-        gdf_siata = None
-        with st.spinner("2. Obteniendo catálogo de sensores del SIATA..."):
-            if usar_csv_manual and archivo_siata is not None:
-                try:
-                    # Leemos directamente el archivo espacial que hackeaste
-                    gdf_siata = gpd.read_file(archivo_siata)
-                    
-                    # Verificamos que tenga la columna código
-                    col_cod = next((c for c in gdf_siata.columns if 'cod' in c.lower() or 'id' in c.lower()), None)
-                    if col_cod:
-                        gdf_siata = gdf_siata.rename(columns={col_cod: 'codigo_siata'})
-                        if gdf_siata.crs is None:
-                            gdf_siata = gdf_siata.set_crs("EPSG:4326")
-                        st.success(f"✅ Catálogo interceptado procesado con éxito ({len(gdf_siata)} estaciones).")
-                        
-                        # NUEVO: Botón para descargar el catálogo completo del SIATA
-                        df_descarga_siata = gdf_siata.drop(columns=['geometry']).copy()
-                        csv_catalogo = df_descarga_siata.to_csv(index=False, sep=';', encoding='utf-8-sig').encode('utf-8-sig')
-                        st.download_button(
-                            label="📥 Descargar Catálogo Completo SIATA (CSV)",
-                            data=csv_catalogo,
-                            file_name="Catalogo_SIATA_Completo.csv",
-                            mime="text/csv"
-                        )
-                    else:
-                        st.error("🚨 El archivo subido no tiene una columna de código de estación.")
-                        st.stop()
-                except Exception as e:
-                    st.error(f"Error procesando el archivo del SIATA: {e}")
-                    st.stop()
-            elif usar_csv_manual and archivo_siata is None:
-                st.error("🚨 Seleccionaste carga manual pero no has subido ningún archivo a la cajita.")
-                st.stop()
-            else:
-                # Intento automático por API
-                gdf_siata = siata_api.descargar_catalogo_siata()
-                
-            if gdf_siata is None or gdf_siata.empty:
-                st.error("🚨 No se pudo obtener el catálogo del SIATA. Activa la casilla de arriba y sube el archivo manualmente.")
-                st.stop()
-                
-        # --- 3. CRUCE ESPACIAL (NEAREST NEIGHBOR) ---
-        with st.spinner("3. Ejecutando Cruce Espacial (Buscando gemelas a menos de 200m)..."):
-            dict_homologacion = siata_api.homologar_por_proximidad(gdf_ideam, gdf_siata, umbral_metros=200)
-            
-            if not dict_homologacion:
-                st.warning("⚠️ No se encontraron estaciones del SIATA a menos de 200m de las del IDEAM.")
-                st.stop()
-                
-            st.success(f"🎯 ¡Cruce Exitoso! La Inteligencia Espacial emparejó **{len(dict_homologacion)}** estaciones.")
-            with st.expander("Ver Diccionario de Homologación (IDEAM -> SIATA)"):
-                st.json(dict_homologacion)
-            
-        # --- 4. EXTRACCIÓN DE DATOS DE PRECIPITACIÓN ---
-        with st.spinner("4. Descargando datos pluviométricos y consolidando..."):
-            df_lluvia_siata = siata_api.extraer_lluvia_reciente_siata(dict_homologacion, meses_atras=6)
-            
-            if not df_lluvia_siata.empty:
-                st.success("✅ ¡Datos descargados y consolidados mensualmente!")
-                st.dataframe(df_lluvia_siata, width="stretch")
-                
-                csv_siata = df_lluvia_siata.to_csv(sep=';', decimal=',', index=False).encode('utf-8-sig')
-                st.download_button(
-                    label="📥 Descargar Matriz SIATA (Lista para Gemelo Digital)",
-                    data=csv_siata,
-                    file_name="Datos_SIATA_Recientes_Mes.csv",
-                    mime="text/csv",
-                    type="primary",
-                    width="stretch"
-                )
-            else:
-                st.warning("Se emparejaron estaciones, pero el servidor de datos de lluvia del SIATA no reportó valores válidos...")
-            
+    st.header("📡 Centro de Integración SIATA -> Supabase")
+    st.markdown(
+        "Flujo depurado en 3 pasos para registrar el catálogo oficial de estaciones con geometría PostGIS, "
+        "inyectar la matriz histórica consolidada (2010–2026) y descargar el último trimestre."
+    )
+
     # -------------------------------------------------------------------------
-    # ⚡ MÓDULO DE EXPANSIÓN: INYECTAR SIATA A SUPABASE
+    # 📍 PASO 1: INYECTAR / ACTUALIZAR CATÁLOGO DE ESTACIONES SIATA EN SUPABASE
     # -------------------------------------------------------------------------
-    st.markdown("---")
-    st.subheader("⚡ Integración Definitiva: Inyectar SIATA a Supabase")
-    st.markdown("Convierte las 185 estaciones interceptadas en estaciones oficiales de tu plataforma. Se les asignará el prefijo `SIATA_` (ej. `SIATA_10`) para blindarlas de los códigos del IDEAM.")
-    
-    if st.button("💉 Inyectar 185 Estaciones a la Base de Datos", type="primary"):
-        if archivo_siata is None:
-            st.error("🚨 Primero sube el archivo 'siata.json' en la cajita de arriba.")
+    st.subheader("📍 Paso 1: Sincronizar Catálogo Oficial de Estaciones SIATA")
+    st.markdown(
+        "Sube tu archivo **`Estaciones_pluviometro.csv`** (o `.json`/`.geojson`). "
+        "Se asignará el prefijo `SIATA_`, se normalizarán los municipios sin tildes (`MEDELLIN`), "
+        "se añadirá la estación histórica `SIATA_287` y se creará la geometría PostGIS (`geom`)."
+    )
+
+    archivo_cat_est = st.file_uploader(
+        "Sube Estaciones_pluviometro.csv (o archivo GeoJSON del SIATA):",
+        type=['csv', 'json', 'geojson'],
+        key="siata_cat_oficial"
+    )
+
+    if st.button("💉 Sincronizar Estaciones SIATA en Supabase (Tabla: estaciones)", type="primary", use_container_width=True):
+        if archivo_cat_est is None:
+            st.error("🚨 Primero sube el archivo 'Estaciones_pluviometro.csv' en la caja de arriba.")
         else:
-            with st.spinner("Forjando nuevas estaciones espaciales en Supabase..."):
+            with st.spinner("Sincronizando estaciones y geometrías PostGIS en Supabase..."):
                 try:
+                    import pandas as pd
                     import geopandas as gpd
+                    import unicodedata
                     from modules.db_manager import get_engine
-                    
-                    # 1. Leer el archivo interceptado
-                    gdf_in = gpd.read_file(archivo_siata)
-                    col_cod = next((c for c in gdf_in.columns if 'cod' in c.lower() or 'id' in c.lower()), None)
-                    
-                    # 2. Formatear IDs
-                    df_up = gdf_in.copy()
-                    df_up['id_estacion'] = 'SIATA_' + df_up[col_cod].astype(str)
-                    df_up['longitud'] = df_up.geometry.x
-                    df_up['latitud'] = df_up.geometry.y
-                    
-                    # 3. Conexión cruda directa (Bypass total de Pandas/SQLAlchemy)
-                    engine = get_engine()
-                    
+
+                    def limpiar_texto_mpio(txt):
+                        if pd.isna(txt):
+                            return "MEDELLIN"
+                        s = ''.join(
+                            c for c in unicodedata.normalize('NFD', str(txt).strip())
+                            if unicodedata.category(c) != 'Mn'
+                        )
+                        return s.upper().replace("'", "''")
+
+                    nombre_f = archivo_cat_est.name.lower()
+                    if nombre_f.endswith('.csv'):
+                        df_in = pd.read_csv(archivo_cat_est, sep=None, engine='python')
+                        df_in.columns = [str(c).replace('\ufeff', '').strip() for c in df_in.columns]
+                        col_cod = next(c for c in df_in.columns if 'cod' in c.lower() or 'cód' in c.lower() or 'id' in c.lower())
+                        col_nom = next((c for c in df_in.columns if 'nom' in c.lower()), None)
+                        col_mun = next((c for c in df_in.columns if 'mun' in c.lower() or 'ubic' in c.lower()), None)
+                        col_lat = next(c for c in df_in.columns if 'lat' in c.lower())
+                        col_lon = next(c for c in df_in.columns if 'lon' in c.lower())
+
+                        df_up = pd.DataFrame({
+                            'cod_num': df_in[col_cod].astype(str).str.split('.').str[0].str.strip(),
+                            'nombre': df_in[col_nom] if col_nom else "Estación SIATA",
+                            'municipio': df_in[col_mun] if col_mun else "MEDELLIN",
+                            'latitud': pd.to_numeric(df_in[col_lat].astype(str).str.replace(',', '.'), errors='coerce'),
+                            'longitud': pd.to_numeric(df_in[col_lon].astype(str).str.replace(',', '.'), errors='coerce')
+                        })
+                    else:
+                        gdf_in = gpd.read_file(archivo_cat_est)
+                        col_cod = next(c for c in gdf_in.columns if 'cod' in c.lower() or 'id' in c.lower())
+                        df_up = pd.DataFrame({
+                            'cod_num': gdf_in[col_cod].astype(str).str.split('.').str[0].str.strip(),
+                            'nombre': gdf_in.get('nombre', 'Estación SIATA'),
+                            'municipio': gdf_in.get('ubicacion', 'MEDELLIN'),
+                            'latitud': gdf_in.geometry.y,
+                            'longitud': gdf_in.geometry.x
+                        })
+
+                    # Eliminar duplicados (ej. estación 842) y coordenadas vacías
+                    df_up = df_up.dropna(subset=['latitud', 'longitud']).drop_duplicates(subset=['cod_num'], keep='first').copy()
+                    df_up['id_estacion'] = 'SIATA_' + df_up['cod_num']
+
+                    # Rescatar estación histórica SIATA_287 (presente en los ZIPs 2018-2023)
+                    if 'SIATA_287' not in df_up['id_estacion'].values:
+                        df_287 = pd.DataFrame([{
+                            'cod_num': '287',
+                            'id_estacion': 'SIATA_287',
+                            'nombre': 'Estación SIATA 287 (Santa Elena)',
+                            'municipio': 'MEDELLIN',
+                            'latitud': 6.250400,
+                            'longitud': -75.544900
+                        }])
+                        df_up = pd.concat([df_up, df_287], ignore_index=True)
+
+                    mpios_aburra = {
+                        'MEDELLIN', 'BELLO', 'ITAGUI', 'ENVIGADO', 'SABANETA',
+                        'LA ESTRELLA', 'CALDAS', 'COPACABANA', 'GIRARDOTA', 'BARBOSA'
+                    }
+
                     sql_queries = []
                     for _, row in df_up.iterrows():
-                        nom = str(row.get('nombre', 'Sin Nombre')).strip().replace("'", "''")
-                        mun = str(row.get('ubicacion', 'Medellín')).upper().strip().replace("'", "''")
+                        id_est = str(row['id_estacion']).strip()
+                        nom = str(row['nombre']).strip().replace("'", "''")
+                        mun = limpiar_texto_mpio(row['municipio'])
+                        subreg = 'VALLE DE ABURRÁ' if mun in mpios_aburra else 'ANTIOQUIA (EXTERNA)'
                         lon = float(row['longitud'])
                         lat = float(row['latitud'])
-                        id_est = str(row['id_estacion'])
-                        
-                        # ON CONFLICT DO NOTHING evita duplicados automáticamente en la base de datos
+
+                        # ON CONFLICT DO UPDATE garantiza que si ya existían con tilde o sin geom, queden corregidas
                         q = f"""
                         INSERT INTO estaciones 
                         (id_estacion, nombre, longitud, latitud, municipio, departamento, subregion, geom)
                         VALUES 
-                        ('{id_est}', '{nom}', {lon}, {lat}, '{mun}', 'ANTIOQUIA', 'VALLE DE ABURRÁ', ST_SetSRID(ST_MakePoint({lon}, {lat}), 4326))
-                        ON CONFLICT (id_estacion) DO NOTHING;
+                        ('{id_est}', '{nom}', {lon}, {lat}, '{mun}', 'ANTIOQUIA', '{subreg}', ST_SetSRID(ST_MakePoint({lon}, {lat}), 4326))
+                        ON CONFLICT (id_estacion) DO UPDATE SET
+                            nombre = EXCLUDED.nombre,
+                            longitud = EXCLUDED.longitud,
+                            latitud = EXCLUDED.latitud,
+                            municipio = EXCLUDED.municipio,
+                            subregion = EXCLUDED.subregion,
+                            geom = EXCLUDED.geom;
                         """
                         sql_queries.append(q)
-                        
-                    # Usamos raw_connection para saltarnos la capa problemática de las librerías
+
+                    engine = get_engine()
                     raw_conn = engine.raw_connection()
                     try:
                         cursor = raw_conn.cursor()
-                        insertadas = 0
+                        procesadas = 0
                         for query in sql_queries:
                             cursor.execute(query)
-                            if cursor.rowcount > 0:
-                                insertadas += 1
+                            procesadas += 1
                         raw_conn.commit()
-                        
-                        if insertadas > 0:
-                            st.success(f"✅ ¡Expansión Completada! {insertadas} estaciones del SIATA inyectadas permanentemente.")
-                            st.balloons()
-                        else:
-                            st.warning("⚠️ No se inyectaron estaciones nuevas (Ya existían previamente en Supabase).")
+                        st.cache_data.clear()
+                        st.success(f"✅ ¡Catálogo Sincronizado! {procesadas} estaciones del SIATA insertadas/actualizadas con geometría PostGIS.")
+                        st.balloons()
                     finally:
                         cursor.close()
                         raw_conn.close()
-                        
+
                 except Exception as e:
-                    st.error(f"🚨 Error en la inyección cruda: {e}")
+                    st.error(f"🚨 Error sincronizando estaciones: {e}")
 
     # -------------------------------------------------------------------------
-    # ⚡ MÓDULO DE FUSIÓN: INYECTAR DATOS DE LLUVIA A SUPABASE (ALTA VELOCIDAD)
+    # 🌧️ PASO 2: INYECTAR MATRIZ DE LLUVIA CONSOLIDADA A SUPABASE (ALTA VELOCIDAD)
     # -------------------------------------------------------------------------
     st.markdown("---")
-    st.subheader("🌧️ Fusión de Lluvia: Actualizar Base Histórica")
-    st.markdown("Sube el archivo `Datos_SIATA_Multi_ZIP_Consolidado.csv` para inyectarlo en tu matriz principal. El sistema filtrará automáticamente estaciones huérfanas y fantasmas de Excel.")
-    
-    archivo_csv_siata = st.file_uploader("Sube el CSV de lluvia consolidada:", type=['csv'])
-    
-    if st.button("💉 Inyectar Lluvia a Supabase (Tabla: precipitacion)", type="primary"):
+    st.subheader("🌧️ Paso 2: Inyectar Matriz Consolidada de Lluvia a Supabase")
+    st.markdown(
+        "Sube tu archivo **`Datos_SIATA_Multi_ZIP_Consolidado (3).csv`** (o el CSV del último trimestre). "
+        "El sistema filtra falsos ceros (`0.0 mm`), bloquea fechas futuras e inyecta por lotes."
+    )
+
+    archivo_csv_siata = st.file_uploader("Sube el CSV de lluvia consolidada:", type=['csv'], key="up_lluvia_consolidada")
+
+    if st.button("💉 Inyectar Lluvia a Supabase (Tabla: precipitacion)", type="primary", use_container_width=True):
         if archivo_csv_siata is None:
             st.error("🚨 Sube el archivo CSV primero.")
         else:
-            with st.spinner("Realizando limpieza, filtrado espacial e inyección por lotes..."):
+            with st.spinner("Limpiando serie, verificando catálogo e inyectando por lotes..."):
                 try:
                     import pandas as pd
                     from modules.db_manager import get_engine
-                    
-                    # 1. Lectura ultra-precisa (Forzando punto y coma, coma decimal y formato de texto)
+
+                    # 1. Lectura limpia (elimina BOM y columnas Unnamed)
                     df_csv = pd.read_csv(archivo_csv_siata, sep=';', decimal=',', encoding='utf-8-sig')
-                    df_csv = df_csv.loc[:, ~df_csv.columns.str.contains('^Unnamed')]
-                    
-                    # 2. Transformar de formato Ancho a formato Largo
-                    df_csv['fecha'] = pd.to_datetime(df_csv['fecha']).dt.strftime('%Y-%m-%d')
+                    df_csv.columns = [str(c).replace('\ufeff', '').strip() for c in df_csv.columns]
+                    df_csv = df_csv.loc[:, ~df_csv.columns.str.contains('^Unnamed', case=False)]
+
+                    # 2. Validar fechas al día 1 de cada mes y cortar fechas futuras
+                    df_csv['fecha_dt'] = pd.to_datetime(df_csv['fecha'], errors='coerce')
+                    df_csv = df_csv.dropna(subset=['fecha_dt'])
+                    mes_tope = pd.Timestamp.today().to_period('M').to_timestamp()
+                    df_csv = df_csv[(df_csv['fecha_dt'] >= pd.Timestamp('2010-01-01')) & (df_csv['fecha_dt'] <= mes_tope)].copy()
+                    df_csv['fecha'] = df_csv['fecha_dt'].dt.strftime('%Y-%m-01')
+                    df_csv = df_csv.drop(columns=['fecha_dt'])
+
+                    # 3. Transformar de Ancho a Largo
                     df_long = df_csv.melt(id_vars=['fecha'], var_name='id_estacion', value_name='valor')
-                    
-                    # 3. Filtros vitales de limpieza
-                    df_long = df_long.dropna(subset=['valor'])
                     df_long['valor'] = pd.to_numeric(df_long['valor'].astype(str).str.replace(',', '.'), errors='coerce')
                     df_long = df_long.dropna(subset=['valor'])
-                    df_long = df_long[df_long['valor'] >= 0] # Filtro Anti-Error del SIATA
+
+                    # 4. Filtro vital: solo lluvias reales (> 0 mm y <= 1500 mm/mes) para no inyectar sensores obstruidos (0.0)
+                    df_long = df_long[(df_long['valor'] > 0) & (df_long['valor'] <= 1500.0)].copy()
                     df_long['origen'] = 'SIATA (Consolidado Histórico)'
-                    
-                    # 4. Conexión a la base de datos
+
                     engine = get_engine()
-                    
-                    # 5. Blindaje Relacional: Filtrar solo estaciones que EXISTEN en tu catálogo actual
                     df_catalogo = pd.read_sql("SELECT id_estacion FROM estaciones", engine)
-                    estaciones_validas = df_catalogo['id_estacion'].tolist()
-                    df_long = df_long[df_long['id_estacion'].isin(estaciones_validas)]
-                    
+                    estaciones_validas = set(df_catalogo['id_estacion'].astype(str).tolist())
+                    df_long = df_long[df_long['id_estacion'].isin(estaciones_validas)].drop_duplicates(subset=['fecha', 'id_estacion'])
+
                     if df_long.empty:
-                        st.warning("⚠️ No hay datos válidos para inyectar (revisa si las estaciones de este CSV ya se añadieron al catálogo).")
+                        st.warning("⚠️ No hay datos válidos para inyectar. Asegúrate de haber ejecutado el Paso 1 primero.")
                     else:
-                        # 6. Inyección por lotes (Bulk Insert) supersónica
                         raw_conn = engine.raw_connection()
                         try:
                             cursor = raw_conn.cursor()
-                            
-                            pares_borrar = []
-                            filas_insertar = []
-                            for _, row in df_long.iterrows():
-                                pares_borrar.append(f"('{row['fecha']}', '{row['id_estacion']}')")
-                                filas_insertar.append(f"('{row['fecha']}', '{row['id_estacion']}', {row['valor']}, '{row['origen']}')")
-                            
+                            pares_borrar = [f"('{r['fecha']}', '{r['id_estacion']}')" for _, r in df_long.iterrows()]
+                            filas_insertar = [f"('{r['fecha']}', '{r['id_estacion']}', {round(float(r['valor']), 2)}, '{r['origen']}')" for _, r in df_long.iterrows()]
+
                             chunk_size = 1500
                             for i in range(0, len(pares_borrar), chunk_size):
-                                chunk_borrar = pares_borrar[i:i+chunk_size]
-                                chunk_insertar = filas_insertar[i:i+chunk_size]
-                                
-                                # Borrado masivo usando IN
-                                sql_delete = f"DELETE FROM precipitacion WHERE (fecha, id_estacion) IN ({','.join(chunk_borrar)});"
-                                cursor.execute(sql_delete)
-                                
-                                # Inserción masiva
-                                sql_insert = f"INSERT INTO precipitacion (fecha, id_estacion, valor, origen) VALUES {','.join(chunk_insertar)};"
-                                cursor.execute(sql_insert)
-                            
+                                c_del = pares_borrar[i:i+chunk_size]
+                                c_ins = filas_insertar[i:i+chunk_size]
+                                cursor.execute(f"DELETE FROM precipitacion WHERE (fecha, id_estacion) IN ({','.join(c_del)});")
+                                cursor.execute(f"INSERT INTO precipitacion (fecha, id_estacion, valor, origen) VALUES {','.join(c_ins)};")
+
                             raw_conn.commit()
-                            st.success(f"✅ ¡Inyección Supersónica Completada! Se procesaron {len(filas_insertar)} registros mensuales sin sobrecargar la base de datos.")
+                            st.cache_data.clear()
+                            st.success(f"✅ ¡Inyección Supersónica Completada! Se cargaron {len(filas_insertar)} registros mensuales limpios en Supabase.")
                             st.balloons()
-                            
                         finally:
                             cursor.close()
                             raw_conn.close()
-                            
+
                 except Exception as e:
                     st.error(f"🚨 Error en la inyección de lluvia: {e}")
 
-    # ==============================================================================
-    # 🤖 BOT DE MINERÍA DATAVERSE: EXTRACCIÓN HISTÓRICA PROFUNDA (SIATA)
-    # ==============================================================================
-    st.markdown("<br>", unsafe_allow_html=True)
-    with st.expander("🤖 Máquina del Tiempo: Bot de Extracción API Dataverse (SIATA)", expanded=True):
-        st.markdown("Este bot se conecta por los túneles del servidor oficial del Repositorio SIATA. Busca las estaciones por código, localiza los IDs ocultos de los archivos de 2026, los descarga en memoria, los suma y genera la matriz consolidada.")
-        
-        ids_estaciones_input = st.text_input("Códigos de Estaciones a minar (separados por coma):", value="1, 5, 12, 19, 60, 69, 78, 775, 787, 816")
-        
-        if st.button("⛏️ Iniciar Minería de Datos Abiertos (Ene-Sep 2026)", type="primary"):
-            import requests
-            import pandas as pd
-            import time
-            import urllib3
-            from io import StringIO
-            
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            
-            lista_ids = [e.strip() for e in ids_estaciones_input.split(",")]
-            meses_objetivo = ['2026_01', '2026_02', '2026_03', '2026_04', '2026_05', '2026_06', '2026_07', '2026_08', '2026_09']
-            base_url = "https://datos.siata.gov.co/api"
-            HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            
-            lista_dataframes_bot = []
-            barra_progreso = st.progress(0)
-            estado_texto = st.empty()
-            
-            for idx, estacion in enumerate(lista_ids):
-                estado_texto.text(f"🔍 Rastreando DOI de la estación {estacion}...")
-                
-                try:
-                    # El salto de línea fantasma fue eliminado aquí
-                    url_search = f"{base_url}/search?q=\"{estacion} - \"&type=dataset&subtree=Pluviometrica"
-                    res_search = requests.get(url_search, headers=HEADERS, verify=False, timeout=15).json()
-                    
-                    items = res_search.get('data', {}).get('items', [])
-                    if not items:
-                        st.warning(f"⚠️ No se encontró la estación {estacion} en el repositorio.")
-                        continue
-                        
-                    doi_estacion = items[0]['global_id']
-                    estado_texto.text(f"📂 DOI encontrado ({doi_estacion}). Extrayendo archivos para estación {estacion}...")
-                    
-                    url_dataset = f"{base_url}/datasets/:persistentId/?persistentId={doi_estacion}"
-                    res_ds = requests.get(url_dataset, headers=HEADERS, verify=False, timeout=15).json()
-                    archivos_dataset = res_ds.get('data', {}).get('latestVersion', {}).get('files', [])
-                    
-                    for archivo in archivos_dataset:
-                        nombre_archivo = archivo.get('dataFile', {}).get('filename', '')
-                        file_id = archivo.get('dataFile', {}).get('id')
-                        
-                        if any(mes in nombre_archivo for mes in meses_objetivo):
-                            estado_texto.text(f"📥 Descargando e inyectando: {nombre_archivo}...")
-                            url_descarga = f"{base_url}/access/datafile/{file_id}"
-                            
-                            res_csv = requests.get(url_descarga, headers=HEADERS, verify=False, timeout=20)
-                            
-                            try:
-                                df_temp = pd.read_csv(StringIO(res_csv.text), sep='\t', on_bad_lines='skip')
-                                if len(df_temp.columns) < 2:
-                                    df_temp = pd.read_csv(StringIO(res_csv.text), sep=';', on_bad_lines='skip')
-                            except:
-                                continue
-                            
-                            col_fecha = next((c for c in df_temp.columns if 'fecha' in c.lower() or 'date' in c.lower()), None)
-                            col_valor = next((c for c in df_temp.columns if 'valor' in c.lower() or 'precip' in c.lower()), None)
-                            
-                            if col_fecha and col_valor:
-                                df_temp['fecha'] = pd.to_datetime(df_temp[col_fecha], errors='coerce')
-                                df_temp[col_valor] = pd.to_numeric(df_temp[col_valor].astype(str).str.replace(',', '.'), errors='coerce')
-                                df_temp = df_temp.dropna(subset=['fecha', col_valor])
-                                
-                                df_temp['mes_año'] = df_temp['fecha'].dt.to_period('M').dt.to_timestamp()
-                                df_mensual = df_temp.groupby('mes_año')[col_valor].sum().reset_index()
-                                
-                                df_mensual.rename(columns={'mes_año': 'fecha', col_valor: f"SIATA_{estacion}"}, inplace=True)
-                                lista_dataframes_bot.append(df_mensual)
-                                
-                            time.sleep(0.5) 
-                            
-                except Exception as e:
-                    st.error(f"Fallo crítico en estación {estacion}: {e}")
-                    
-                barra_progreso.progress((idx + 1) / len(lista_ids))
-            
-            estado_texto.text("✅ Minería completada. Ensamblando la Súper-Matriz...")
-            
-            if lista_dataframes_bot:
-                df_master_bot = pd.concat(lista_dataframes_bot, ignore_index=True)
-                df_bot_final = df_master_bot.groupby('fecha').sum(min_count=1).reset_index()
-                df_bot_final = df_bot_final.sort_values('fecha')
-                df_bot_final['fecha'] = df_bot_final['fecha'].dt.strftime('%Y-%m-%d')
-                
-                st.success("🎉 Súper-Matriz Histórica generada con éxito.")
-                st.dataframe(df_bot_final, width="stretch")
-                
-                csv_bot = df_bot_final.to_csv(sep=';', decimal=',', index=False).encode('utf-8-sig')
+    # -------------------------------------------------------------------------
+    # 📡 PASO 3: DESCARGA AUTOMÁTICA DEL ÚLTIMO TRIMESTRE (PUENTE SIATA API)
+    # -------------------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("📡 Paso 3: Descarga Automática de Meses Recientes (Último Trimestre)")
+    st.markdown(
+        "Extrae directamente tus estaciones `SIATA_` registradas en Supabase, consulta la lluvia "
+        "de los meses posteriores a junio de 2026 y genera el archivo CSV listo para inyectar en el Paso 2."
+    )
+
+    meses_recientes = st.slider("📅 Meses recientes a descargar (5 = Julio a Noviembre 2026):", min_value=1, max_value=6, value=5)
+
+    if st.button("🚀 Descargar Lluvia del Último Trimestre (SIATA)", type="primary", use_container_width=True):
+        import importlib
+        from modules import siata_api
+        importlib.reload(siata_api)
+        from modules.db_manager import get_engine
+        from sqlalchemy import text
+        import geopandas as gpd
+
+        with st.spinner("1. Leyendo catálogo de estaciones SIATA desde Supabase..."):
+            try:
+                engine = get_engine()
+                with engine.connect() as conn:
+                    query = """
+                        SELECT id_estacion as codigo, nombre, latitud as lat, longitud as lon, geom 
+                        FROM estaciones 
+                        WHERE geom IS NOT NULL AND UPPER(id_estacion) LIKE 'SIATA_%'
+                    """
+                    gdf_db_siata = gpd.read_postgis(text(query), conn, geom_col="geom")
+                    if gdf_db_siata.crs is None:
+                        gdf_db_siata = gdf_db_siata.set_crs("EPSG:4326")
+            except Exception as e:
+                st.error(f"🚨 Error leyendo 'estaciones' en Supabase: {e}")
+                st.stop()
+
+        if gdf_db_siata.empty:
+            st.warning("⚠️ No se encontraron estaciones 'SIATA_' con geometría en Supabase. Ejecuta primero el Paso 1.")
+            st.stop()
+
+        with st.spinner(f"2. Descargando y consolidando los últimos {meses_recientes} meses para {len(gdf_db_siata)} estaciones..."):
+            dict_homologacion = siata_api.homologar_por_proximidad(gdf_db_siata)
+            df_lluvia_siata = siata_api.extraer_lluvia_reciente_siata(
+                dict_homologacion,
+                meses_atras=int(meses_recientes),
+                gdf_estaciones=gdf_db_siata
+            )
+
+            if not df_lluvia_siata.empty:
+                st.success(f"✅ ¡Últimos {len(df_lluvia_siata)} meses consolidados con éxito ({df_lluvia_siata['fecha'].min()} a {df_lluvia_siata['fecha'].max()}) para {len(dict_homologacion)} estaciones!")
+                st.dataframe(df_lluvia_siata, use_container_width=True)
+                csv_siata = df_lluvia_siata.to_csv(sep=';', decimal=',', index=False, encoding='utf-8-sig').encode('utf-8-sig')
                 st.download_button(
-                    label="📥 Descargar Matriz de los 9 Meses (Lista para Inyectar)",
-                    data=csv_bot,
-                    file_name="Datos_SIATA_Mineria_2026.csv",
+                    label="📥 Descargar CSV del Último Trimestre (Subir en Paso 2 para inyectar)",
+                    data=csv_siata,
+                    file_name="Datos_SIATA_Ultimo_Trimestre.csv",
                     mime="text/csv",
-                    type="primary"
+                    type="primary",
+                    use_container_width=True
                 )
             else:
-                st.warning("No se pudo construir la matriz. El servidor bloqueó la descarga o no hay datos.")
+                st.warning("No se obtuvieron registros nuevos. Verifica tu conexión a internet.")
 
 # ==========================
-# 🚀 ZONA DE PRUEBAS
+# 🚀 ZONA DE PRUEBAS Y MANTENIMIENTO SQL
 # ==========================
 if __name__ == "__main__":
     st.markdown("---")
     st.subheader("🧹 Limpieza de Emergencia de la Base de Datos")
-    st.markdown("Si entraron datos corruptos, valores negativos o monstruos decimales de Excel, usa este botón para purgar la base de datos.")
-    
-    if st.button("🧨 Purgar Anomalías y Valores Imposibles de Supabase", type="primary"):
+    st.markdown(
+        "Si entraron datos corruptos, fechas fantasmas (como diciembre de 2026), "
+        "valores negativos o diluvios irreales de Excel, usa estos controles para sanar Supabase."
+    )
+
+    col_purga1, col_purga2 = st.columns(2)
+
+    with col_purga1:
+        if st.button("🧨 Purgar Anomalías, Fechas Futuras y Valores Imposibles", type="primary", use_container_width=True):
+            from modules.db_manager import get_engine
+            from sqlalchemy import text
+
+            try:
+                engine = get_engine()
+                with engine.begin() as conn:
+                    res_val = conn.execute(text("""
+                        DELETE FROM precipitacion 
+                        WHERE valor < 0 OR valor > 1500 OR valor IN (999, 999.9, 9999, -999, -99.9);
+                    """))
+                    res_fec = conn.execute(text("""
+                        DELETE FROM precipitacion 
+                        WHERE fecha > CURRENT_DATE 
+                           OR (UPPER(id_estacion) LIKE 'SIATA_%' AND fecha < '2010-01-01');
+                    """))
+                    total_purgados = res_val.rowcount + res_fec.rowcount
+
+                st.cache_data.clear()
+                st.success(
+                    f"✅ ¡Caza de anomalías completada! Se eliminaron {total_purgados} registros "
+                    f"({res_val.rowcount} por valor inválido y {res_fec.rowcount} por fecha fuera de rango)."
+                )
+                st.balloons()
+            except Exception as e:
+                st.error(f"Error en la purga: {e}")
+
+    with col_purga2:
+        if st.button("🗑️ Borrar ÚNICAMENTE datos del SIATA", type="primary", use_container_width=True):
+            from modules.db_manager import get_engine
+            from sqlalchemy import text
+
+            try:
+                engine = get_engine()
+                with engine.begin() as conn:
+                    res = conn.execute(text("""
+                        DELETE FROM precipitacion 
+                        WHERE UPPER(id_estacion) LIKE 'SIATA_%';
+                    """))
+
+                st.cache_data.clear()
+                st.success(
+                    f"✅ ¡Limpieza quirúrgica completada! Se borraron {res.rowcount} registros del SIATA "
+                    f"y se refrescó la memoria caché. Tus datos del IDEAM están a salvo."
+                )
+                st.balloons()
+            except Exception as e:
+                st.error(f"Error en el borrado: {e}")
+
+# ==========================
+# 🚀 ZONA DE PRUEBAS Y MANTENIMIENTO SQL AVANZADO Tabla Precipitacion
+# ==========================
+if __name__ == "__main__":
+    st.markdown("---")
+    st.subheader("🧹 Quirófano SQL: Depuración Profunda de Supabase")
+    st.markdown("Este motor ejecuta limpieza directa en la tabla `precipitacion` (>1 millón de registros) utilizando identificadores físicos de PostgreSQL.")
+
+    if st.button("🧨 Ejecutar Depuración Integral de Anomalías", type="primary", use_container_width=True):
         from modules.db_manager import get_engine
         from sqlalchemy import text
-        
+
         try:
             engine = get_engine()
             with engine.begin() as conn:
-                # Borramos negativos y valores titánicos (> 8000mm)
-                res = conn.execute(text("DELETE FROM precipitacion WHERE valor < 0 OR valor > 8000;"))
-                st.success(f"✅ ¡Caza de monstruos completada! Se eliminaron {res.rowcount} registros residuales corruptos de Supabase.")
-                st.balloons()
+                # 1. Eliminar valores físicamente imposibles en un mes (negativos, códigos de error y diluvios irreales > 1500)
+                res_anomalias = conn.execute(text("""
+                    DELETE FROM precipitacion 
+                    WHERE valor < 0 OR valor > 1500 OR valor IN (999, 999.9, 9999, -999, -99.9);
+                """))
+                
+                # 2. Eliminar fechas futuras fantasmas (ej. Diciembre de 2026 o años posteriores)
+                res_futuras = conn.execute(text("""
+                    DELETE FROM precipitacion WHERE fecha > CURRENT_DATE;
+                """))
+                
+                # 3. Eliminar estaciones SIATA previas a la creación de la red (2010)
+                res_hist = conn.execute(text("""
+                    DELETE FROM precipitacion 
+                    WHERE UPPER(id_estacion) LIKE 'SIATA_%' AND fecha < '2010-01-01';
+                """))
+                
+                # 4. Eliminar duplicados exactos usando el identificador físico ctid de PostgreSQL
+                res_duplicados = conn.execute(text("""
+                    DELETE FROM precipitacion
+                    WHERE ctid IN (
+                        SELECT ctid
+                        FROM (
+                            SELECT ctid, ROW_NUMBER() OVER(PARTITION BY id_estacion, fecha) as fila
+                            FROM precipitacion
+                        ) t
+                        WHERE t.fila > 1
+                    );
+                """))
+
+                total = res_anomalias.rowcount + res_futuras.rowcount + res_hist.rowcount + res_duplicados.rowcount
+
+            st.cache_data.clear()
+            st.success(f"✅ ¡Cirugía completada! Se eliminaron {total} registros corruptos o redundantes:")
+            st.info(f"""
+            - **{res_anomalias.rowcount}** valores imposibles / códigos de error.
+            - **{res_futuras.rowcount}** fechas futuras fantasmas.
+            - **{res_hist.rowcount}** registros SIATA previos a 2010.
+            - **{res_duplicados.rowcount}** filas duplicadas exactas.
+            """)
+            st.balloons()
         except Exception as e:
-            st.error(f"Error en la purga: {e}")
+            st.error(f"Error en la depuración SQL: {e}")

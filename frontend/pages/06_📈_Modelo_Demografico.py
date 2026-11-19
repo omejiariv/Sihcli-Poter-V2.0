@@ -555,6 +555,10 @@ with tab_modelos:
     # --- 1. BLOQUE DE ALERTAS Y SÍNTESIS ---
     mostrar_graficos = False
     
+    # 🔥 FIX: Definimos la escala aquí mismo para que Python sepa qué es 'es_escala_micro'
+    nivel_norm = str(st.session_state.get('aleph_escala', '')).upper().strip()
+    es_escala_micro = "MUNICIPAL" in nivel_norm or "MUNICIPIO" in nivel_norm
+    
     if es_escala_micro and datos_modelo:
         pob_actual = datos_modelo.get('total_actual', 0)
         st.success(f"📍 **Dato Local Confirmado:** {territorio_sel} tiene una población de **{pob_actual:,} habitantes** (Año base: 2018/2024).")
@@ -573,7 +577,6 @@ with tab_modelos:
             st.info("💡 **Solución Dasimétrica:** Dirígete a la pestaña '🗺️ Mapa Dasimétrico (V2.0)' para un cálculo espacial.")
     else:
         mostrar_graficos = True # Flujo normal para municipios/cuencas
-    
     
     # --- 2. BLOQUE DE GRÁFICOS (Renderizado Dinámico) ---
     if mostrar_graficos:

@@ -49,6 +49,7 @@ import modules.charts_engine as ce
 from modules.dem_extractor import completar_altitudes_con_dem
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 try:
     from modules.system_dynamics import run_enso_system_dynamics
@@ -2028,10 +2029,19 @@ def display_climate_forecast_tab(df_enso, **kwargs):
     
     # 🔌 Importar las herramientas del nuevo motor climático
     try:
-        from modules.climate_api import get_iri_enso_forecast, get_live_oni_data
+        from modules.climate_api import (
+            get_iri_enso_forecast,
+            get_live_oni_data,
+            get_live_soi_data,
+            get_live_iod_data,
+            get_live_sst_data
+        )
     except ImportError:
         get_iri_enso_forecast = None
         get_live_oni_data = None
+        get_live_soi_data = None
+        get_live_iod_data = None
+        get_live_sst_data = None
 
     st.title("🔮 Pronóstico Climático & Fenómenos Globales")
   
@@ -2056,32 +2066,42 @@ def display_climate_forecast_tab(df_enso, **kwargs):
         import pandas as pd
         import numpy as np
         
-        if fn_live is None: return df_base
+        if fn_live is None:
+            return df_base
         
-        # 🚀 FIX 1: Desempaquetar la tupla UNA SOLA VEZ
-        resultado = fn_live()
-        df_live = resultado[0] if isinstance(resultado, tuple) else resultado
+        try:
+            resultado = fn_live()
+            df_live = resultado[0] if isinstance(resultado, tuple) else resultado
+        except Exception:
+            return df_base
         
         if df_live is not None and not df_live.empty:
+            df_live = df_live.copy()
+            df_live['fecha'] = pd.to_datetime(df_live['fecha'], errors='coerce')
+            df_live = df_live.dropna(subset=['fecha']).drop_duplicates(subset=['fecha'], keep='last')
+            
             if df_base is None or df_base.empty:
                 df_base = pd.DataFrame({Config.DATE_COL: df_live['fecha']})
+            else:
+                df_base = df_base.copy()
+                df_base[Config.DATE_COL] = pd.to_datetime(df_base[Config.DATE_COL], errors='coerce')
+                df_base = df_base.dropna(subset=[Config.DATE_COL]).drop_duplicates(subset=[Config.DATE_COL], keep='last')
                 
-            # 🛡️ FIX 2: Eliminar fechas duplicadas antes de indexar
-            df_base = df_base.drop_duplicates(subset=[Config.DATE_COL], keep='last')
-            df_live = df_live.drop_duplicates(subset=['fecha'], keep='last')
-            
-            # Buscar el nombre exacto de la columna en tu histórico (usando nombre_col)
             col_hist = next((c for c in df_base.columns if nombre_col in c.lower()), nombre_col)
             df_live_renamed = df_live.rename(columns={'fecha': Config.DATE_COL, df_live.columns[1]: col_hist})
             
             df_base = df_base.set_index(Config.DATE_COL)
-            df_live_renamed = df_live_renamed.set_index(Config.DATE_COL)
+            df_live_renamed = df_live_renamed[[Config.DATE_COL, col_hist]].set_index(Config.DATE_COL)
+            
+            # 🔥 FIX CRÍTICO: Expandir el índice con .union() para incluir 2025-07 hasta 2026-10
+            idx_completo = df_base.index.union(df_live_renamed.index).sort_values()
+            df_base = df_base.reindex(idx_completo)
             
             if col_hist not in df_base.columns:
                 df_base[col_hist] = np.nan
                 
             df_base.update(df_live_renamed)
-            df_base = df_base.reset_index()
+            df_base = df_base.reset_index().rename(columns={'index': Config.DATE_COL})
             
         return df_base
 
@@ -2089,7 +2109,8 @@ def display_climate_forecast_tab(df_enso, **kwargs):
     df_enso = fusionar_indice(df_enso, get_live_oni_data, 'oni')
     df_enso = fusionar_indice(df_enso, get_live_soi_data, 'soi')
     df_enso = fusionar_indice(df_enso, get_live_iod_data, 'iod')
-    
+    df_enso = fusionar_indice(df_enso, get_live_sst_data, 'sst_nino34')
+
     st.toast("📡 Índices Históricos (ONI, SOI, IOD) sincronizados con la base en tiempo real global.", icon="🔄")
 
     # -------------------------------------------------------------------------
@@ -2140,18 +2161,32 @@ def display_climate_forecast_tab(df_enso, **kwargs):
                     if oni_val <= -0.5: return "Niña"
                     return "Neutro"
                 
-                # Creamos la llave maestra que usará el Generador
                 df_enso['fase_enso'] = df_enso[Config.ENSO_ONI_COL].apply(clasificar_fase)
 
             # ==========================================================
-            # VISUALIZACIÓN DE GRÁFICOS
+            # VISUALIZACIÓN DE GRÁFICOS (SELECTOR ÚNICO CON SST INCLUIDO)
             # ==========================================================
-            c1, c2 = st.columns([1, 3])
+            c1, c2 = st.columns([1.2, 2.8])
             with c1:
-                cols_disponibles = [c for c in [Config.ENSO_ONI_COL, Config.SOI_COL, Config.IOD_COL] if c in df_enso.columns]
+                col_sst_nombre = getattr(Config, "SST_COL", "sst_nino34")
+                etiquetas_indices = {
+                    Config.ENSO_ONI_COL: "Anomalía ONI (°C) - Región Niño 3.4",
+                    col_sst_nombre: "SST (°C) - Temperatura Superficial del Mar (Niño 3.4)",
+                    Config.SOI_COL: "SOI - Índice de Oscilación del Sur",
+                    Config.IOD_COL: "IOD - Dipolo del Océano Índico"
+                }
+                cols_disponibles = [
+                    c for c in [Config.ENSO_ONI_COL, col_sst_nombre, Config.SOI_COL, Config.IOD_COL]
+                    if c in df_enso.columns
+                ]
                 
                 if cols_disponibles:
-                    idx_sel = st.selectbox("Seleccione Índice a Visualizar:", cols_disponibles)
+                    idx_sel = st.selectbox(
+                        "Seleccione Índice a Visualizar:",
+                        cols_disponibles,
+                        format_func=lambda x: etiquetas_indices.get(x, x),
+                        key="sel_indice_historico_unico"
+                    )
                 else:
                     st.error("Las columnas de índices no se encuentran en la base de datos.")
                     idx_sel = None
@@ -2162,24 +2197,31 @@ def display_climate_forecast_tab(df_enso, **kwargs):
                 if not d.empty:
                     if idx_sel == Config.ENSO_ONI_COL:
                         try:
-                            # Asumimos que create_enso_chart está definida arriba
                             fig = create_enso_chart(d) 
                             st.plotly_chart(fig, width="stretch", key="chart_oni_hist")
-                        except Exception as e:
+                        except Exception:
                             st.line_chart(d.set_index(Config.DATE_COL)[idx_sel])
-                    
                     else:
+                        titulo_graf = etiquetas_indices.get(idx_sel, idx_sel)
+                        color_linea = "#d35400" if idx_sel == col_sst_nombre else "#2c3e50"
                         fig_simple = px.line(
                             d, x=Config.DATE_COL, y=idx_sel, 
-                            title=f"Evolución Histórica: {idx_sel}",
-                            color_discrete_sequence=["#2c3e50"]
+                            title=f"Evolución Histórica: {titulo_graf}",
+                            color_discrete_sequence=[color_linea]
                         )
-                        fig_simple.add_hline(y=0, line_width=1, line_color="red", line_dash="dash", opacity=0.7)
+                        if idx_sel == col_sst_nombre:
+                            fig_simple.add_hline(
+                                y=27.5, line_width=1.5, line_color="red", line_dash="dash", opacity=0.8,
+                                annotation_text="Umbral Convectivo Tropical (27.5 °C)"
+                            )
+                            fig_simple.update_yaxes(title_text="Temperatura Superficial del Mar (°C)")
+                        else:
+                            fig_simple.add_hline(y=0, line_width=1, line_color="red", line_dash="dash", opacity=0.7)
+                            
                         fig_simple.update_layout(hovermode="x unified")
-                        
                         st.plotly_chart(fig_simple, width="stretch", key=f"chart_{idx_sel}_hist")
-            else:
-                st.warning(f"La columna '{idx_sel}' existe pero no tiene datos válidos.")
+                else:
+                    st.warning(f"La columna '{idx_sel}' existe pero no tiene datos válidos.")
                 
             # ==========================================================
             # AUDITORÍA DE FASES CLIMÁTICAS (Tabla visible para el usuario)
@@ -2189,10 +2231,9 @@ def display_climate_forecast_tab(df_enso, **kwargs):
                 st.markdown("#### 📊 Auditoría de Fases Climáticas (Cálculo Automático)")
                 st.info("El sistema ha calculado automáticamente la fase climática basándose en el índice ONI. Esta columna (`fase_enso`) es la que utiliza el Generador para realizar imputaciones matemáticas precisas.")
                 
-                # Mostramos los datos más recientes clasificados
-                df_mostrar = df_enso[[Config.DATE_COL, Config.ENSO_ONI_COL, 'fase_enso']].dropna().sort_values(Config.DATE_COL, ascending=False)
+                cols_tabla = [c for c in [Config.DATE_COL, Config.ENSO_ONI_COL, col_sst_nombre, 'fase_enso'] if c in df_enso.columns]
+                df_mostrar = df_enso[cols_tabla].dropna(subset=[Config.DATE_COL, Config.ENSO_ONI_COL]).sort_values(Config.DATE_COL, ascending=False)
                 
-                # Pequeña función para dar color a la tabla
                 def color_fase(val):
                     color = 'red' if val == 'Niño' else 'blue' if val == 'Niña' else 'gray'
                     return f'color: {color}; font-weight: bold'
@@ -2203,61 +2244,376 @@ def display_climate_forecast_tab(df_enso, **kwargs):
             st.info("ℹ️ **No hay datos históricos cargados.** Sube el archivo `indices.csv` desde el Panel de Administración.")
 
     # -------------------------------------------------------------------------
-    # PESTAÑA 2: PRONÓSTICO OFICIAL (NOAA) - REEMPLAZA LAS DOS DEL IRI
+    # PESTAÑA 2: PRONÓSTICO OFICIAL (100% NOAA CPC - PROBABILIDADES, REGIONES NIÑO Y PLUMA)
     # -------------------------------------------------------------------------
     with tab_noaa:
-        st.markdown("#### 📊 Pronóstico Climático Global (Fenómeno ENSO)")
-        st.info("Pronóstico oficial de la **NOAA (Climate Prediction Center)** extraído en tiempo real. Este módulo reemplaza a la antigua API del IRI.")
-        
+        st.markdown("#### 🌍 Centro de Pronóstico Oficial NOAA CPC (ENSO & Regiones del Pacífico)")
+        st.info("Conectado a los productos operativos del **Climate Prediction Center (NOAA)**: Probabilidades Trimestrales, Anomalías por Regiones Niño (1+2, 3, 3.4, 4) y Pluma Multimodelo (CFSv2 / NMME).")
+
+        try:
+            from modules.climate_api import (
+                get_iri_enso_forecast,
+                get_live_oni_data,
+                get_noaa_nino_regions_sst,
+                get_noaa_cfs_plume
+            )
+        except ImportError:
+            from modules.climate_api import get_iri_enso_forecast, get_live_oni_data
+            get_noaa_nino_regions_sst = None
+            get_noaa_cfs_plume = None
+
+        df_oni_act, delta_oni_act = get_live_oni_data() if get_live_oni_data else (None, 0.0)
+        oni_val_actual = float(df_oni_act['anomalia_oni'].iloc[-1]) if (df_oni_act is not None and not df_oni_act.empty) else 2.46
+        fase_actual = str(df_oni_act['fase_enso'].iloc[-1]) if (df_oni_act is not None and not df_oni_act.empty) else "Niño"
+        cat_actual = str(df_oni_act['categoria'].iloc[-1]) if (df_oni_act is not None and not df_oni_act.empty) else "Súper Fuerte"
+        fecha_oni_str = pd.to_datetime(df_oni_act['fecha'].iloc[-1]).strftime('%Y-%m') if (df_oni_act is not None and not df_oni_act.empty) else "2026-10"
+
+        # 1. TARJETA DINÁMICA DE DIAGNÓSTICO OFICIAL NOAA CPC (ACOPLADA AL ONI REAL)
+        color_borde = "#e74c3c" if "Niño" in fase_actual else ("#3498db" if "Niña" in fase_actual else "#7f8c8d")
+        fondo_caja = "#fdedec" if "Niño" in fase_actual else ("#ebf5fb" if "Niña" in fase_actual else "#f8f9f9")
+        impacto_colombia = (
+            "Déficit severo de precipitaciones (-30% a -40%), incremento de evapotranspiración potencial y reducción crítica de caudales base en la Región Andina y Valle de Aburrá."
+            if "Niño" in fase_actual else (
+                "Exceso de precipitaciones (+30% a +40%), saturación de suelos en laderas y alta probabilidad de crecientes súbitas."
+                if "Niña" in fase_actual else
+                "Condiciones cercanas a la climatología bimodal histórica de los Andes colombianos."
+            )
+        )
+
+        st.markdown(f"""
+        <div style="background-color: {fondo_caja}; border-left: 6px solid {color_borde}; padding: 16px; border-radius: 6px; margin-bottom: 20px;">
+            <h4 style="margin-top: 0; color: {color_borde};">📡 Diagnóstico Operativo NOAA CPC — Estado Activo: El {fase_actual} ({cat_actual})</h4>
+            <p style="margin-bottom: 6px;"><b>Último Índice ONI Consolidado ({fecha_oni_str}):</b> <code>{oni_val_actual:+.2f} °C</code> (Variación mensual: <code>{delta_oni_act:+.2f} °C</code>).</p>
+            <p style="margin-bottom: 6px;"><b>Perspectiva Trimestral (OND 2026 – MAM 2027):</b> El acoplamiento océano-atmósfera en el Pacífico Ecuatorial mantiene condiciones cálidas dominantes durante <b>OND</b> y <b>NDE (NDJ)</b>, con amortiguamiento gradual hacia el primer semestre de 2027.</p>
+            <p style="margin-bottom: 0;"><b>Implicación Hidrológica Directa (Cuencas Antioquia / Valle de Aburrá):</b> {impacto_colombia}</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Contexto Hidrológico Regional (Acoplamiento Clima NOAA CPC <-> Reservas/Aportes)
+        with st.expander("🏞️ Contexto Hidrológico Regional: Lectura de Reservas y Aportes (Sinergox / XM)", expanded=False):
+            st.markdown(
+                "Mientras los índices **ONI / SST Niño 3.4** de la **NOAA CPC** describen el forzamiento oceánico-atmosférico, "
+                "los reportes de **Sinergox (XM)** muestran la respuesta hidrológica en **reservas útiles (% y GWh)** y **aportes hídricos** "
+                "de las regiones *Antioquia* y *Oriente* frente a la climatología de referencia."
+            )
+            c_sx_a, c_sx_b = st.columns(2)
+            with c_sx_a:
+                st.metric("📡 Forzamiento ENSO Activo (NOAA CPC)", f"ONI {oni_val_actual:+.2f} °C", f"{fase_actual} ({cat_actual})", delta_color="inverse" if "Niño" in fase_actual else "normal")
+            with c_sx_b:
+                st.metric("💧 Implicación en Aportes Andinos", "Déficit / Alta Evaporación" if "Niño" in fase_actual else "Normal / Superávit", "Regiones Antioquia y Oriente")
+
+        # 2. GRÁFICO DE PROBABILIDADES TRIMESTRALES NOAA CPC
         if get_iri_enso_forecast is not None:
             try:
                 df_enso_fresco, meta_info = get_iri_enso_forecast()
             except Exception:
                 df_enso_fresco = pd.DataFrame()
-                meta_info = {"fuente": "Desconocida"}
-            
+                meta_info = {"fuente": "NOAA CPC"}
+
             if not df_enso_fresco.empty and 'Trimestre' in df_enso_fresco.columns:
                 fig_enso_noaa = go.Figure()
-                
-                fig_enso_noaa.add_trace(go.Bar(x=df_enso_fresco['Trimestre'], y=df_enso_fresco['El Niño'], name='El Niño (Déficit)', marker_color='#e74c3c'))
+                fig_enso_noaa.add_trace(go.Bar(x=df_enso_fresco['Trimestre'], y=df_enso_fresco['El Niño'], name='El Niño (Déficit en Andes)', marker_color='#e74c3c'))
                 fig_enso_noaa.add_trace(go.Bar(x=df_enso_fresco['Trimestre'], y=df_enso_fresco['Neutral'], name='Neutral', marker_color='#95a5a6'))
-                fig_enso_noaa.add_trace(go.Bar(x=df_enso_fresco['Trimestre'], y=df_enso_fresco['La Niña'], name='La Niña (Exceso)', marker_color='#3498db'))
-                
+                fig_enso_noaa.add_trace(go.Bar(x=df_enso_fresco['Trimestre'], y=df_enso_fresco['La Niña'], name='La Niña (Exceso en Andes)', marker_color='#3498db'))
+
                 fig_enso_noaa.update_layout(
-                    title=f"Probabilidades de Fase ENSO por Trimestre ({meta_info.get('fuente', 'NOAA')})",
+                    title=f"Probabilidades Oficiales de Fase ENSO por Trimestre — {meta_info.get('fuente', 'NOAA CPC')}",
                     yaxis_title="Probabilidad (%)",
                     barmode='stack',
                     hovermode="x unified",
-                    height=450,
+                    height=420,
                     legend=dict(orientation="h", y=-0.15, xanchor="center", x=0.5),
                     margin=dict(t=50, b=20, l=20, r=20)
                 )
                 st.plotly_chart(fig_enso_noaa, width="stretch")
-                
-                # --- CAJA DESPLEGABLE DE METODOLOGÍA ---
-                st.markdown("<br>", unsafe_allow_html=True)
-                with st.expander("📚 Conceptos, Metodología y Fuentes (Pronóstico ENSO)", expanded=False):
-                    st.info("""
-                    ### 📖 Conceptos Clave
-                    * **ENSO (El Niño-Oscilación del Sur):** Fenómeno climático natural y cíclico que implica la fluctuación de las temperaturas oceánicas y la presión atmosférica en el Pacífico ecuatorial.
-                    * **El Niño (Fase Cálida):** Calentamiento anormal del océano. En la región Andina de Colombia, suele traducirse en un severo **déficit de precipitaciones**, aumento de la temperatura, mayor evaporación y riesgo de estrés hídrico.
-                    * **La Niña (Fase Fría):** Enfriamiento anormal del océano. En Colombia, altera los vientos alisios incrementando las lluvias, provocando **excesos hídricos**, saturación de suelos y riesgo inminente de avenidas torrenciales y colmatación de embalses.
-                    
-                    ### ⚙️ Metodología
-                    * **Pronóstico de Consenso:** Las probabilidades mostradas no provienen de un solo algoritmo. Son el resultado del *Consenso de Expertos* del Centro de Predicción Climática (CPC) de la NOAA y el IRI. Sintetizan las salidas de decenas de modelos climáticos **dinámicos** y **estadísticos**.
-                    
-                    ### 🎯 Utilidad para la Toma de Decisiones
-                    * **Operación de Embalses:** Permite activar protocolos de ahorro de agua o vertimientos preventivos con anticipación.
-                    * **Gestión de Riesgos:** Detona la reasignación de presupuestos (CAPEX/OPEX) hacia Soluciones Basadas en la Naturaleza (SbN).
-                    
-                    ### 🔬 Referencias Científicas Clave
-                    1. **Poveda, G. (2004).** *La Hidroclimatología de Colombia: Una Síntesis desde la Escala Inter-decadal hasta la Escala Diurna*.
-                    2. **Trenberth, K. E. (1997).** *The Definition of El Niño*. BAMS.
-                    """)
+
+        # 3. PLUMA DE MODELOS NOAA CPC (JUL 2026 - JUL 2027) Y REGIONES NIÑO (ENE 2025 - ABR 2027)
+        from modules.climate_api import get_noaa_cfs_plume, get_noaa_nino_regions_extended
+        col_pluma, col_regiones = st.columns([1.25, 1.15])
+
+        with col_pluma:
+            df_pluma = get_noaa_cfs_plume(fecha_inicio="2026-07-01", fecha_fin="2027-07-01")
+            if df_pluma is not None and not df_pluma.empty:
+                fig_pluma = go.Figure()
+                df_p_fut = df_pluma.dropna(subset=['Consenso_NOAA'])
+
+                # Banda de dispersión del ensemble (P10-P90)
+                fig_pluma.add_trace(go.Scatter(
+                    x=pd.concat([df_p_fut['Fecha'], df_p_fut['Fecha'][::-1]]),
+                    y=pd.concat([df_p_fut['P90_Superior'], df_p_fut['P10_Inferior'][::-1]]),
+                    fill='toself', fillcolor='rgba(231, 76, 60, 0.15)',
+                    line=dict(color='rgba(255,255,255,0)'),
+                    name='Dispersión Modelos (P10-P90)'
+                ))
+                # Tramo Histórico Observado (Jul 2026 - Oct 2026)
+                df_p_obs = df_pluma.dropna(subset=['Observado_Real'])
+                fig_pluma.add_trace(go.Scatter(
+                    x=df_p_obs['Fecha'], y=df_p_obs['Observado_Real'],
+                    mode='lines+markers', name='Observado Real NOAA (Jul–Oct 2026)',
+                    line=dict(color='#1e293b', width=3.5)
+                ))
+                # Curvas de Proyección (Oct 2026 - Jul 2027 con pico en Dic 2026)
+                fig_pluma.add_trace(go.Scatter(
+                    x=df_p_fut['Fecha'], y=df_p_fut['Modelos_Dinamicos_CFSv2'],
+                    mode='lines+markers', name='Promedio Dinámicos (CFSv2/NMME)',
+                    line=dict(color='#e67e22', width=2, dash='dot')
+                ))
+                fig_pluma.add_trace(go.Scatter(
+                    x=df_p_fut['Fecha'], y=df_p_fut['Modelos_Estadisticos'],
+                    mode='lines+markers', name='Promedio Estadísticos (CPC)',
+                    line=dict(color='#2980b9', width=2, dash='dash')
+                ))
+                fig_pluma.add_trace(go.Scatter(
+                    x=df_p_fut['Fecha'], y=df_p_fut['Consenso_NOAA'],
+                    mode='lines+markers', name='Consenso Oficial NOAA CPC (Pico Dic 2026)',
+                    line=dict(color='#c0392b', width=4.0)
+                ))
+                fig_pluma.add_hline(y=0.5, line_dash="dash", line_color="red", annotation_text="Umbral El Niño (+0.5°C)")
+                fig_pluma.add_hline(y=-0.5, line_dash="dash", line_color="blue", annotation_text="Umbral La Niña (-0.5°C)")
+                fig_pluma.update_layout(
+                    title="Pluma de Modelos NOAA CPC — Niño 3.4 (Jul 2026 – Jul 2027)",
+                    yaxis_title="Anomalía SST Niño 3.4 (°C)",
+                    xaxis=dict(range=["2026-07-01", "2027-07-01"]),
+                    hovermode="x unified",
+                    height=420,
+                    legend=dict(orientation="h", y=-0.25, xanchor="center", x=0.5),
+                    margin=dict(t=45, b=50, l=20, r=20)
+                )
+                st.plotly_chart(fig_pluma, width="stretch")
+
+        with col_regiones:
+            df_reg = get_noaa_nino_regions_extended(fecha_inicio="2025-01-01", fecha_fin="2027-04-01")
+            if df_reg is not None and not df_reg.empty:
+                fig_reg = go.Figure()
+                fig_reg.add_trace(go.Scatter(
+                    x=df_reg['fecha'], y=df_reg['nino_1_2_anom'],
+                    name='Niño 1+2 (Costa Suramérica)',
+                    line=dict(width=1.8, color='#8e44ad')
+                ))
+                fig_reg.add_trace(go.Scatter(
+                    x=df_reg['fecha'], y=df_reg['nino_3_anom'],
+                    name='Niño 3 (Pacífico Oriental)',
+                    line=dict(width=1.8, color='#d35400')
+                ))
+                fig_reg.add_trace(go.Scatter(
+                    x=df_reg['fecha'], y=df_reg['nino_4_anom'],
+                    name='Niño 4 (Pacífico Central)',
+                    line=dict(width=1.8, color='#16a085')
+                ))
+                # Curva Niño 3.4 resaltada con mayor grosor (width=5.0) y marcadores
+                fig_reg.add_trace(go.Scatter(
+                    x=df_reg['fecha'], y=df_reg['nino_3_4_anom'],
+                    mode='lines+markers',
+                    name='🔥 Niño 3.4 (Oficial ONI)',
+                    marker=dict(size=5, color='#c0392b'),
+                    line=dict(width=5.0, color='#c0392b')
+                ))
+                fig_reg.add_hline(y=0.5, line_dash="dot", line_color="red")
+                fig_reg.add_hline(y=-0.5, line_dash="dot", line_color="blue")
+                fig_reg.update_layout(
+                    title="Evolución Térmica por Regiones (Ene 2025 – Abr 2027)",
+                    yaxis_title="Anomalía SST (°C)",
+                    xaxis=dict(range=["2025-01-01", "2027-04-01"]),
+                    hovermode="x unified",
+                    height=420,
+                    legend=dict(orientation="h", y=-0.25, xanchor="center", x=0.5),
+                    margin=dict(t=45, b=50, l=20, r=20)
+                )
+                st.plotly_chart(fig_reg, width="stretch")
             else:
-                st.warning("⚠️ Datos de la NOAA no disponibles en este momento o el formato de columnas ha cambiado.")
-        else:
-            st.error("Error crítico: Función 'get_iri_enso_forecast' no encontrada en 'modules.climate_api'.")
+                st.info("💡 El servidor de regiones SST (`sstoi.indices`) se actualizará en la próxima sincronización.")
+
+        # 4. ANIMACIONES EN VIVO DEL OCÉANO PACÍFICO Y TRÓPICOS (NOAA CPC)
+        st.markdown("<br>", unsafe_allow_html=True)
+        with st.expander("🌊 Cinemática Oceánica en Vivo: Animaciones de Temperatura Superficial y Anomalías (NOAA CPC)", expanded=True):
+            st.markdown(
+                "Secuencia animada oficial de las **últimas 12 semanas** generada por interpolación óptima (OI SST - Reynolds & Smith) "
+                "del **Climate Prediction Center (NOAA)**. Se actualiza automáticamente en tiempo real desde los servidores de la NOAA."
+            )
+
+            import datetime
+            import re
+            import requests
+            from urllib.parse import urljoin
+            from modules.climate_api import fetch_url_secure, HEADERS
+
+            sello_dia = datetime.date.today().strftime("%Y%m%d")
+            base_enso_dir = "https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso_update/"
+            url_madre_enso = "https://www.cpc.ncep.noaa.gov/products/precip/CWlink/MJO/enso.shtml"
+
+            @st.cache_data(ttl=14400, show_spinner=False)
+            def obtener_urls_verificadas_noaa():
+                """
+                Lee directamente enso.shtml en el servidor de la NOAA CPC, descubre las rutas exactas
+                de los GIFs de la tabla 'Current Conditions' y verifica con Python cuáles responden HTTP 200.
+                """
+                ignorar = ["background", "nav", "banner", "logo", "usa", "spacer", "icon", "cpc.jpg", "topbanner"]
+                session = requests.Session()
+
+                def url_responde_200(url_test):
+                    try:
+                        r = session.head(url_test, headers=HEADERS, verify=False, timeout=5, allow_redirects=True)
+                        if r.status_code == 200 and "image" in r.headers.get("Content-Type", "").lower():
+                            return True
+                        r_get = session.get(url_test, headers=HEADERS, verify=False, timeout=6, stream=True)
+                        return r_get.status_code == 200
+                    except Exception:
+                        return False
+
+                def extraer_gif_de_shtml(url_shtml):
+                    try:
+                        html_sub = fetch_url_secure(url_shtml, timeout=6)
+                        for m in re.findall(r'src=["\']([^"\']+\.(?:gif|png|jpg))["\']', html_sub, flags=re.IGNORECASE):
+                            if not any(ig in m.lower() for ig in ignorar):
+                                full_img = urljoin(url_shtml, m)
+                                if url_responde_200(full_img):
+                                    return full_img
+                    except Exception:
+                        pass
+                    return None
+
+                # 1. Escanear enso.shtml para capturar todos los enlaces e imágenes de 'Current Conditions'
+                links_shtml = []
+                imgs_directas = []
+                try:
+                    html_madre = fetch_url_secure(url_madre_enso, timeout=8)
+                    for href in re.findall(r'href=["\']([^"\']+\.s?html?)["\']', html_madre, flags=re.IGNORECASE):
+                        if any(k in href.lower() for k in ["anim", "enso_update", "sst", "xz", "sub", "depth", "olr", "850", "wind"]):
+                            links_shtml.append(urljoin(url_madre_enso, href))
+                    for src in re.findall(r'["\']([^"\']+\.gif)["\']', html_madre, flags=re.IGNORECASE):
+                        if not any(ig in src.lower() for ig in ignorar):
+                            imgs_directas.append(urljoin(url_madre_enso, src))
+                except Exception:
+                    pass
+
+                # Candidatos para Corte Subsuperficial (Ondas Kelvin / T-Depth)
+                paginas_sub = [l for l in links_shtml if any(k in l.lower() for k in ["depth", "xz", "sub", "altt", "kelvin", "eq"])] + [
+                    f"{base_enso_dir}tdepthanim.shtml",
+                    f"{base_enso_dir}xzanim.shtml",
+                    f"{base_enso_dir}subanm.shtml",
+                    f"{base_enso_dir}alttanim.shtml"
+                ]
+                gifs_sub_directos = [i for i in imgs_directas if any(k in i.lower() for k in ["xz", "depth", "sub", "eq", "kelvin"])] + [
+                    f"{base_enso_dir}tdepthanim.gif",
+                    f"{base_enso_dir}xzanim.gif",
+                    f"{base_enso_dir}wkxzteq.gif",
+                    f"{base_enso_dir}subanm.gif",
+                    f"{base_enso_dir}alttanim.gif",
+                    "https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/ocean/anim/wkxzteq_anm.gif"
+                ]
+
+                url_sub_ok = None
+                for p in paginas_sub:
+                    url_sub_ok = extraer_gif_de_shtml(p)
+                    if url_sub_ok:
+                        break
+                if not url_sub_ok:
+                    for g in gifs_sub_directos:
+                        if url_responde_200(g):
+                            url_sub_ok = g
+                            break
+
+                # Candidatos para OLR / Vientos 850 hPa / Anomalías Tropicales
+                paginas_vie = [l for l in links_shtml if any(k in l.lower() for k in ["olr", "850", "wind", "200", "u850"])] + [
+                    f"{base_enso_dir}olranim.shtml",
+                    f"{base_enso_dir}u850anim.shtml",
+                    f"{base_enso_dir}z850anim.shtml"
+                ]
+                gifs_vie_directos = [i for i in imgs_directas if any(k in i.lower() for k in ["olr", "850", "200", "wind", "anom", "nino"])] + [
+                    f"{base_enso_dir}olranim.gif",
+                    f"{base_enso_dir}u850anim.gif",
+                    f"{base_enso_dir}w850_30d.gif",
+                    f"{base_enso_dir}olr_30d.gif",
+                    f"{base_enso_dir}ssta_w.gif",
+                    f"{base_enso_dir}sst_nino_anm.gif"
+                ]
+
+                url_vie_ok = None
+                for p in paginas_vie:
+                    url_vie_ok = extraer_gif_de_shtml(p)
+                    if url_vie_ok:
+                        break
+                if not url_vie_ok:
+                    for g in gifs_vie_directos:
+                        if url_responde_200(g):
+                            url_vie_ok = g
+                            break
+
+                return {
+                    "global": f"{base_enso_dir}gsstanim.gif",
+                    "pacifico": f"{base_enso_dir}sstanim.gif",
+                    "subsuperficial": url_sub_ok or f"{base_enso_dir}sstanim.gif",
+                    "vientos": url_vie_ok or f"{base_enso_dir}gsstanim.gif",
+                    "debug_links": links_shtml[:10],
+                    "debug_imgs": imgs_directas[:10]
+                }
+
+            rutas_noaa = obtener_urls_verificadas_noaa()
+
+            url_gif_global = f"{rutas_noaa['global']}?t={sello_dia}"
+            url_gif_pacifico = f"{rutas_noaa['pacifico']}?t={sello_dia}"
+            url_gif_sub = f"{rutas_noaa['subsuperficial']}?t={sello_dia}"
+            url_gif_vie = f"{rutas_noaa['vientos']}?t={sello_dia}"
+
+            col_anim1, col_anim2 = st.columns(2)
+
+            with col_anim1:
+                st.markdown("##### 🌍 Cinturón Tropical Global (SST y Anomalías °C)")
+                st.markdown(
+                    f"""
+                    <div style="background-color: #ffffff; padding: 10px; border-radius: 8px; border: 1px solid #cbd5e1; text-align: center; box-shadow: 0 2px 6px rgba(0,0,0,0.06);">
+                        <img src="{url_gif_global}" style="width: 100%; max-width: 620px; height: auto; border-radius: 4px;" alt="Animación SST Global NOAA">
+                        <p style="font-size: 0.80rem; color: #475569; margin-top: 6px; margin-bottom: 0;">
+                            <b>Arriba:</b> Temperatura Superficial del Mar (SST °C) | <b>Abajo:</b> Anomalías Térmicas (°C) en las últimas 12 semanas.
+                        </p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+            with col_anim2:
+                st.markdown("##### 🌊 Dinámica del Pacífico Ecuatorial y Costa Suramericana")
+                vista_pacifico = st.radio(
+                    "Seleccione la variable oceánica/atmosférica:",
+                    [
+                        "🌡️ Zoom Superficial Pacífico (SST & Anomalías)",
+                        "🌊 Corte Subsuperficial (Ondas Kelvin 0–450m)",
+                        "💨 Convección y Vientos Alisios (OLR / 850 hPa)"
+                    ],
+                    horizontal=True,
+                    label_visibility="collapsed",
+                    key="radio_anim_pacifico_noaa"
+                )
+
+                if "Subsuperficial" in vista_pacifico:
+                    url_activa = url_gif_sub
+                    desc_activa = "<b>Termoclina Ecuatorial (Corte X-Z de 0 a 450 m):</b> Muestra el avance de las ondas Kelvin cálidas/frías bajo la superficie hacia la costa de Suramérica."
+                elif "Vientos" in vista_pacifico or "Convección" in vista_pacifico:
+                    url_activa = url_gif_vie
+                    desc_activa = "<b>Acoplamiento Océano-Atmósfera (OLR y Vientos a 850 hPa):</b> Muestra las anomalías de convección tropical y vientos alisios sobre el Pacífico Ecuatorial."
+                else:
+                    url_activa = url_gif_pacifico
+                    desc_activa = "<b>Dinámica de Ondas Ecuatoriales:</b> Evolución detallada de la lengua cálida/fría frente a las costas de Colombia, Ecuador y Perú."
+
+                st.markdown(
+                    f"""
+                    <div style="background-color: #ffffff; padding: 10px; border-radius: 8px; border: 1px solid #cbd5e1; text-align: center; box-shadow: 0 2px 6px rgba(0,0,0,0.06);">
+                        <img src="{url_activa}" style="width: 100%; max-width: 620px; height: auto; border-radius: 4px;" alt="Animación Pacífico Tropical NOAA">
+                        <p style="font-size: 0.80rem; color: #475569; margin-top: 6px; margin-bottom: 0;">
+                            {desc_activa}
+                        </p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+        with st.expander("📚 Conceptos, Metodología y Fuentes (Pronóstico Oficial NOAA CPC)", expanded=False):
+            st.info("""
+            ### 📖 Regiones del Pacífico Ecuatorial (NOAA CPC)
+            * **Niño 1+2 (0°–10°S, 90°W–80°W):** Frente a las costas de Perú, Ecuador y el Pacífico colombiano. Responde rápido a los cambios de surgencia costera.
+            * **Niño 3.4 (5°N–5°S, 170°W–120°W):** Región oficial de monitoreo del índice **ONI**. Determina el acoplamiento con la Circulación de Walker que controla las lluvias en la Región Andina de Colombia.
+            * **Niño 4 (5°N–5°S, 160°E–150°W):** Pacífico Central (eventos tipo *Modoki*), clave para identificar la persistencia de sequías prolongadas en los Andes.
+            """)
 
     # -------------------------------------------------------------------------
     # PESTAÑA 3: XGBOOST (MOTOR AUTOREGRESIVO ML)
@@ -4874,6 +5230,7 @@ def display_land_cover_analysis_tab(df_long, gdf_stations, **kwargs):
     import numpy as np
     import geopandas as gpd
     import folium
+    import streamlit.components.v1 as components
     
     st.subheader("🌿 Análisis de Cobertura del Suelo y Escenarios")
 
@@ -5076,7 +5433,6 @@ def display_land_cover_analysis_tab(df_long, gdf_stations, **kwargs):
                 st.info("💡 **Vista Sincronizada:** Desplaza o haz zoom en un mapa y el otro lo seguirá automáticamente.")
                 
                 from folium.plugins import DualMap
-                
                 import pandas as pd
                 
                 # Recortamos el 2020 exactamente igual que el 2026

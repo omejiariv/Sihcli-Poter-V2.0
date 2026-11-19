@@ -206,44 +206,29 @@ if gdf_zona is None or gdf_zona.empty:
                             gdf_zona = gpd.GeoDataFrame(geometry=[gdf_zona_tmp.unary_union], crs=gdf_subcuencas.crs)
                             encontrado = True
 
-            # --- 2. BÚSQUEDA TERRITORIAL ESTRUCTURAL (TerritorioMaestro.geojson) ---
+            # --- 2. BÚSQUEDA TERRITORIAL ESTRUCTURAL (TerritorioMaestro.geojson Cacheado) ---
             if not encontrado and not es_cuenca:
-                import geopandas as gpd
-                
-                # 🚀 Lectura directa desde la URL para evitar cachés corruptos
-                url = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
-                
+                @st.cache_data(ttl=86400, show_spinner=False)
+                def _cargar_tm_subt():
+                    import requests, io
+                    url_tm = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
+                    res = requests.get(url_tm, timeout=60, verify=False)
+                    if res.status_code == 200:
+                        return gpd.read_file(io.BytesIO(res.content))
+                    return gpd.GeoDataFrame()
+
                 try:
-                    gdf_tm = gpd.read_file(url)
-                    
+                    gdf_tm = _cargar_tm_subt()
                     if not gdf_tm.empty:
                         es_antioquia = "ANTIOQUIA" in str(nombre_zona).upper() or "ANTIOQUIA" in str(terr_norm).upper()
-                        
-                        # 🕵️ DIAGNÓSTICO VISUAL (Solo se activa si buscas Antioquia)
-                        if es_antioquia:
-                            st.sidebar.markdown("### 🕵️ Reporte de Diagnóstico")
-                            st.sidebar.write(f"1. Filas cargadas en memoria: {len(gdf_tm)}")
-                            st.sidebar.write(f"2. ¿Detectó Antioquia?: True (Zona: {nombre_zona})")
-                        
                         if es_nacional or es_departamento or es_antioquia:
                             col_depto = next((col for col in gdf_tm.columns if col.lower() in ['dpto_cnmbr', 'departamento']), None)
-                            
-                            if es_antioquia:
-                                st.sidebar.write(f"3. Columna de búsqueda hallada: {col_depto}")
-                            
                             if col_depto:
                                 mask = gdf_tm[col_depto].astype(str).str.upper().str.strip() == 'ANTIOQUIA'
-                                
-                                if es_antioquia:
-                                    st.sidebar.write(f"4. Polígonos departamentales encontrados: {mask.sum()}")
-                                
                                 if mask.any():
-                                    # Hacemos make_valid por si hay geometrías rotas en el JSON
                                     gdf_tm['geometry'] = gdf_tm.geometry.make_valid()
                                     gdf_zona = gpd.GeoDataFrame(geometry=[gdf_tm[mask].unary_union], crs=gdf_tm.crs)
                                     encontrado = True
-                                    if es_antioquia: 
-                                        st.sidebar.write("5. ✅ ¡Fusión matemática exitosa!")
                                         
                         elif es_region:
                             col_sub = 'subregion'
@@ -315,76 +300,66 @@ if gdf_zona is not None and not gdf_zona.empty:
         gdf_zona = gdf_zona_proj.to_crs(gdf_zona.crs)
         
 # --- 2. PARÁMETROS ECO-HIDROLÓGICOS ---
-
 st.sidebar.header("🎛️ Parámetros del Modelo")
 
-# URL de Supabase proporcionada
-URL_RASTER_SUPABASE = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/rasters/Cob25m_WGS84.tif"
+URL_RASTER_SUPABASE = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/rasters/Cob2026_Actualizada.tif"
 
 modo_params = st.sidebar.radio(
-    "Fuente de Coberturas:", 
-    ["Manual (Simulación)", "Automático (Satélite)"],
+    "Fuente de Coberturas:",
+    ["Automático (Satélite)", "Manual (Simulación)"],
+    index=0,
     horizontal=True
 )
 
-# Valores por defecto (se actualizarán si el satélite responde)
+# Valores de respaldo
 pct_bosque, pct_agricola, pct_pecuario, pct_agua, pct_urbano = 40.0, 20.0, 30.0, 5.0, 5.0
+ruta_temporal = None
 
-# 🛡️ FIX 1: Inicializamos la ruta temporal para que el Mapa Contexto sepa que existe
-ruta_temporal = None 
+# Usamos el límite estricto del territorio (sin el buffer de 25 km de estaciones)
+gdf_cobertura_obj = gdf_limite_original if (gdf_limite_original is not None and not gdf_limite_original.empty) else gdf_zona
 
-# Lógica de Coberturas
-if modo_params == "Automático (Satélite)" and gdf_zona is not None and land_cover:
-    with st.sidebar.status("🛰️ Conectando con Supabase Raster...", expanded=False) as status:
+if modo_params == "Automático (Satélite)" and gdf_cobertura_obj is not None and land_cover:
+    with st.sidebar.status("🛰️ Conectando con Coberturas 2026 (Supabase)...", expanded=False) as status:
         try:
             import requests
             import tempfile
-            import os
 
-            # Definimos una ruta temporal segura en el servidor de Streamlit
-            ruta_temporal = os.path.join(tempfile.gettempdir(), "Cob25m_WGS84_cache.tif")
-            
-            # Descarga inteligente: Solo si el archivo no existe en el contenedor temporal
-            if not os.path.exists(ruta_temporal):
-                status.update(label="Descargando mapa base desde Supabase...", state="running")
-                response = requests.get(URL_RASTER_SUPABASE, stream=True, verify=False)
+            ruta_temporal = os.path.join(tempfile.gettempdir(), "Cob2026_Actualizada_cache.tif")
+
+            if not os.path.exists(ruta_temporal) or os.path.getsize(ruta_temporal) < 1000:
+                status.update(label="Descargando Cob2026_Actualizada.tif...", state="running")
+                response = requests.get(URL_RASTER_SUPABASE, stream=True, verify=False, timeout=120)
                 if response.status_code == 200:
                     with open(ruta_temporal, 'wb') as f:
-                        for chunk in response.iter_content(chunk_size=8192):
+                        for chunk in response.iter_content(chunk_size=65536):
                             f.write(chunk)
                 else:
-                    st.sidebar.error(f"Error de conexión: Status {response.status_code}")
+                    st.sidebar.error(f"Error de conexión raster: Status {response.status_code}")
                     ruta_temporal = None
 
-            # Procesamiento Espacial
             if ruta_temporal and os.path.exists(ruta_temporal):
-                status.update(label=f"Analizando coberturas en {nombre_zona}...", state="running")
-                
-                # Usamos la ruta temporal para el cálculo
-                stats_raw = land_cover.calcular_estadisticas_zona(gdf_zona, ruta_temporal)
-                
+                status.update(label=f"Analizando coberturas exactas en {nombre_zona}...", state="running")
+                stats_raw = land_cover.calcular_estadisticas_zona(gdf_cobertura_obj, ruta_temporal)
+
                 if stats_raw:
                     p_bosque, p_agricola, p_pecuario, p_agua, p_urbano = land_cover.agrupar_coberturas_turc(stats_raw)
-                    
-                    st.sidebar.success(f"✅ Datos extraídos para {nombre_zona}")
                     pct_bosque, pct_agricola, pct_pecuario, pct_agua, pct_urbano = p_bosque, p_agricola, p_pecuario, p_agua, p_urbano
-                    
-                    # Visualización en sidebar
+
+                    st.sidebar.success(f"✅ Coberturas 2026 extraídas para {nombre_zona}")
                     st.sidebar.progress(min(100, int(pct_bosque)), text=f"Bosque: {pct_bosque:.1f}%")
-                    st.sidebar.progress(min(100, int(pct_pecuario + pct_agricola)), text=f"Agro: {(pct_pecuario+pct_agricola):.1f}%")
+                    st.sidebar.progress(min(100, int(pct_pecuario + pct_agricola)), text=f"Agro: {(pct_pecuario + pct_agricola):.1f}%")
+                    st.sidebar.progress(min(100, int(pct_urbano)), text=f"Urbano/Otro: {pct_urbano:.1f}%")
                     status.update(label="Análisis completado", state="complete")
                 else:
                     status.update(label="⚠️ Sin datos raster en la zona.", state="error")
                     st.sidebar.warning("Usando valores manuales por defecto.")
-
         except Exception as e:
             st.sidebar.error(f"Error procesando raster: {e}")
             status.update(label="Error en el motor espacial", state="error")
 else:
     if modo_params == "Automático (Satélite)" and not land_cover:
         st.sidebar.warning("Módulo land_cover no disponible.")
-        
-    # Modo Manual o Fallback
+
     pct_bosque = st.sidebar.number_input("% Bosque", 0, 100, 40)
     pct_agricola = st.sidebar.number_input("% Agrícola", 0, 100, 20)
     pct_pecuario = st.sidebar.number_input("% Pecuario", 0, 100, 30)
@@ -429,6 +404,21 @@ c2.metric("Recarga Potencial", f"{(kg_factor*100):.0f}%")
 meses_futuros = st.sidebar.slider("Horizonte Pronóstico", 12, 60, 24)
 ruido = st.sidebar.slider("Factor Incertidumbre", 0.0, 1.0, 0.1)
 
+st.sidebar.subheader("🌍 Escenario Climático Local")
+escenario_subt = st.sidebar.selectbox(
+    "Forzamiento Climático del Acuífero:",
+    [
+        "📡 Sincronizado con el Aleph (NOAA CPC)",
+        "🟢 Línea Base Histórica (Sin Anomalía)",
+        "🔴 El Niño Severo (-35% Lluvia | +1.5°C)",
+        "🟠 El Niño Moderado (-20% Lluvia | +0.8°C)",
+        "🔵 La Niña (+25% Lluvia | -0.5°C)",
+        "🟡 CMIP6 SSP2-4.5 2050 (-5% Lluvia | +1.5°C)",
+        "🔥 CMIP6 SSP5-8.5 2050 (-15% Lluvia | +2.8°C)"
+    ],
+    index=0
+)
+
 # --- LÓGICA DE DATOS ---
 if gdf_zona is not None:
     
@@ -441,23 +431,22 @@ if gdf_zona is not None:
         buff = 0.05
         
         # Consulta usando columnas corregidas (latitud/longitud)
-        # ELIMINADO el uso de text()
-        q_geo = f"""
+        q_geo = text(f"""
             SELECT id_estacion, nombre, latitud, longitud, altitud, municipio 
             FROM estaciones 
             WHERE longitud BETWEEN {minx-buff} AND {maxx+buff} 
             AND latitud BETWEEN {miny-buff} AND {maxy+buff}
-        """
-        df_puntos = pd.read_sql(q_geo, engine)
+        """)
+        with engine.connect() as conn:
+            df_puntos = pd.read_sql(q_geo, conn)
         
         if not df_puntos.empty:
             ids_estaciones = df_puntos['id_estacion'].astype(str).tolist()
     else:
-        # Consulta por IDs específicos
         ids_fmt = ",".join([f"'{x}'" for x in ids_estaciones])
-        # ELIMINADO el uso de text() también aquí
-        q = f"SELECT id_estacion, nombre, latitud, longitud, altitud, municipio FROM estaciones WHERE id_estacion IN ({ids_fmt})"
-        df_puntos = pd.read_sql(q, engine)
+        q = text(f"SELECT id_estacion, nombre, latitud, longitud, altitud, municipio FROM estaciones WHERE id_estacion IN ({ids_fmt})")
+        with engine.connect() as conn:
+            df_puntos = pd.read_sql(q, conn)
 
     if df_puntos.empty:
         st.warning("❌ No se encontraron estaciones en esta zona.")
@@ -465,9 +454,6 @@ if gdf_zona is not None:
 
     # 2. Procesamiento Hidrológico
     with st.spinner("Procesando balance hídrico y recarga..."):
-        
-        # Obtener datos de lluvia
-        # Priorizamos la tabla 'precipitacion' nueva
         ids_fmt = ",".join([f"'{x}'" for x in ids_estaciones])
         q_rain = text(f"""
             SELECT id_estacion, fecha, valor 
@@ -475,7 +461,8 @@ if gdf_zona is not None:
             WHERE id_estacion IN ({ids_fmt})
             ORDER BY fecha ASC
         """)
-        df_raw = pd.read_sql(q_rain, engine)
+        with engine.connect() as conn:
+            df_raw = pd.read_sql(q_rain, conn)
         
         # Ejecutar Modelo Prophet (Pronóstico)
         df_res = pd.DataFrame()
@@ -577,17 +564,32 @@ if gdf_zona is not None:
                 q_min_aleph = float(st.session_state.get('aleph_q_min_m3s', 0.0) or 0.0)
                 q_eco_aleph = float(st.session_state.get('aleph_q_eco_m3s', 0.0) or 0.0)
 
-            delta_ppt_sim = st.session_state.get('sim_delta_ppt', 0.0) 
-            delta_temp_sim = st.session_state.get('sim_delta_temp', 0.0)
-            enso_estado = st.session_state.get('enso_fase', 'Neutro ⚖️')
-            
-            if delta_ppt_sim != 0.0 or delta_temp_sim != 0.0 or "Niño" in enso_estado or "Niña" in enso_estado:
-                st.success(f"🧠 **Nexo Atmosférico Activo:** El acuífero reacciona al clima global. (ENSO: {enso_estado} | CMIP6 Lluvia: {delta_ppt_sim}% | Temp: +{delta_temp_sim}°C)")
-            
-            factor_lluvia = 1 + (delta_ppt_sim / 100.0)
-            if "Niño Severo" in enso_estado: factor_lluvia *= 0.6
-            elif "Niño Moderado" in enso_estado: factor_lluvia *= 0.8
-            elif "Niña" in enso_estado: factor_lluvia *= 1.2
+            delta_ppt_sim = float(st.session_state.get('sim_delta_ppt', 0.0))
+            delta_temp_sim = float(st.session_state.get('sim_delta_temp', 0.0))
+            enso_estado = str(st.session_state.get('enso_fase', 'Neutro ⚖️'))
+            factor_lluvia = 1.0
+
+            if "Línea Base" in escenario_subt:
+                delta_ppt_sim, delta_temp_sim, factor_lluvia = 0.0, 0.0, 1.0
+            elif "Niño Severo" in escenario_subt:
+                delta_ppt_sim, delta_temp_sim, factor_lluvia = -35.0, 1.5, 0.65
+            elif "Niño Moderado" in escenario_subt:
+                delta_ppt_sim, delta_temp_sim, factor_lluvia = -20.0, 0.8, 0.80
+            elif "La Niña" in escenario_subt:
+                delta_ppt_sim, delta_temp_sim, factor_lluvia = 25.0, -0.5, 1.25
+            elif "SSP2-4.5" in escenario_subt:
+                delta_ppt_sim, delta_temp_sim, factor_lluvia = -5.0, 1.5, 0.95
+            elif "SSP5-8.5" in escenario_subt:
+                delta_ppt_sim, delta_temp_sim, factor_lluvia = -15.0, 2.8, 0.85
+            else:
+                # Modo sincronizado con Aleph / NOAA CPC
+                factor_lluvia = 1.0 + (delta_ppt_sim / 100.0)
+                if "Niño" in enso_estado:
+                    factor_lluvia *= 0.70
+                elif "Niña" in enso_estado:
+                    factor_lluvia *= 1.20
+
+            st.success(f"🧠 **Escenario Activo ({escenario_subt}):** Lluvia al **{factor_lluvia*100:.0f}%** | ΔTemp: **+{delta_temp_sim:.1f}°C**")
             
             # 🧠 Lógica Maestra Unificada: Si la Pág 01 o la Matriz Hidrológica Maestra tienen datos, garantizamos simetría 1:1
             if lluvia_aleph > 0:
@@ -677,34 +679,29 @@ if gdf_zona is not None:
     # Si hay datos de lluvia, enriquecemos los puntos
     if 'df_raw' in locals() and not df_raw.empty:
         try:
-            # 1. Agrupar lluvia histórica por estación
+            # 1. Agrupar lluvia histórica por estación (Convertida a mm/año para Turc)
             grp = df_raw.groupby('id_estacion')['valor'].agg(['mean', 'std']).reset_index()
-            grp.columns = ['id_estacion', 'p_media', 'std_lluvia']
+            grp.columns = ['id_estacion', 'p_media_mes', 'std_lluvia']
+            grp['p_media'] = grp['p_media_mes'] * 12.0  # Escala anual (mm/año)
             
             # 2. Unir con df_mapa_stats
-            # Aseguramos tipos string para el join
             df_mapa_stats['id_estacion'] = df_mapa_stats['id_estacion'].astype(str)
             grp['id_estacion'] = grp['id_estacion'].astype(str)
-            
             df_mapa_stats = pd.merge(df_mapa_stats, grp, on='id_estacion', how='left')
             
-            # 3. Calcular Balance Puntual (Turc) para el mapa
-            # T = 28 - 0.006*h
-            df_mapa_stats['temp'] = 28 - (0.006 * df_mapa_stats['altitud'])
-            # L = 300 + 25T + 0.05T^3
-            df_mapa_stats['L_turc'] = 300 + 25*df_mapa_stats['temp'] + 0.05*(df_mapa_stats['temp']**3)
+            # 3. Calcular Balance Puntual Anual (Turc) para el mapa
+            df_mapa_stats['temp'] = 28.0 - (0.006 * df_mapa_stats['altitud'])
+            df_mapa_stats['L_turc'] = 300.0 + 25.0*df_mapa_stats['temp'] + 0.05*(df_mapa_stats['temp']**3)
             
-            # ETR y Recarga
             def calc_etr(row):
-                if pd.isna(row['p_media']) or row['L_turc'] == 0: return 0
+                if pd.isna(row['p_media']) or row['L_turc'] == 0: return 0.0
                 return row['p_media'] / np.sqrt(0.9 + (row['p_media']/row['L_turc'])**2)
 
             df_mapa_stats['etr_media'] = df_mapa_stats.apply(calc_etr, axis=1)
             
-            # Factores globales (del sidebar)
             factor_recarga = ki_final * kg_factor
-            df_mapa_stats['recarga_calc'] = (df_mapa_stats['p_media'] - df_mapa_stats['etr_media']) * factor_recarga
-            df_mapa_stats['escorrentia_media'] = df_mapa_stats['p_media'] - df_mapa_stats['etr_media'] - df_mapa_stats['recarga_calc']
+            df_mapa_stats['recarga_calc'] = np.maximum(0.0, (df_mapa_stats['p_media'] - df_mapa_stats['etr_media']) * factor_recarga)
+            df_mapa_stats['escorrentia_media'] = np.maximum(0.0, df_mapa_stats['p_media'] - df_mapa_stats['etr_media'] - df_mapa_stats['recarga_calc'])
             
         except Exception as e:
             st.warning(f"Advertencia calculando mapa: {e}")
@@ -868,28 +865,48 @@ if gdf_zona is not None:
                 except Exception as e: 
                     pass
 
-            # --- 2. CAPA DE COBERTURAS (RASTER) ---
-            if land_cover and ruta_temporal and os.path.exists(ruta_temporal) and gdf_zona is not None:
+            # --- 2. CAPA DE COBERTURAS (VECTORIAL CON HOVER INTERACTIVO) ---
+            if land_cover and ruta_temporal and os.path.exists(ruta_temporal) and gdf_cobertura_obj is not None:
                 try:
-                    img_cob, bounds_cob = land_cover.obtener_imagen_folium_coberturas(gdf_zona, ruta_temporal)
-                    if img_cob is not None:
-                        folium.raster_layers.ImageOverlay(img_cob, bounds_cob, opacity=0.6, name="Coberturas").add_to(m)
-                except Exception as e: 
+                    gdf_cob_vec = land_cover.obtener_vector_coberturas_ligero(gdf_cobertura_obj, ruta_temporal, max_dim=180)
+                    if gdf_cob_vec is not None and not gdf_cob_vec.empty:
+                        folium.GeoJson(
+                            gdf_cob_vec,
+                            name="Coberturas (Hover)",
+                            style_function=lambda feature: {
+                                'fillColor': feature['properties'].get('Color', '#808080'),
+                                'color': 'none',
+                                'weight': 0,
+                                'fillOpacity': 0.65
+                            },
+                            tooltip=folium.GeoJsonTooltip(
+                                fields=['Cobertura'],
+                                aliases=['🌿 Cobertura:'],
+                                localize=True
+                            )
+                        ).add_to(m)
+                    else:
+                        img_cob, bounds_cob = land_cover.obtener_imagen_folium_coberturas(gdf_cobertura_obj, ruta_temporal)
+                        if img_cob is not None:
+                            folium.raster_layers.ImageOverlay(img_cob, bounds_cob, opacity=0.6, name="Coberturas").add_to(m)
+                except Exception as e:
                     st.warning(f"No se pudo cargar la capa de coberturas en el mapa: {e}")
 
-            # --- 3. LEYENDA FLOTANTE DE COBERTURAS (FIX POSICIÓN ABSOLUTA) ---
+            # --- 3. LEYENDA FLOTANTE DE COBERTURAS (SINCRONIZADA CON LAND_COVER_COLORS) ---
             from branca.element import Template, MacroElement
             leyenda_html = """
             {% macro html(this, kwargs) %}
-            <div style="position: absolute; bottom: 30px; left: 30px; width: 180px; height: auto; 
+            <div style="position: absolute; bottom: 30px; left: 30px; width: 195px; height: auto; 
                 background-color: white; z-index:999999; font-size:12px; border:2px solid grey; 
                 padding: 10px; border-radius: 5px; box-shadow: 2px 2px 5px rgba(0,0,0,0.3); pointer-events: auto;">
-                <b>Coberturas (Leyenda)</b><br>
-                <i style="background: #228B22; width: 15px; height: 15px; float: left; margin-right: 5px; opacity: 0.8;"></i> Bosque/Natural<br>
-                <i style="background: #FFD700; width: 15px; height: 15px; float: left; margin-right: 5px; opacity: 0.8;"></i> Agrícola<br>
-                <i style="background: #FF8C00; width: 15px; height: 15px; float: left; margin-right: 5px; opacity: 0.8;"></i> Pecuario/Pastos<br>
-                <i style="background: #1E90FF; width: 15px; height: 15px; float: left; margin-right: 5px; opacity: 0.8;"></i> Cuerpos de Agua<br>
-                <i style="background: #A9A9A9; width: 15px; height: 15px; float: left; margin-right: 5px; opacity: 0.8;"></i> Urbano<br>
+                <b>Coberturas 2026</b><br>
+                <i style="background: #228B22; width: 14px; height: 14px; float: left; margin-right: 6px; opacity: 0.85;"></i> Bosque<br>
+                <i style="background: #9ACD32; width: 14px; height: 14px; float: left; margin-right: 6px; opacity: 0.85;"></i> Veg. Arbustiva<br>
+                <i style="background: #F4A460; width: 14px; height: 14px; float: left; margin-right: 6px; opacity: 0.85;"></i> Pastos<br>
+                <i style="background: #006400; width: 14px; height: 14px; float: left; margin-right: 6px; opacity: 0.85;"></i> Cultivos<br>
+                <i style="background: #A9A9A9; width: 14px; height: 14px; float: left; margin-right: 6px; opacity: 0.85;"></i> Zonas Urbanas<br>
+                <i style="background: #8B4513; width: 14px; height: 14px; float: left; margin-right: 6px; opacity: 0.85;"></i> Suelo Desnudo<br>
+                <i style="background: #0000FF; width: 14px; height: 14px; float: left; margin-right: 6px; opacity: 0.85;"></i> Agua / Humedal<br>
             </div>
             {% endmacro %}
             """
@@ -901,8 +918,8 @@ if gdf_zona is not None:
             fg = folium.FeatureGroup(name="Estaciones", show=True)
             for _, r in df_mapa_stats.iterrows():
                 if pd.notnull(r.get('latitud')) and pd.notnull(r.get('longitud')):
-                    p_val = r.get('p_media', 0) * 12
-                    r_val = r.get('recarga_calc', 0) * 12
+                    p_val = r.get('p_media', 0)
+                    r_val = r.get('recarga_calc', 0)
                     
                     html = f"""
                     <b>{r.get('nombre')}</b><br>
@@ -924,8 +941,11 @@ if gdf_zona is not None:
             plugins.Fullscreen(position='topright', title='Pantalla Completa', title_cancel='Salir de Pantalla Completa').add_to(m)
             
             
-            from streamlit_folium import st_folium
-            st_folium(m, use_container_width=True, height=650, returned_objects=[])
+            html_ctx = m._repr_html_()
+            if hasattr(st, "iframe"):
+                st.iframe(html_ctx, height=650)
+            else:
+                components.html(html_ctx, height=650)
             
         except Exception as e:
             st.error(f"Error renderizando mapa de contexto: {e}")
@@ -934,6 +954,7 @@ if gdf_zona is not None:
     # --- TAB 3: MAPA DE RECARGA (SUPERFICIE CONTINUA Y SEGURA) ---
     # =========================================================================
     with tab3:
+        if st.button("🔄 Renderizar / Actualizar Mapa de Recarga", key="btn_rec_uniq"): st.rerun()
         st.markdown("##### 💧 Distribución Espacial de la Oferta Subterránea")
         
         if 'df_mapa_stats' not in locals() or df_mapa_stats.empty or 'recarga_calc' not in df_mapa_stats.columns:
@@ -963,7 +984,11 @@ if gdf_zona is not None:
                         ).add_to(m_recarga_fallback)
 
                     
-                    components.html(m_recarga_fallback._repr_html_(), height=550)
+                    html_fb = m_recarga_fallback._repr_html_()
+                    if hasattr(st, "iframe"):
+                        st.iframe(html_fb, height=550)
+                    else:
+                        components.html(html_fb, height=550)
             else:
                 with st.spinner("Calculando superficie de recarga (PNG Base64)..."):
                     try:
@@ -1000,32 +1025,35 @@ if gdf_zona is not None:
                         grid_z = np.nan_to_num(grid_z, nan=np.nanmean(valores))
 
                         # 🚀 FIX 3: Traducción de Matriz a Imagen PNG Codificada (Base64)
-                        # Rotamos y volteamos la matriz para que coincida con la geografía norte-sur
-                        grid_z_img = np.flipud(grid_z.T) 
-                        
-                        norm = Normalize(vmin=valores.min(), vmax=valores.max())
-                        cmap = cm.get_cmap('YlGnBu') 
+                        grid_z_img = np.flipud(grid_z.T)
+
+                        vmin_r = float(np.nanmin(valores))
+                        vmax_r = float(np.nanmax(valores))
+                        if abs(vmax_r - vmin_r) < 1e-3:
+                            vmax_r = vmin_r + 1.0
+
+                        norm = Normalize(vmin=vmin_r, vmax=vmax_r)
+                        cmap = cm.get_cmap('YlGnBu')
                         rgba_img = cmap(norm(grid_z_img))
                         colored_grid_uint8 = (rgba_img * 255).astype(np.uint8)
-                        
+
                         from PIL import Image
                         import base64
                         from io import BytesIO
-                        
-                        # Creamos la imagen real en memoria
+
                         img_pil = Image.fromarray(colored_grid_uint8, mode='RGBA')
                         buffered = BytesIO()
                         img_pil.save(buffered, format="PNG")
                         img_base64 = base64.b64encode(buffered.getvalue()).decode()
                         url_imagen_segura = f"data:image/png;base64,{img_base64}"
-                        
+
                         folium.raster_layers.ImageOverlay(
                             image=url_imagen_segura,
                             bounds=[[min_lat, min_lon], [max_lat, max_lon]],
                             opacity=0.65,
                             name="Superficie de Recarga Continua"
                         ).add_to(m_recarga)
-                        
+
                         # Estaciones
                         for idx, row in df_valid.iterrows():
                             folium.CircleMarker(
@@ -1034,13 +1062,13 @@ if gdf_zona is not None:
                             ).add_to(m_recarga)
 
                         folium.LayerControl().add_to(m_recarga)
-                        
+
                         # 🚀 ADD: Leyenda Dinámica (Colormap) para la Recarga
                         import branca.colormap as cm_branca
                         colormap = cm_branca.LinearColormap(
-                            colors=['#ffffcc', '#a1dab4', '#41b6c4', '#2c7fb8', '#253494'], # Escala YlGnBu
-                            vmin=valores.min(), 
-                            vmax=valores.max()
+                            colors=['#ffffcc', '#a1dab4', '#41b6c4', '#2c7fb8', '#253494'],
+                            vmin=vmin_r,
+                            vmax=vmax_r
                         )
                         colormap.caption = 'Recarga Potencial (mm/año)'
                         colormap.add_to(m_recarga)
@@ -1048,12 +1076,15 @@ if gdf_zona is not None:
                         # 🚀 ADD: Botón de Pantalla Completa (Fullscreen)
                         from folium import plugins
                         plugins.Fullscreen(position='topright', title='Pantalla Completa', title_cancel='Salir de Pantalla Completa').add_to(m_recarga)
-                        
-                        
-                        components.html(m_recarga._repr_html_(), height=650)
-                        
+
+                        html_rec = m_recarga._repr_html_()
+                        if hasattr(st, "iframe"):
+                            st.iframe(html_rec, height=650)
+                        else:
+                            components.html(html_rec, height=650)
+
                         st.caption("🗺️ Superficie interpolada a partir de los puntos de control. Las zonas más oscuras indican mayor recarga potencial al acuífero.")
-                        
+
                     except Exception as e:
                         st.error(f"Error generando la superficie continua: {e}")
                         
@@ -1209,8 +1240,8 @@ if gdf_zona is not None:
                 import unicodedata
                 import pandas as pd
                 
-                nombre_zona_as = st.session_state.get('nombre_seleccion', 'el Territorio')
-                nivel_sel = st.session_state.get('nivel_seleccion', 'Municipal')
+                nombre_zona_as = str(nombre_zona)
+                nivel_sel = str(nivel_jerarquico)
                 
                 def normalizar(texto):
                     if pd.isna(texto): return ""
@@ -1251,8 +1282,9 @@ if gdf_zona is not None:
                 # ESTRATEGIA B: ESPACIAL PURA (Solo para Municipios)
                 # =================================================================
                 else:
-                    if gdf_zona is not None and not gdf_zona.empty:
-                        gdf_zona_3116 = gdf_zona.to_crs(epsg=3116).copy()
+                    gdf_corte_estricto = gdf_limite_original if (gdf_limite_original is not None and not gdf_limite_original.empty) else gdf_zona
+                    if gdf_corte_estricto is not None and not gdf_corte_estricto.empty:
+                        gdf_zona_3116 = gdf_corte_estricto.to_crs(epsg=3116).copy()
                         gdf_zona_3116['geometry'] = gdf_zona_3116.geometry.make_valid()
                         
                         try: 

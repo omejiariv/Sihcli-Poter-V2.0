@@ -75,14 +75,20 @@ def cargar_datos_embalses():
 
 df_embalses = cargar_datos_embalses()
 
-# Mapeo de Latitudes y Longitudes (Para el mapa interactivo y cálculos)
+# Mapeo de Latitudes y Longitudes de alta precisión (Centro del espejo de agua)
 coords_embalses = {
-    "Guatapé (El Peñol)": (6.26, -75.16), "Hidroituango": (7.13, -75.67), 
-    "Jaguas": (6.31, -75.02), "La Fe": (6.11, -75.50), 
-    "Piedras Blancas": (6.29, -75.49), "Playas": (6.27, -74.95),
-    "Porce II": (6.75, -75.15), "Porce III": (6.80, -75.10), 
-    "Riogrande II": (6.55, -75.45), "San Carlos": (6.21, -74.85),
-    "Chingaza": (4.55, -73.75)
+    "Guatapé (El Peñol)": (6.2385, -75.1632),
+    "Hidroituango": (7.1344, -75.6620),
+    "Jaguas": (6.3685, -75.0135),
+    "La Fe": (6.1035, -75.4982),
+    "Piedras Blancas": (6.2922, -75.5018),
+    "Playas": (6.2975, -74.9380),
+    "Porce II": (6.7720, -75.1480),
+    "Porce III": (6.9425, -75.1385),
+    "Riogrande II": (6.5160, -75.4835),
+    "San Carlos": (6.2235, -74.8640),
+    "San Carlos (Punchiná)": (6.2235, -74.8640),
+    "Chingaza": (4.5380, -73.7420)
 }
 
 # -----------------------------------------
@@ -312,25 +318,18 @@ with tab2:
             
             # 2. SECCIÓN DE VIDEOS PEDAGÓGICOS
             st.markdown("#### 🎬 Referencias Documentales")
-            
             st.markdown("---")
             if "Esferas" in tech_eval:
                 st.video("https://www.youtube.com/watch?v=x7GWPTZBJd0")
             elif "Hexagonales" in tech_eval:
                 st.video("https://www.youtube.com/watch?v=37mrElHtc8E")
             elif "Paneles" in tech_eval:
-                st.info("📺 **Ver Documental:** [Floatovoltaics (Facebook Watch)](https://www.facebook.com/unboxfactory/videos/a-major-river-system-supplying-water-to-around-40-million-americans-is-now-testi/1475959924012973/)")
-                st.caption("Documental corto explicando el funcionamiento de las esferas de sombra para control de algas y evaporación.")
-            
-            elif "Paneles Solares" in tech_eval:
                 st.markdown("**El Nexo Agua-Energía (Floatovoltaics)**")
-                # Enlace interactivo y estético para el documental de Facebook (o cualquier otra fuente FPV)
                 st.info("📺 **Ver Documental:** [El Gran Proyecto Solar Hídrico (Facebook Watch)](https://www.facebook.com/unboxfactory/videos/a-major-river-system-supplying-water-to-around-40-million-americans-is-now-testi/1475959924012973/)")
                 st.caption("Haz clic en el enlace superior para ver la cobertura de los megaproyectos sobre canales y reservas de agua.")
-            
             else:
                 st.caption("Selecciona 'Paneles Solares' o 'Sistemas de Esferas' para desbloquear los documentales en video asociados a estas tecnologías.")
-
+            
     # --- PESTAÑA SÍNTESIS GLOBAL ---
     with tab_sin:
         st.markdown("#### Matriz de Decisión: Costo-Efectividad para Embalses (Escala > 10 Hectáreas)")
@@ -689,28 +688,6 @@ with tab4:
     volumen_xm_calculado = coef_alfa * (cota_actual**3)
     eq_cav_str = f"V(z) = {coef_alfa:.2e}·z³"
 
-    # Cálculos Físicos Base
-    area_dinamica_ha = area_ha * ((cota_actual / altitud)**2) if altitud > 0 else area_ha
-    evap_dia, term_rad, term_aero, vpd, rn, P = calcular_penman(altitud, latitud, dia_ano, mod_tmax, mod_tmin, mod_rh, viento_2m, mod_rs, albedo_final)
-    
-    evap_mitigada_dia = evap_dia * (1 - factor_mit)
-    perdida_vol_dia = evap_mitigada_dia * area_dinamica_ha * 10
-    vol_salvado_dia = (evap_dia - evap_mitigada_dia) * area_dinamica_ha * 10
-    piscinas_dia = perdida_vol_dia / 2500.0
-
-    # --- CÁLCULOS DE DEMANDA POBLACIONAL Y ESCALAS ---
-    dias_escala = {"Día": 1, "Semana": 7, "Mes": 30, "Año": 365}[escala_temporal]
-    demanda_litros_escala = poblacion_analisis * consumo_per_capita * dias_escala
-    demanda_m3_escala = demanda_litros_escala / 1000.0
-    
-    # Nuevos cálculos solicitados
-    piscinas_demanda = demanda_m3_escala / 2500.0
-    carrotanques_demanda = demanda_m3_escala / 10.0
-    
-    evap_vol_escala = perdida_vol_dia * dias_escala
-    caudal_evap_ls = (evap_vol_escala * 1000.0) / (dias_escala * 86400)
-    pct_evap_vs_demanda = (evap_vol_escala / demanda_m3_escala) * 100 if demanda_m3_escala > 0 else 0
-
     # =========================================================================
     # 🚀 MOTOR DIFERENCIAL DE ACUMULACIÓN Y DÍA CERO (ITERACIÓN DIARIA)
     # =========================================================================
@@ -769,7 +746,11 @@ with tab4:
     
     area_cubierta_fija_ha = area_dinamica_ha * (pct_cobertura / 100.0)
 
-    # 4. Flujos Fijos Diarios
+    # 4. Flujos Fijos Diarios y Cálculo Termodinámico Base (Penman-Monteith)
+    evap_dia, term_rad, term_aero, vpd, rn, P = calcular_penman(
+        altitud, latitud, dia_ano, mod_tmax, mod_tmin, mod_rh, viento_2m, mod_rs, albedo_final
+    )
+    
     demanda_diaria_m3 = (poblacion_analisis * consumo_per_capita) / 1000.0
     escorrentia_diaria_m3 = (caudal_afluente_ls * 86400) / 1000.0
     
@@ -854,6 +835,12 @@ with tab4:
     caudal_evap_ls = (evap_vol_escala * 1000.0) / (dias_escala * 86400)
     pct_evap_vs_demanda = (evap_vol_escala / demanda_m3_escala) * 100 if demanda_m3_escala > 0 else 0
 
+    # 🌧️ NUEVA MÉTRICA: Equivalencia en Megatanques SUDS de Crecidas (EDU / Alcaldía de Medellín)
+    # Referencia técnica: Megatanque subterráneo tipo Primavera Norte / Gran Parque Medellín (~20,000 m³)
+    cap_megatanque_suds_m3 = 20000.0
+    megatanques_evap = evap_vol_escala / cap_megatanque_suds_m3
+    megatanques_demanda = demanda_m3_escala / cap_megatanque_suds_m3
+
     # =========================================================================
     # 📍 CONTEXTO FÍSICO Y FINANCIERO DINÁMICO (Conectado a Supabase)
     # =========================================================================
@@ -921,18 +908,95 @@ with tab4:
     
     st.markdown("---")
     
-    # --- DASHBOARD DE DEMANDA SOCIAL ACTUALIZADO (6 Columnas) ---
-    st.markdown(f"#### 👥 Tensión Hídrica: Evaporación vs. Demanda ({escala_temporal})")
-    d1, d2, d_carro, d3, d_caudal, d4 = st.columns(6)
+    # --- DASHBOARD DE DEMANDA SOCIAL Y CONTRASTE FINANCIERO SUDS (8 Columnas) ---
+    # Parámetros oficiales SUDS Primavera Norte (EDU / Alcaldía de Medellín):
+    # Megatanque Villa Niza + complementarios = 1,200 m³ por $4,342 millones COP
+    vol_tanque_suds_m3 = 1200.0
+    costo_tanque_suds_mcop = 4342.0
+    trm_ref = 4200.0
     
-    d1.metric(f"🚰 Demanda", f"{demanda_m3_escala:,.0f} m³", f"Pop: {poblacion_analisis:,} hab", delta_color="off")
-    d2.metric(f"🏊‍♂️ Equivalencia", f"{piscinas_demanda:,.1f} Piscinas", "Olímpicas", delta_color="off")
-    d_carro.metric(f"🚛 Equivalencia", f"{carrotanques_demanda:,.0f} Camiones", "Carrotanques 10 m³", delta_color="off")
-    d3.metric(f"🌤️ Pérdida Evap.", f"{evap_vol_escala:,.0f} m³", f"Acumulado {escala_temporal}", delta_color="inverse")
-    d_caudal.metric(f"💧 Caudal Fuga", f"{caudal_evap_ls:,.1f} L/s", "Continuo", delta_color="inverse")
+    tanques_suds_evap = evap_vol_escala / vol_tanque_suds_m3
+    vol_salvado_escala = vol_salvado_dia * dias_escala
+    tanques_suds_salvados = vol_salvado_escala / vol_tanque_suds_m3
+    
+    # Costo equivalente si se construyera en tanques subterráneos SUDS el volumen salvado en el estiaje (o evaporado)
+    vol_ref_comparacion = agua_salvada_acumulada if agua_salvada_acumulada > 0 else evap_vol_escala
+    tanques_ref_fin = vol_ref_comparacion / vol_tanque_suds_m3
+    costo_equiv_suds_mcop = tanques_ref_fin * costo_tanque_suds_mcop
+    capex_proy_mcop = capex_neto * trm_ref if capex_neto > 0 else (area_dinamica_ha * 0.40 * 0.150 * trm_ref)
+    factor_ventaja_fin = (costo_equiv_suds_mcop / capex_proy_mcop) if capex_proy_mcop > 0 else 0.0
+
+    st.markdown(f"#### 👥 Tensión Hídrica: Evaporación vs. Demanda y Contraste SUDS ({escala_temporal})")
+    d1, d2, d_carro, d3, d_suds, d_fin_suds, d_caudal, d4 = st.columns(8)
+    
+    d1.metric("🚰 Demanda", f"{demanda_m3_escala:,.0f} m³", f"Pop: {poblacion_analisis:,} hab", delta_color="off")
+    d2.metric("🏊‍♂️ Equivalencia", f"{piscinas_demanda:,.1f} Piscinas", "Olímpicas", delta_color="off")
+    d_carro.metric("🚛 Equivalencia", f"{carrotanques_demanda:,.0f} Camiones", "Carrotanques 10 m³", delta_color="off")
+    d3.metric("🌤️ Pérdida Evap.", f"{evap_vol_escala:,.0f} m³", f"Acumulado {escala_temporal}", delta_color="inverse")
+    d_suds.metric(
+        "🏟️ Tanques SUDS",
+        f"{tanques_suds_evap:,.0f} Tanques",
+        "Ref. Villa Niza (1.200 m³)",
+        delta_color="off",
+        help=(
+            f"La pérdida por evaporación ({evap_vol_escala:,.0f} m³) equivale a vaciar {tanques_suds_evap:,.1f} veces "
+            f"el megatanque subterráneo de Primavera Norte / Villa Niza (1,200 m³). "
+            f"Con la mitigación actual se salvan {tanques_suds_salvados:,.1f} tanques en este período."
+        )
+    )
+    d_fin_suds.metric(
+        "💰 Ventaja vs. SUDS",
+        f"{factor_ventaja_fin:,.1f}x Menor Costo",
+        f"CAPEX ${capex_proy_mcop:,.0f}M vs ${costo_equiv_suds_mcop:,.0f}M",
+        delta_color="normal",
+        help=(
+            f"El sistema de tanques SUDS de Primavera Norte (1,200 m³) cuesta ~$4,342 millones COP ($3.61M COP/m³). "
+            f"Construir en tanques subterráneos los {vol_ref_comparacion:,.0f} m³ de reserva protegida costaría "
+            f"~${costo_equiv_suds_mcop:,.0f} millones COP, frente a ~${capex_proy_mcop:,.0f} millones COP "
+            f"(${capex_neto:,.2f}M USD) de este proyecto anti-evaporación."
+        )
+    )
+    d_caudal.metric("💧 Caudal Fuga", f"{caudal_evap_ls:,.1f} L/s", "Continuo", delta_color="inverse")
     d4.metric("⚠️ Peso Evap.", f"{pct_evap_vs_demanda:,.1f} %", "De la provisión", delta_color="inverse")
 
-    st.markdown("---")
+    with st.expander("💰 Evaluación Financiera Comparativa: Blindaje Anti-Evaporación vs. Infraestructura SUDS de Crecidas (Medellín - EDU)", expanded=False):
+        st.markdown(f"""
+        **Análisis de Costo-Efectividad por Metro Cúbico de Reserva Hídrica:**
+        * **Referencia Oficial SUDS (Primavera Norte - Villa Niza):** El sistema de tanques subterráneos (**1.200 m³** de capacidad) tiene un costo directo de **~$4.342 millones COP** (**~$3,62 millones COP por cada m³ instalado**), dentro de una inversión urbana integral superior a **$216.000 millones COP**.
+        * **Contraste con el Proyecto Anti-Evaporación ({embalse_sel}):** Con una inversión de **~${capex_proy_mcop:,.0f} millones COP** (`${capex_neto:,.2f}M USD`, prácticamente equivalente al costo de **un solo tanque SUDS de 1.200 m³**), el sellado evaporativo protege **{agua_salvada_acumulada:,.0f} m³** durante los **{dias_simulacion} días de estiaje** (**{agua_salvada_acumulada/vol_tanque_suds_m3:,.1f} megatanques de Villa Niza**) y **{vol_salvado_dia*365:,.0f} m³/año** (**{(vol_salvado_dia*365)/vol_tanque_suds_m3:,.1f} megatanques/año**).
+        * **Ahorro de Capital (CAPEX Evitado):** Almacenar ese mismo volumen de estiaje mediante obra civil subterránea tipo SUDS exigiría invertir **~${costo_equiv_suds_mcop:,.0f} millones COP**, lo que hace al control de evaporación **{factor_ventaja_fin:,.1f} veces más eficiente en costo de capital por m³**.
+        """)
+        df_presupuestos_suds = pd.DataFrame({
+            "Proyecto / Intervención": [
+                f"🛡️ Blindaje Anti-Evaporación ({embalse_sel})",
+                "🏟️ SUDS Primavera Norte (Cancha Villa Niza)",
+                "🌳 Gran Parque Medellín (210.000 m²)",
+                "✈️ Aeroparque Juan Pablo II (14.000 m²)",
+                "🌊 Red de Parques Inundables y Tanques Menores"
+            ],
+            "Costo Específico Sistema Hidráulico / Tanques": [
+                f"~${capex_proy_mcop:,.0f} millones COP (${capex_neto:,.2f}M USD)",
+                "~$4.342 millones COP",
+                "Integrado en obra civil del megaparque",
+                "Integrado en complejo acuático y drenaje",
+                "En etapa de planeación por punto crítico"
+            ],
+            "Inversión Total del Proyecto Integral": [
+                f"~${capex_proy_mcop:,.0f} millones COP (0 predios requeridos)",
+                ">$216.000 millones COP (hasta $258.000M con predios/diseños)",
+                ">$195.000 millones COP",
+                "~$100.000 millones COP (incluidos en Gran Parque)",
+                "Sin cifra global asignada (EDU / SIF)"
+            ],
+            "Alcance Hidrológico y Detalles de la Inversión": [
+                f"Salva {agua_salvada_acumulada:,.0f} m³ en estiaje ({dias_simulacion} d) y {vol_salvado_dia*365:,.0f} m³/año sobre vaso existente.",
+                "Cubre el megatanque subterráneo de 1.200 m³ bajo la cancha Villa Niza y tanques complementarios.",
+                "Integra el corredor deportivo y uno de los dos megatanques de retención pluvial más grandes de Medellín (21 ha).",
+                "Intervención hidráulica de 14.000 m² para amortiguar escorrentía en la zona aledaña al aeropuerto Olaya Herrera.",
+                "Retención de crecientes súbitas en La Alpujarra y corredores del río Medellín antes de saturar colectores."
+            ]
+        })
+        st.dataframe(df_presupuestos_suds, width="stretch", hide_index=True)
     
     # =========================================================================
     # 🚨 DASHBOARD ALERTA TEMPRANA Y CURVAS DE AGOTAMIENTO (BASE ÚTIL)
@@ -1328,6 +1392,122 @@ with tab5:
                 except Exception as e:
                     st.error(f"❌ Error de conexión o procesamiento: {e}")
 
+    st.markdown("---")
+    st.markdown("#### 🏞️ Pulso Regional de Reservas y Aportes (Sinergox / XM — Antioquia y SIN)")
+    st.caption(
+        "Indicadores de contexto del Sistema Interconectado Nacional (SIN) y región Antioquia "
+        "(volumen útil energético en GWh, % de reserva y aportes hídricos frente a la media histórica)."
+    )
+
+    @st.cache_data(ttl=14400, show_spinner=False)
+    def obtener_pulso_sinergox_xm():
+        """
+        Consulta de forma resiliente las reservas útiles energéticas y aportes hídricos
+        en XM vía pydataxm usando búsqueda dinámica en el catálogo oficial.
+        """
+        import datetime as dt
+        resumen = {
+            "disponible": False,
+            "reserva_sin_gwh": None,
+            "aporte_sin_gwh_dia": None,
+            "embalses_ant": [],
+            "fecha_corte": None
+        }
+        try:
+            from pydataxm import pydataxm
+            api_xm = pydataxm.ReadDB()
+            fecha_fin = dt.date.today() - dt.timedelta(days=2)
+            fecha_ini = fecha_fin - dt.timedelta(days=20)
+
+            cat = api_xm.get_collections()
+            if cat is None or cat.empty:
+                return resumen
+
+            col_metric_id = next((c for c in cat.columns if "METRICID" in c.upper() or "ID" in c.upper()), "MetricId")
+            col_metric_name = next((c for c in cat.columns if "METRICNAME" in c.upper() or "NAME" in c.upper()), "MetricName")
+            col_entity = next((c for c in cat.columns if "ENTITY" in c.upper()), None)
+
+            # 1. Buscar métrica de Volumen Útil Energético por Embalse
+            mask_vol = cat[col_metric_name].astype(str).str.contains("Volumen", case=False, na=False) & cat[col_metric_name].astype(str).str.contains("til", case=False, na=False)
+            if col_entity:
+                mask_vol_ent = mask_vol & cat[col_entity].astype(str).str.contains("Embalse", case=False, na=False)
+                df_m_vol = cat[mask_vol_ent] if mask_vol_ent.any() else cat[mask_vol]
+            else:
+                df_m_vol = cat[mask_vol]
+
+            if not df_m_vol.empty:
+                metric_vol = str(df_m_vol.iloc[0][col_metric_id]).strip()
+                ent_vol = str(df_m_vol.iloc[0][col_entity]).strip() if col_entity and pd.notna(df_m_vol.iloc[0][col_entity]) else "Embalse"
+                df_res = api_xm.request_data(metric_vol, ent_vol, fecha_ini, fecha_fin)
+
+                if df_res is not None and not df_res.empty:
+                    col_f = next((c for c in df_res.columns if "DATE" in c.upper() or "FECHA" in c.upper()), None)
+                    col_n = next((c for c in df_res.columns if "NAME" in c.upper() or "NOMBRE" in c.upper() or "SISTEMA" in c.upper() or "RESOURCE" in c.upper()), None)
+                    col_v = next((c for c in df_res.columns if "VALUE" in c.upper() or "VALOR" in c.upper()), None)
+                    if col_f and col_v:
+                        df_res[col_f] = pd.to_datetime(df_res[col_f], errors="coerce")
+                        df_res[col_v] = pd.to_numeric(df_res[col_v], errors="coerce")
+                        df_res = df_res.dropna(subset=[col_f, col_v]).sort_values(col_f)
+                        if not df_res.empty:
+                            ult_f = df_res[col_f].max()
+                            df_ult = df_res[df_res[col_f] == ult_f]
+                            tot_raw = float(df_ult[col_v].sum())
+                            tot_gwh = (tot_raw / 1e6) if tot_raw > 50000 else tot_raw
+
+                            obj_ant = ["PENOL", "ITUANGO", "PORCE II", "PORCE III", "PLAYAS", "RIOGRANDE2", "SAN LORENZO", "PUNCHINA", "TRONERAS", "MIRAFLORES"]
+                            if col_n:
+                                df_ant = df_ult[df_ult[col_n].astype(str).str.upper().str.strip().isin(obj_ant)].copy()
+                                for _, r_a in df_ant.iterrows():
+                                    val_r = float(r_a[col_v])
+                                    val_g = (val_r / 1e6) if val_r > 50000 else val_r
+                                    resumen["embalses_ant"].append({
+                                        "Embalse XM": str(r_a[col_n]).strip(),
+                                        "Volumen Útil (GWh)": round(val_g, 2)
+                                    })
+
+                            resumen["disponible"] = True
+                            resumen["reserva_sin_gwh"] = round(tot_gwh, 1)
+                            resumen["fecha_corte"] = ult_f.strftime("%Y-%m-%d")
+
+            # 2. Buscar métrica de Aportes Hídricos / Energéticos
+            mask_ap = cat[col_metric_name].astype(str).str.contains("Aporte", case=False, na=False)
+            df_m_ap = cat[mask_ap]
+            if not df_m_ap.empty:
+                metric_ap = str(df_m_ap.iloc[0][col_metric_id]).strip()
+                ent_ap = str(df_m_ap.iloc[0][col_entity]).strip() if col_entity and pd.notna(df_m_ap.iloc[0][col_entity]) else "Sistema"
+                df_ap = api_xm.request_data(metric_ap, ent_ap, fecha_ini, fecha_fin)
+                if df_ap is not None and not df_ap.empty:
+                    col_af = next((c for c in df_ap.columns if "DATE" in c.upper() or "FECHA" in c.upper()), None)
+                    col_av = next((c for c in df_ap.columns if "VALUE" in c.upper() or "VALOR" in c.upper()), None)
+                    if col_af and col_av:
+                        df_ap[col_af] = pd.to_datetime(df_ap[col_af], errors="coerce")
+                        df_ap[col_av] = pd.to_numeric(df_ap[col_av], errors="coerce")
+                        df_ap = df_ap.dropna(subset=[col_af, col_av]).sort_values(col_af)
+                        if not df_ap.empty:
+                            ult_af = df_ap[col_af].max()
+                            val_ap = float(df_ap[df_ap[col_af] == ult_af][col_av].sum())
+                            resumen["aporte_sin_gwh_dia"] = round((val_ap / 1e6) if val_ap > 50000 else val_ap, 2)
+        except Exception:
+            pass
+        return resumen
+
+    pulso_xm = obtener_pulso_sinergox_xm()
+    sx1, sx2, sx3 = st.columns(3)
+    if pulso_xm.get("disponible") and pulso_xm.get("reserva_sin_gwh") is not None:
+        sx1.metric("⚡ Reserva Útil Agregada (XM)", f"{pulso_xm['reserva_sin_gwh']:,.1f} GWh", f"Corte: {pulso_xm.get('fecha_corte', 'Reciente')}")
+        if pulso_xm.get("aporte_sin_gwh_dia") is not None:
+            sx2.metric("🌊 Aportes Energéticos Diarios", f"{pulso_xm['aporte_sin_gwh_dia']:,.2f} GWh/día", "Sistema SIN")
+        else:
+            sx2.metric("🌊 Aportes Energéticos", "Consultar Sinergox", "AportesEner")
+        sx3.metric("🏭 Embalses Antioquia Monitoreados", f"{len(pulso_xm.get('embalses_ant', []))}", "Catálogo XM")
+        if pulso_xm.get("embalses_ant"):
+            with st.expander("📋 Detalle Energético por Embalse de Antioquia (XM)", expanded=False):
+                st.dataframe(pd.DataFrame(pulso_xm["embalses_ant"]), width="stretch", hide_index=True)
+    else:
+        sx1.info("💡 Conecta con el botón superior o consulta el portal Sinergox (`sinergox.xm.com.co`) para ver el estado diario de reservas y aportes del SIN.")
+        sx2.caption("Regiones Sinergox: Antioquia, Oriente, Caldas, Centro y Valle.")
+        sx3.caption("Complementa el balance de evaporación en lámina libre con la reserva energética.")                    
+
 # -----------------------------------------
 # PESTAÑA 6: Explorador Satelital
 # -----------------------------------------
@@ -1335,15 +1515,22 @@ with tab6:
     st.header("🗺️ Explorador Satelital y Base Batimétrica")
     st.markdown("Visualización en vivo del anillo de embalses de Antioquia. Usa el ratón para explorar.")
     
+    cargar_capas_sig = st.checkbox(
+        "🛰️ Superponer capas territoriales de Supabase (Antioquia y Predios Ejecutados)",
+        value=False,
+        help="Activa esta casilla si deseas descargar y superponer los polígonos GeoJSON de la nube sobre el mapa satelital."
+    )
+    
     col_mapa, col_datos = st.columns([1.3, 1])
     with col_mapa:
         import folium
         from folium import plugins
+        import streamlit.components.v1 as components
         
         # Centroide en Antioquia
-        m = folium.Map(location=[6.5, -75.3], zoom_start=9)
+        m = folium.Map(location=[6.45, -75.25], zoom_start=8, tiles="OpenStreetMap", control_scale=True)
         
-        # 🚀 Añadir Botón de Fullscreen
+        # Botón de Pantalla Completa
         plugins.Fullscreen(
             position='topright', 
             title='Expandir Mapa', 
@@ -1351,79 +1538,102 @@ with tab6:
             force_separate_button=True
         ).add_to(m)
         
-        # 1. Mapa Base: Satélite Esri
+        # Mapa Base: Satélite Esri (Activo por defecto para ver los espejos de agua)
         tile_url = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
         folium.TileLayer(
             tiles=tile_url,
             attr='Esri',
             name='Satélite Esri',
             overlay=False,
-            control=True
+            control=True,
+            show=True
         ).add_to(m)
         
-        # 2. Mapa Base: OpenStreetMap
-        folium.TileLayer('OpenStreetMap', name='Open Street Map', overlay=False, control=True).add_to(m)
+        # Capas GeoJSON Externas (Solo se descargan si el usuario activa el checkbox para no bloquear el iframe)
+        if cargar_capas_sig:
+            import requests
+            urls_geojson = {
+                "Antioquia": ("https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/Antioquia.geojson", "#9b59b6"),
+                "Predios Ejecutados": ("https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PrediosEjecutados.geojson", "#f1c40f")
+            }
+            for nombre_capa, (url_g, color_hex) in urls_geojson.items():
+                try:
+                    r_geo = requests.get(url_g, timeout=8)
+                    if r_geo.status_code == 200:
+                        folium.GeoJson(
+                            r_geo.json(),
+                            name=nombre_capa,
+                            style_function=lambda feature, c=color_hex: {
+                                'fillColor': c,
+                                'color': c,
+                                'weight': 2,
+                                'fillOpacity': 0.20
+                            }
+                        ).add_to(m)
+                except Exception:
+                    pass
         
-        # 3. Capas GeoJSON Externas (Supabase)
-        urls_geojson = {
-            "Predios Ejecutados": "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PrediosEjecutados.geojson",
-            "Antioquia": "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/Antioquia.geojson",
-            "Territorio Maestro": "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
-        }
-        
-        # Asignamos colores distintos a cada capa para diferenciarlas
-        colores_geo = {"Predios Ejecutados": "#f1c40f", "Antioquia": "#9b59b6", "Territorio Maestro": "#e74c3c"}
-        
-        for nombre_capa, url_g in urls_geojson.items():
-            try:
-                folium.GeoJson(
-                    url_g,
-                    name=nombre_capa,
-                    style_function=lambda feature, color=colores_geo[nombre_capa]: {
-                        'fillColor': color,
-                        'color': color,
-                        'weight': 2,
-                        'fillOpacity': 0.15
-                    },
-                    show=False # Inician apagadas por defecto
-                ).add_to(m)
-            except Exception as e:
-                pass # Si algún GeoJSON falla, el mapa continúa cargando normalmente
-        
-        # Colocar marcadores con nombres PERMANENTES si la base de datos existe
+        # Colocar marcadores de alta precisión con etiqueta anclada al pin
         if not df_embalses.empty:
             for _, row in df_embalses.iterrows():
-                nombre = row['Embalse']
-                if nombre in coords_embalses:
-                    lat, lon = coords_embalses[nombre]
+                nombre = str(row.get('Embalse', 'Embalse')).strip()
+                
+                # 1. Priorizar coordenadas calibradas sobre el espejo de agua
+                coord_exacta = coords_embalses.get(nombre)
+                if not coord_exacta:
+                    coord_exacta = next(
+                        (v for k, v in coords_embalses.items() if k.lower() in nombre.lower() or nombre.lower() in k.lower()),
+                        None
+                    )
+                
+                if coord_exacta:
+                    lat_val, lon_val = coord_exacta
+                else:
+                    lat_val = pd.to_numeric(row.get('Latitud', None), errors='coerce')
+                    lon_val = pd.to_numeric(row.get('Longitud', None), errors='coerce')
+                
+                if pd.notna(lat_val) and pd.notna(lon_val):
                     vol = row.get('Volumen Máximo (Mm³)', 'N/A')
+                    vol_util = row.get('Volumen Útil (Mm³)', 'N/A')
                     area = row.get('Área Máxima (ha)', 'N/A')
                     
-                    html_popup = f"<b>{nombre}</b><br>Volumen: {vol} Mm³<br>Área: {area} ha"
+                    html_popup = (
+                        f"<div style='font-family:sans-serif; font-size:12px; min-width:160px;'>"
+                        f"<b style='font-size:13px; color:#1e40af;'>💧 {nombre}</b><hr style='margin:4px 0;'>"
+                        f"<b>Área Máx:</b> {area} ha<br>"
+                        f"<b>Vol. Máx:</b> {vol} Mm³<br>"
+                        f"<b>Vol. Útil:</b> {vol_util} Mm³</div>"
+                    )
                     
-                    # Tooltip con permanent=True y estilos CSS para las etiquetas
+                    # Pin oficial sobre el espejo de agua
                     folium.Marker(
-                        [lat, lon], 
-                        popup=folium.Popup(html_popup, max_width=250),
-                        tooltip=folium.Tooltip(
-                            nombre, 
-                            permanent=True, 
-                            direction='right', 
-                            style="font-size: 11px; font-weight: bold; background-color: rgba(255,255,255,0.8); border: none; padding: 2px 4px; border-radius: 4px;"
-                        ),
+                        [float(lat_val), float(lon_val)], 
+                        popup=folium.Popup(html_popup, max_width=260),
                         icon=folium.Icon(color='blue', icon='tint')
                     ).add_to(m)
                     
-        # Agregamos el Controlador de Capas (menú flotante en el mapa)
-        folium.LayerControl(position='topright', collapsed=True).add_to(m)
+                    # Etiqueta fija anclada exactamente al lado derecho del pin (sin desfase de Tooltip)
+                    folium.Marker(
+                        [float(lat_val), float(lon_val)],
+                        icon=folium.DivIcon(
+                            icon_size=(160, 24),
+                            icon_anchor=(-14, 12),
+                            html=(
+                                f"<div style='display:inline-block; white-space:nowrap; font-family:sans-serif; "
+                                f"font-size:11px; font-weight:700; background:rgba(255,255,255,0.92); "
+                                f"color:#0f172a; border:1.5px solid #0284c7; padding:2px 6px; "
+                                f"border-radius:4px; box-shadow:0 1px 3px rgba(0,0,0,0.25);'>{nombre}</div>"
+                            )
+                        )
+                    ).add_to(m)
+                    
+        folium.LayerControl(position='topright', collapsed=False).add_to(m)
 
-        # 🔥 FIX: Renderizado nativo HTML a prueba de fallos
-        from streamlit_folium import st_folium
-        st_folium(m, use_container_width=True, height=500, returned_objects=[])
+        # Renderizado HTML directo (inmune al bug de pestañas ocultas de st_folium)
+        components.html(m._repr_html_(), height=500)
 
     with col_datos:
         if not df_embalses.empty:
-            # Ajustamos la altura para que coincida con el mapa
             st.dataframe(df_embalses.astype(str), width="stretch", hide_index=True, height=500)
         else:
             st.warning("⚠️ Base de datos maestra no encontrada.")

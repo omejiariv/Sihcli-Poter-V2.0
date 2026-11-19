@@ -794,6 +794,19 @@ if gdf_zona_seleccionada is not None:
                         })
                         st.dataframe(df_morfo.style.format({"Valor": "{:.2f}"}), width="stretch")
                         st.session_state['df_indices'] = df_morfo 
+
+                        st.session_state['sihcli_geomorfo_territorio'] = str(nombre_zona)
+                        st.session_state['sihcli_contexto_geomorfo'] = {
+                            "territorio": str(nombre_zona),
+                            "area_km2": float(area_km2),
+                            "perimetro_km": float(perimetro_km),
+                            "pendiente_media_deg": float(slope_mean),
+                            "hi_global": float(hi_global),
+                            "h_min_m": float(min_el),
+                            "h_max_m": float(max_el),
+                            "tc_kirpich_min": float(tc_kirpich_min) if 'tc_kirpich_min' in locals() else 0.0,
+                            "q_pico_racional_m3s": float(st.session_state.get('geomorfo_q_pico_racional', 0.0))
+                }
                     
                     if st.session_state.get('geomorfo_strahler_df') is not None:
                         st.markdown("##### 🌊 Red de Drenaje y Potencial Ripario (Strahler)")

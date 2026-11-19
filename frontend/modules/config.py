@@ -30,6 +30,7 @@ class Config:
     ENSO_ONI_COL = "anomalia_oni"
     SOI_COL = "soi"
     IOD_COL = "iod"
+    SST_COL = "sst_nino34"          # Temperatura Superficial del Mar Niño 3.4 (°C)
 
     # Columnas estándar de Predios Ejecutados
     PREDIOS_MPIO_COL = "mpio_nombr"

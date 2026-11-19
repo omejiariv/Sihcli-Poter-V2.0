@@ -1736,6 +1736,17 @@ if 'concentracion_acuifero' in locals():
 # Mensaje de confirmación silencioso para el usuario
 st.toast(f"🧪 Calidad Sincronizada: OD {oxigeno_salud_pct:.1f}% | DBO {st.session_state['calidad_dbo_salida_mgL']:.1f} mg/L", icon="🔄")
 
+st.session_state['sihcli_calidad_territorio'] = str(nombre_seleccion)
+st.session_state['sihcli_contexto_calidad'] = {
+    "territorio": str(nombre_seleccion),
+    "anio": int(anio_analisis),
+    "carga_dbo_ton_anual": float(st.session_state.get('carga_dbo_total_ton', 0.0)),
+    "oxigeno_salud_pct": float(oxigeno_salud_pct),
+    "dbo_max_mg_l": float(max_dbo),
+    "demanda_total_m3s": float(st.session_state.get('demanda_total_m3s', 0.0)),
+    "acuifero_mg_l": float(st.session_state.get('calidad_acuifero_mg_l', 0.0))
+}
+
 # ------------------------------------------------------------------------------
 # TAB 4: ESCENARIOS DE MITIGACIÓN (HOLÍSTICOS)
 # ------------------------------------------------------------------------------
