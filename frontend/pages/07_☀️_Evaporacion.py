@@ -656,6 +656,68 @@ with tab4:
                 step=100.0, 
                 help="El valor se auto-asigna leyendo el Caudal Medio, Máximo o Mínimo de la base de datos según el escenario climático seleccionado. Puedes sobrescribirlo manualmente."
             )
+
+        with st.expander("⚡💰 Nexo Energía y Ventas Evitadas", expanded=False):
+            # Catálogo base: (Tipo de Uso, Factor Conversión kWh/m3, % Uso Acueducto)
+            PERFIL_EMBALSES = {
+                "Piedras Blancas": ("Acueducto", 0.00, 100),
+                "La Fe": ("Acueducto", 0.00, 100),
+                "Riogrande II": ("Mixto", 2.15, 35),
+                "Guatapé (El Peñol)": ("Energía", 1.85, 0),
+                "Hidroituango": ("Energía", 0.42, 0),
+                "Porce II": ("Energía", 0.55, 0),
+                "Porce III": ("Energía", 0.78, 0),
+                "Playas": ("Energía", 0.45, 0),
+                "Jaguas": ("Energía", 0.62, 0),
+                "San Carlos": ("Energía", 1.35, 0),
+                "San Carlos (Punchiná)": ("Energía", 1.35, 0),
+            }
+            uso_def, fc_def, pct_agua_def = PERFIL_EMBALSES.get(embalse_sel, ("Mixto", 1.00, 50))
+            opciones_uso = ["Acueducto", "Energía", "Mixto"]
+
+            tipo_uso_embalse = st.selectbox(
+                "🏷️ Uso Principal del Embalse",
+                opciones_uso,
+                index=opciones_uso.index(uso_def),
+                key=f"uso_{embalse_sel}",
+                help="Define si la evaporación impacta ventas de agua potable, generación eléctrica o ambas."
+            )
+
+            if tipo_uso_embalse == "Mixto":
+                pct_uso_agua = st.slider(
+                    "⚖️ Distribución del Recurso (% Acueducto vs. Energía)",
+                    0, 100, int(pct_agua_def), 5,
+                    key=f"pct_agua_{embalse_sel}"
+                )
+            elif tipo_uso_embalse == "Acueducto":
+                pct_uso_agua = 100
+            else:
+                pct_uso_agua = 0
+            pct_uso_energia = 100 - pct_uso_agua
+
+            fc_energia = st.number_input(
+                "⚡ Factor de Conversión (kWh/m³)",
+                min_value=0.0, max_value=5.0, value=float(fc_def), step=0.05,
+                key=f"fc_{embalse_sel}",
+                disabled=(tipo_uso_embalse == "Acueducto"),
+                help="Energía producida por cada m³ turbinado (depende del salto neto y eficiencia de la central)."
+            )
+
+            # Sugerencia automática de precio en bolsa según escenario climático
+            precio_kwh_sug = 850.0 if "El Niño" in escenario_climatico else 350.0
+            precio_energia_cop = st.number_input(
+                "💵 Precio Energía (COP/kWh)",
+                min_value=50.0, max_value=2500.0, value=float(precio_kwh_sug), step=50.0,
+                disabled=(tipo_uso_embalse == "Acueducto"),
+                help="Precio de bolsa o contrato XM (en El Niño suele escalar hacia precio de escasez)."
+            )
+
+            tarifa_agua_cop = st.number_input(
+                "🚰 Tarifa Agua Potable (COP/m³)",
+                min_value=500.0, max_value=15000.0, value=3800.0, step=100.0,
+                disabled=(tipo_uso_embalse == "Energía"),
+                help="Tarifa media facturada por m³ de agua potable (incluye captación, potabilización y distribución)."
+            )            
     
     # --- APLICACIÓN DE MODIFICADORES CLIMÁTICOS (Penman-Monteith) ---
     mod_tmax, mod_tmin, mod_rh, mod_rs = t_max, t_min, rh_media, rs
@@ -929,13 +991,13 @@ with tab4:
     st.markdown(f"#### 👥 Tensión Hídrica: Evaporación vs. Demanda y Contraste SUDS ({escala_temporal})")
     d1, d2, d_carro, d3, d_suds, d_fin_suds, d_caudal, d4 = st.columns(8)
     
-    d1.metric("🚰 Demanda", f"{demanda_m3_escala:,.0f} m³", f"Pop: {poblacion_analisis:,} hab", delta_color="off")
-    d2.metric("🏊‍♂️ Equivalencia", f"{piscinas_demanda:,.1f} Piscinas", "Olímpicas", delta_color="off")
-    d_carro.metric("🚛 Equivalencia", f"{carrotanques_demanda:,.0f} Camiones", "Carrotanques 10 m³", delta_color="off")
-    d3.metric("🌤️ Pérdida Evap.", f"{evap_vol_escala:,.0f} m³", f"Acumulado {escala_temporal}", delta_color="inverse")
+    d1.metric("🚰 Demanda m³", f"{demanda_m3_escala:,.0f}", f"Pop: {poblacion_analisis:,} hab", delta_color="off")
+    d2.metric("🏊‍♂️ Equivalencia", f"{piscinas_demanda:,.1f}", "Piscinas Olímpicas", delta_color="off")
+    d_carro.metric("🚛 Equivalencia", f"{carrotanques_demanda:,.0f}", "Carrotanques 10 m³", delta_color="off")
+    d3.metric("🌤️ Pérdida Evap.m³", f"{evap_vol_escala:,.0f}", f"Acumulado {escala_temporal}", delta_color="inverse")
     d_suds.metric(
         "🏟️ Tanques SUDS",
-        f"{tanques_suds_evap:,.0f} Tanques",
+        f"{tanques_suds_evap:,.0f}",
         "Ref. Villa Niza (1.200 m³)",
         delta_color="off",
         help=(
@@ -956,8 +1018,8 @@ with tab4:
             f"(${capex_neto:,.2f}M USD) de este proyecto anti-evaporación."
         )
     )
-    d_caudal.metric("💧 Caudal Fuga", f"{caudal_evap_ls:,.1f} L/s", "Continuo", delta_color="inverse")
-    d4.metric("⚠️ Peso Evap.", f"{pct_evap_vs_demanda:,.1f} %", "De la provisión", delta_color="inverse")
+    d_caudal.metric("💧 Caudal Fuga L/s", f"{caudal_evap_ls:,.1f}", "Continuo", delta_color="inverse")
+    d4.metric("⚠️ Peso Evap. %", f"{pct_evap_vs_demanda:,.1f}", "% De la provisión", delta_color="inverse")
 
     with st.expander("💰 Evaluación Financiera Comparativa: Blindaje Anti-Evaporación vs. Infraestructura SUDS de Crecidas (Medellín - EDU)", expanded=False):
         st.markdown(f"""
@@ -997,6 +1059,71 @@ with tab4:
             ]
         })
         st.dataframe(df_presupuestos_suds, width="stretch", hide_index=True)
+
+    # =========================================================================
+    # ⚡💰 NEXO AGUA-ENERGÍA: ENERGÍA NO GENERADA Y VENTAS EVITADAS
+    # =========================================================================
+    st.markdown("---")
+    st.markdown(f"#### ⚡💰 Impacto Energético y Ventas Evitadas — Perfil: **{tipo_uso_embalse}** ({escala_temporal})")
+
+    # 1. Fracciones de volumen evaporado y salvado según uso
+    vol_evap_agua = evap_vol_escala * (pct_uso_agua / 100.0)
+    vol_evap_ener = evap_vol_escala * (pct_uso_energia / 100.0)
+
+    vol_salv_agua = vol_salvado_escala * (pct_uso_agua / 100.0)
+    vol_salv_ener = vol_salvado_escala * (pct_uso_energia / 100.0)
+
+    # 2. Energía dejada de producir (MWh) y hogares equivalentes (160 kWh/mes por hogar)
+    energia_perdida_mwh = (vol_evap_ener * fc_energia) / 1000.0
+    energia_salvada_mwh = (vol_salv_ener * fc_energia) / 1000.0
+    hogares_sin_energia = (energia_perdida_mwh * 1000.0) / (160.0 * (dias_escala / 30.0)) if dias_escala > 0 else 0.0
+
+    # 3. Ventas evitadas (Lucro Cesante) en Millones de COP y USD
+    ventas_evitadas_agua_mcop = (vol_evap_agua * tarifa_agua_cop) / 1e6
+    ventas_evitadas_ener_mcop = (energia_perdida_mwh * 1000.0 * precio_energia_cop) / 1e6
+    lucro_cesante_total_mcop = ventas_evitadas_agua_mcop + ventas_evitadas_ener_mcop
+    lucro_cesante_total_musd = lucro_cesante_total_mcop / trm_ref
+
+    # 4. Ingresos recuperados gracias a la mitigación seleccionada
+    ingresos_recup_agua_mcop = (vol_salv_agua * tarifa_agua_cop) / 1e6
+    ingresos_recup_ener_mcop = (energia_salvada_mwh * 1000.0 * precio_energia_cop) / 1e6
+    ingresos_recup_total_mcop = ingresos_recup_agua_mcop + ingresos_recup_ener_mcop
+
+    # Payback financiero directo (anualizado)
+    ingresos_recup_anual_mcop = ingresos_recup_total_mcop * (365.0 / dias_escala) if dias_escala > 0 else 0.0
+    payback_comercial = (capex_proy_mcop / ingresos_recup_anual_mcop) if (capex_proy_mcop > 0 and ingresos_recup_anual_mcop > 0) else 0.0
+
+    e1, e2, e3, e4, e5 = st.columns(5)
+    e1.metric(
+        "⚡ Energía No Generada",
+        f"{energia_perdida_mwh:,.1f} MWh",
+        f"≈ {hogares_sin_energia:,.0f} hogares ({escala_temporal})" if energia_perdida_mwh > 0 else "Uso exclusivo acueducto",
+        delta_color="inverse" if energia_perdida_mwh > 0 else "off"
+    )
+    e2.metric(
+        "💸 Ventas Evitadas (Energía)",
+        f"${ventas_evitadas_ener_mcop:,.0f}M COP",
+        f"FC: {fc_energia:.2f} kWh/m³" if pct_uso_energia > 0 else "N/A",
+        delta_color="inverse" if ventas_evitadas_ener_mcop > 0 else "off"
+    )
+    e3.metric(
+        "🚰 Ventas Evitadas (Agua)",
+        f"${ventas_evitadas_agua_mcop:,.0f}M COP",
+        f"{pct_uso_agua}% Acueducto" if pct_uso_agua > 0 else "N/A",
+        delta_color="inverse" if ventas_evitadas_agua_mcop > 0 else "off"
+    )
+    e4.metric(
+        "📉 Lucro Cesante Total",
+        f"${lucro_cesante_total_mcop:,.0f}M COP",
+        f"USD ${lucro_cesante_total_musd:,.2f}M",
+        delta_color="inverse"
+    )
+    e5.metric(
+        "🛡️ Ingresos Recuperados",
+        f"${ingresos_recup_total_mcop:,.0f}M COP",
+        f"Payback: {payback_comercial:.1f} años" if payback_comercial > 0 else "Activa una mitigación",
+        delta_color="normal" if ingresos_recup_total_mcop > 0 else "off"
+    )    
     
     # =========================================================================
     # 🚨 DASHBOARD ALERTA TEMPRANA Y CURVAS DE AGOTAMIENTO (BASE ÚTIL)

@@ -3,6 +3,7 @@
 import os
 import sys
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 # --- 1. CONFIGURACIÓN DE PÁGINA (PANTALLA COMPLETA) ---
@@ -105,6 +106,9 @@ with c_ctrl2:
     """
     
     # Renderizamos el bloque HTML
-    components.html(windy_html, height=750)
+    if hasattr(st, "iframe"):
+        st.iframe(windy_html, height=750)
+    else:
+        components.html(windy_html, height=750)
     
     st.caption("🟢 **Línea de Tiempo:** Dale al botón de 'Play' ▶️ en la esquina inferior izquierda del mapa para proyectar el movimiento del clima.")
