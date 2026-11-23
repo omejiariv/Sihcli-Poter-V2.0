@@ -229,12 +229,117 @@ def renderizar_menu_navegacion(pagina_actual):
                 st.error(f"Error conectando al catálogo REST de cuencas: {e}")
             return pd.DataFrame()
 
+        @st.cache_data(ttl=86400, show_spinner=False)
+        def obtener_indice_veredas():
+            """Descarga solo nombres (sin geometría) para el selector en cascada (< 200 KB)."""
+            try:
+                url_sb = st.secrets.get("SUPABASE_URL") or st.secrets.get("supabase", {}).get("SUPABASE_URL")
+                key_sb = st.secrets.get("SUPABASE_KEY") or st.secrets.get("supabase", {}).get("SUPABASE_KEY")
+                if not (url_sb and key_sb):
+                    return pd.DataFrame()
+                headers = {"apikey": key_sb, "Authorization": f"Bearer {key_sb}"}
+                filas, offset = [], 0
+                while True:
+                    url_v = f"{url_sb}/rest/v1/veredas_geometria?select=nomb_mpio,nombre_ver&limit=1000&offset={offset}"
+                    r = requests.get(url_v, headers=headers, timeout=15)
+                    if r.status_code != 200:
+                        break
+                    data = r.json()
+                    if not data:
+                        break
+                    filas.extend(data)
+                    if len(data) < 1000:
+                        break
+                    offset += 1000
+                return pd.DataFrame(filas) if filas else pd.DataFrame()
+            except Exception:
+                return pd.DataFrame()
+
+        @st.cache_data(ttl=3600, show_spinner=False)
+        def obtener_poligono_vereda(mpio_exacto, vereda_exacta):
+            """Descarga ÚNICAMENTE 1 polígono en GeoJSON desde PostGIS (< 50 KB)."""
+            try:
+                from urllib.parse import quote
+                url_sb = st.secrets.get("SUPABASE_URL") or st.secrets.get("supabase", {}).get("SUPABASE_URL")
+                key_sb = st.secrets.get("SUPABASE_KEY") or st.secrets.get("supabase", {}).get("SUPABASE_KEY")
+                if not (url_sb and key_sb):
+                    return None
+                headers = {
+                    "apikey": key_sb,
+                    "Authorization": f"Bearer {key_sb}",
+                    "Accept": "application/geo+json"
+                }
+                url_q = (
+                    f"{url_sb}/rest/v1/veredas_geometria"
+                    f"?select=nomb_mpio,nombre_ver,geometry"
+                    f"&nomb_mpio=eq.{quote(str(mpio_exacto))}"
+                    f"&nombre_ver=eq.{quote(str(vereda_exacta))}"
+                    f"&limit=1"
+                )
+                r = requests.get(url_q, headers=headers, timeout=15)
+                if r.status_code == 200:
+                    geojson_ver = r.json()
+                    geojson_ver['nombre_homologado'] = f"{vereda_exacta} ({mpio_exacto})"
+                    return geojson_ver
+            except Exception:
+                pass
+            return None
+
+        @st.cache_data(ttl=86400, show_spinner=False)
+        def obtener_barrios_medellin():
+            """Extrae el catálogo de barrios de Medellín desde TerritorioMaestro (solo al seleccionarse)."""
+            try:
+                url_tm = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
+                r = requests.get(url_tm, timeout=20)
+                if r.status_code != 200:
+                    return {}
+                barrios = {}
+                for feat in r.json().get("features", []):
+                    props = feat.get("properties", {})
+                    tipo = str(props.get("tipo", "")).upper()
+                    nom_barrio = str(props.get("bar_ccnmbr") or props.get("nombre") or "").strip()
+                    if tipo == "BARRIO" and nom_barrio:
+                        barrios[nom_barrio] = feat
+                return dict(sorted(barrios.items()))
+            except Exception:
+                return {}
+
+        @st.cache_data(ttl=86400, show_spinner=False)
+        def obtener_comunas_corregimientos_medellin():
+            """Extrae Comunas y Corregimientos de Medellín desde TerritorioMaestro."""
+            try:
+                url_tm = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
+                r = requests.get(url_tm, timeout=20)
+                if r.status_code != 200:
+                    return {}
+                grupos = {}
+                for feat in r.json().get("features", []):
+                    props = feat.get("properties", {})
+                    mpio = str(props.get("mpio_cnmbr") or "").upper()
+                    tipo = str(props.get("tipo") or "").upper()
+                    nom_comu = str(props.get("comu_nmbre") or "").strip()
+
+                    # Caso 1: Polígono explícito de Comuna o Corregimiento
+                    if any(k in tipo for k in ["COMUNA", "CORREGIMIENTO"]):
+                        clave = nom_comu or str(props.get("nombre") or props.get("bar_ccnmbr") or "").strip()
+                        if clave:
+                            grupos.setdefault(clave, []).append(feat)
+                    # Caso 2: Agrupación por comu_nmbre dentro de Medellín
+                    elif "MEDELL" in mpio and nom_comu and nom_comu.upper() not in ["NONE", "NAN", "NO APLICA", ""]:
+                        grupos.setdefault(nom_comu, []).append(feat)
+                return dict(sorted(grupos.items()))
+            except Exception:
+                return {}        
+
         niveles = {
             "🏛️ Departamental": "DEPARTAMENTAL",
             "🏢 Municipal": "MUNICIPAL",
             "🧩 Regiones (Subregiones)": "REGIONAL",
             "🦅 Autoridades (CARs)": "CAR",
-            "💧 Cuencas Hidrográficas": "CUENCA"
+            "💧 Cuencas Hidrográficas": "CUENCA",
+            "🏡 Veredas (Antioquia)": "VEREDA",
+            "🏙️ Comunas / Corregimientos (Medellín)": "COMUNA",
+            "🏘️ Barrios (Medellín)": "BARRIO"
         }
         
         escala_sel = st.radio("Escala de Análisis:", list(niveles.keys()), index=1, key="menu_escala_aleph")
@@ -324,6 +429,46 @@ def renderizar_menu_navegacion(pagina_actual):
                 territorio_final = "SIN DATOS"
                 st.session_state['aleph_codigo_cuenca'] = "N/A"
 
+        elif nivel_backend == "VEREDA":
+            df_ver = obtener_indice_veredas()
+            if not df_ver.empty:
+                mpios_ver = sorted(df_ver['nomb_mpio'].dropna().unique().tolist())
+                idx_guarne = mpios_ver.index("GUARNE") if "GUARNE" in mpios_ver else 0
+                mpio_ver_sel = st.selectbox("1. Municipio:", mpios_ver, index=idx_guarne, key="menu_mpio_ver_aleph")
+                veredas_mpio = sorted(
+                    df_ver[df_ver['nomb_mpio'] == mpio_ver_sel]['nombre_ver'].dropna().unique().tolist()
+                )
+                ver_sel = st.selectbox("2. Vereda:", veredas_mpio, key="menu_vereda_aleph")
+                territorio_final = f"{ver_sel} ({mpio_ver_sel})"
+                st.session_state['aleph_municipio_padre'] = mpio_ver_sel
+                st.session_state['aleph_vereda_exacta'] = ver_sel
+                st.success(f"Territorio fijado: {ver_sel} — {mpio_ver_sel}")
+            else:
+                st.error("No se pudo cargar el índice de veredas desde PostGIS.")
+                territorio_final = "SIN DATOS"
+
+        elif nivel_backend == "COMUNA":
+            dict_comunas = obtener_comunas_corregimientos_medellin()
+            if dict_comunas:
+                comuna_sel = st.selectbox("Comuna o Corregimiento:", list(dict_comunas.keys()), key="menu_comuna_aleph")
+                territorio_final = comuna_sel
+                st.session_state['aleph_municipio_padre'] = "MEDELLIN"
+                st.success(f"Territorio fijado: {comuna_sel} (Medellín)")
+            else:
+                st.error("No se encontraron comunas/corregimientos en TerritorioMaestro.")
+                territorio_final = "SIN DATOS"
+
+        elif nivel_backend == "BARRIO":
+            dict_barrios = obtener_barrios_medellin()
+            if dict_barrios:
+                barrio_sel = st.selectbox("Barrio de Medellín:", list(dict_barrios.keys()), key="menu_barrio_aleph")
+                territorio_final = barrio_sel
+                st.session_state['aleph_municipio_padre'] = "MEDELLIN"
+                st.success(f"Territorio fijado: {barrio_sel} (Medellín)")
+            else:
+                st.error("No se encontraron barrios en TerritorioMaestro.")
+                territorio_final = "SIN DATOS"                
+
     # =============================================================
     # 🔥 INYECCIÓN GLOBAL (EL PROTOCOLO ALEPH - ESTADO CENTRALIZADO)
     # =============================================================
@@ -365,17 +510,50 @@ def renderizar_menu_navegacion(pagina_actual):
     st.session_state['nivel_activo_global'] = nivel_backend
 
     # === 🚀 REFACTORIZACIÓN FRONTEND: PUENTE CARTOGRÁFICO LIGERO ===
+    def _geojson_a_gdf(gj_dict):
+        if not gj_dict or not isinstance(gj_dict, dict):
+            return None
+        feats = gj_dict.get("features", [])
+        if not feats:
+            return None
+        import geopandas as gpd
+        gdf = gpd.GeoDataFrame.from_features(feats, crs="EPSG:4326")
+        return gdf if not gdf.empty else None
+
     if str(nivel_backend).strip().lower() == "departamental" and "antioquia" in str(lugar_original).lower():
         try:
             url_ant = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/Antioquia.geojson"
-            # Solicitud HTTP estándar ultraligera (1 segundo)
             resp = requests.get(url_ant, timeout=10)
             if resp.status_code == 200:
                 geojson_antioquia = resp.json()
                 geojson_antioquia['nombre_homologado'] = 'ANTIOQUIA'
-                st.session_state['aleph_poligono'] = geojson_antioquia
-        except Exception as e:
+                st.session_state['aleph_poligono'] = _geojson_a_gdf(geojson_antioquia)
+        except Exception:
             pass
+    elif nivel_backend == "VEREDA" and territorio_final != "SIN DATOS":
+        mpio_p = st.session_state.get('aleph_municipio_padre', '')
+        ver_p = st.session_state.get('aleph_vereda_exacta', '')
+        st.session_state['aleph_poligono'] = _geojson_a_gdf(obtener_poligono_vereda(mpio_p, ver_p))
+
+    elif nivel_backend == "COMUNA" and territorio_final != "SIN DATOS":
+        dict_c = obtener_comunas_corregimientos_medellin()
+        feats_c = dict_c.get(territorio_final, [])
+        gdf_c = _geojson_a_gdf({"type": "FeatureCollection", "features": feats_c})
+        if gdf_c is not None and len(gdf_c) > 1:
+            import geopandas as gpd
+            gdf_c = gpd.GeoDataFrame(geometry=[gdf_c.geometry.unary_union], crs="EPSG:4326")
+        st.session_state['aleph_poligono'] = gdf_c
+
+    elif nivel_backend == "BARRIO" and territorio_final != "SIN DATOS":
+        dict_b = obtener_barrios_medellin()
+        feat_b = dict_b.get(territorio_final)
+        if feat_b:
+            st.session_state['aleph_poligono'] = _geojson_a_gdf({
+                "type": "FeatureCollection",
+                "features": [feat_b]
+            })
+        else:
+            st.session_state['aleph_poligono'] = None
     else:
         if 'aleph_poligono' in st.session_state:
             st.session_state['aleph_poligono'] = None

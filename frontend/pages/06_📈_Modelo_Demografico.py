@@ -53,7 +53,7 @@ nivel_backend = st.session_state['aleph_escala']
 st.sidebar.header("⚙️ Configuración del Modelo")
 
 # Filtro de Área (Urbano/Rural/Total)
-if nivel_backend == "CUENCA" or "Vereda" in nivel_backend:
+if nivel_backend in ["CUENCA", "VEREDA", "BARRIO", "COMUNA"]:
     area_global = "Total"
     st.sidebar.info(f"Escala hídrica/micro: Filtro de área fijado en 'Total'.")
 else:
@@ -76,6 +76,84 @@ territorio_puro = re.sub(r'\s*-\s*\(.*?\)', '', str(territorio_sel)).strip()
 
 # Calculador original (Directo a la matriz matemática)
 datos_modelo = calcular_poblacion_al_vuelo(territorio_puro, nivel_backend, area_global)
+
+# 🚀 ADAPTADOR TOP-DOWN PARA VEREDAS Y BARRIOS
+factor_escala_micro = None
+mpio_padre_micro = None
+area_padre_micro = "Total"
+
+if nivel_backend in ["VEREDA", "BARRIO", "COMUNA"] and (datos_modelo is None or 'hist_anios' not in datos_modelo):
+    mpio_padre_micro = st.session_state.get('aleph_municipio_padre', 'MEDELLIN')
+    area_padre_micro = "Rural" if nivel_backend == "VEREDA" else "Urbana"
+    datos_padre = calcular_poblacion_al_vuelo(mpio_padre_micro, "MUNICIPAL", area_padre_micro)
+    if datos_padre is None or 'hist_anios' not in datos_padre:
+        area_padre_micro = "Total"
+        datos_padre = calcular_poblacion_al_vuelo(mpio_padre_micro, "MUNICIPAL", "Total")
+
+    if datos_padre and 'hist_anios' in datos_padre:
+        pob_micro = 0.0
+        area_micro_m2 = 0.0
+
+        # A. Población y área real desde Supabase (veredas_poblacion)
+        if nivel_backend == "VEREDA":
+            try:
+                from urllib.parse import quote
+                url_sb = st.secrets.get("SUPABASE_URL") or st.secrets.get("supabase", {}).get("SUPABASE_URL")
+                key_sb = st.secrets.get("SUPABASE_KEY") or st.secrets.get("supabase", {}).get("SUPABASE_KEY")
+                ver_exacta = st.session_state.get('aleph_vereda_exacta', '')
+                if url_sb and key_sb and ver_exacta:
+                    headers = {"apikey": key_sb, "Authorization": f"Bearer {key_sb}"}
+                    url_vp = (
+                        f"{url_sb}/rest/v1/veredas_poblacion"
+                        f"?select=poblacion_hab,extension_ha"
+                        f"&municipio=ilike.{quote(str(mpio_padre_micro))}"
+                        f"&vereda=ilike.{quote(str(ver_exacta))}&limit=1"
+                    )
+                    r_vp = requests.get(url_vp, headers=headers, timeout=10)
+                    if r_vp.status_code == 200 and r_vp.json():
+                        reg = r_vp.json()[0]
+                        pob_micro = float(reg.get('poblacion_hab') or 0.0)
+                        area_micro_m2 = float(reg.get('extension_ha') or 0.0) * 10_000.0
+            except Exception:
+                pass
+
+        # B. Población y área desde el polígono activo (Barrios o respaldo de Veredas)
+        gdf_act = st.session_state.get('aleph_poligono')
+        if gdf_act is not None and hasattr(gdf_act, 'empty') and not gdf_act.empty:
+            if area_micro_m2 <= 0:
+                try:
+                    area_micro_m2 = float(gdf_act.to_crs(epsg=3116).area.sum())
+                except Exception:
+                    area_micro_m2 = 0.0
+            if pob_micro <= 0:
+                for col_p in gdf_act.columns:
+                    if any(k in col_p.lower() for k in ['pob', 'hab', 'total']):
+                        val_p = pd.to_numeric(gdf_act[col_p].iloc[0], errors='coerce')
+                        if pd.notna(val_p) and val_p > 0:
+                            pob_micro = float(val_p)
+                            break
+
+        # C. Escalamiento Top-Down de la serie histórica y pirámide del municipio padre
+        anios_p = datos_padre['hist_anios']
+        pobs_p = datos_padre['hist_pob']
+        idx_ref = anios_p.index(2024) if 2024 in anios_p else (len(anios_p) - 1)
+        pob_padre_ref = float(pobs_p[idx_ref]) if pobs_p else 1.0
+
+        # Si el barrio/vereda no trae dato censal directo, estimamos una fracción base mínima
+        if pob_micro <= 0:
+            pob_micro = pob_padre_ref * (0.004 if nivel_backend == "BARRIO" else 0.02)
+
+        factor_escala_micro = pob_micro / max(1.0, pob_padre_ref)
+
+        df_ed_esc = datos_padre['df_edades'].copy()
+        for c_ed in datos_padre['cols_hombres'] + datos_padre['cols_mujeres']:
+            df_ed_esc[c_ed] = df_ed_esc[c_ed] * factor_escala_micro
+
+        datos_modelo = dict(datos_padre)
+        datos_modelo['hist_pob'] = [round(p * factor_escala_micro, 1) for p in pobs_p]
+        datos_modelo['df_edades'] = df_ed_esc
+        datos_modelo['total_actual'] = int(round(pob_micro))
+        datos_modelo['area_geo'] = area_micro_m2
 
 # ==========================================
 # 📊 PESTAÑAS DE LA INTERFAZ
@@ -633,7 +711,15 @@ with tab_modelos:
             st.markdown(f"**Proyección Comparativa: {año_comp}**")
             
             try:
-                datos_comp = calcular_poblacion_al_vuelo(territorio_puro, nivel_backend, area_global, anio_especifico=año_comp)
+                if factor_escala_micro is not None and mpio_padre_micro:
+                    datos_comp = calcular_poblacion_al_vuelo(mpio_padre_micro, "MUNICIPAL", area_padre_micro, anio_especifico=año_comp)
+                    if datos_comp is not None and not datos_comp.empty:
+                        datos_comp = datos_comp.copy()
+                        for c_ed in datos_modelo['cols_hombres'] + datos_modelo['cols_mujeres']:
+                            if c_ed in datos_comp.columns:
+                                datos_comp[c_ed] = datos_comp[c_ed] * factor_escala_micro
+                else:
+                    datos_comp = calcular_poblacion_al_vuelo(territorio_puro, nivel_backend, area_global, anio_especifico=año_comp)
                 if datos_comp is None or datos_comp.empty:
                     st.warning(f"No hay datos de proyección matemática disponibles para el año {año_comp}.")
                     st.stop()
@@ -668,6 +754,21 @@ with tab_modelos:
 # ---------------------------------------------------------
 # PESTAÑA 3: GEOMETRÍA DASIMÉTRICA (V2.0 FASTAPI)
 # ---------------------------------------------------------
+def obtener_geometria_micro_local():
+    """Construye el mismo formato de respuesta de FastAPI usando el polígono vivo de El Aleph."""
+    gdf_m = st.session_state.get('aleph_poligono')
+    if gdf_m is None or not hasattr(gdf_m, 'empty') or gdf_m.empty:
+        return None
+    gj = json.loads(gdf_m.to_json())
+    mpio_p = st.session_state.get('aleph_municipio_padre', 'MEDELLIN')
+    for f in gj.get("features", []):
+        props = f.setdefault("properties", {})
+        props["Sector / Vereda"] = str(territorio_sel)
+        props["Municipio"] = str(mpio_p)
+        props["Tipo de Asentamiento"] = "BARRIO" if nivel_backend == "BARRIO" else "VEREDA"
+        props["Comuna"] = "Medellín" if nivel_backend == "BARRIO" else "No Aplica"
+    c = gdf_m.geometry.unary_union.centroid
+    return {"geojson": gj, "centro": {"lat": float(c.y), "lon": float(c.x)}}
 
 with tab_mapas:
     st.subheader(f"🗺️ Topología Activa: {territorio_sel}")
@@ -683,11 +784,22 @@ with tab_mapas:
     if st.button("🗺️ Renderizar Mapa de Calor Topológico", type="primary"):
         payload_map = {"territorio": territorio_sel, "nivel": nivel_backend, "anio_destino": año_sel}
         try:
-            with st.spinner("Bisturí Espacial extrayendo polígonos desde PostGIS..."):
-                resp_map = requests.post("https://sihcli-poter-v2-0.onrender.com/api/demografia/mapa", json=payload_map, timeout=240)
-                
-            if resp_map.status_code == 200:
-                datos_m = resp_map.json()
+            datos_m = None
+            if nivel_backend in ["VEREDA", "BARRIO", "COMUNA"]:
+                datos_m = obtener_geometria_micro_local()
+                if not datos_m:
+                    st.warning("⚠️ No se encontró el polígono activo en El Aleph.")
+            else:
+                with st.spinner("Bisturí Espacial extrayendo polígonos desde PostGIS..."):
+                    resp_map = requests.post("https://sihcli-poter-v2-0.onrender.com/api/demografia/mapa", json=payload_map, timeout=240)
+                if resp_map.status_code == 200:
+                    datos_m = resp_map.json()
+                elif resp_map.status_code == 404:
+                    st.warning(f"⚠️ El visor web rechazó cargar {territorio_sel}: {resp_map.json().get('detail', 'No encontrado en PostGIS')}")
+                else:
+                    st.error(f"Error cargando mapa: {resp_map.text}")
+
+            if datos_m:
                 features = datos_m["geojson"].get("features", [])
                 
                 if not features:
@@ -862,17 +974,13 @@ with tab_mapas:
                         labels={"Color_Densidad_Log": "Log10(Hab/km²)", "Población": "Habitantes"},
                         mapbox_style="open-street-map", # Evita el cartel "API KEY REQUIRED" de Carto
                         center={"lat": datos_m["centro"]["lat"], "lon": datos_m["centro"]["lon"]},
-                        zoom=11 if nivel_backend in ["MUNICIPAL", "CAR"] else 7,
+                        zoom=14 if nivel_backend in ["VEREDA", "BARRIO"] else (13 if nivel_backend == "COMUNA" else (11 if nivel_backend in ["MUNICIPAL", "CAR"] else 7)),
                         opacity=0.78
                     )
                     fig_m.update_traces(marker_line_width=0.3, marker_line_color='rgba(255,255,255,0.25)')
                     fig_m.update_layout(margin={"r":0,"t":50,"l":0,"b":0}, height=650, title=f"Distribución Dasimétrica ({filtro.title()}) - Total: {df_mapa['Población'].sum():,.0f} hab.")
                     st.plotly_chart(fig_m, width="stretch")
 
-            elif resp_map.status_code == 404:
-                st.warning(f"⚠️ El visor web rechazó cargar {territorio_sel}: {resp_map.json().get('detail', 'No encontrado en PostGIS')}")
-            else:
-                st.error(f"Error cargando mapa: {resp_map.text}")
         except Exception as e:
             st.error(f"El backend FastAPI no está respondiendo. Detalle: {e}")
 
@@ -896,10 +1004,15 @@ with tab_dinamica:
                 import plotly.express as px
                 import pandas as pd
                 
-                resp_map = requests.post("https://sihcli-poter-v2-0.onrender.com/api/demografia/mapa", json=payload_map, timeout=240)
+                datos_m = None
+                if nivel_backend in ["VEREDA", "BARRIO"]:
+                    datos_m = obtener_geometria_micro_local()
+                else:
+                    resp_map = requests.post("https://sihcli-poter-v2-0.onrender.com/api/demografia/mapa", json=payload_map, timeout=240)
+                    if resp_map.status_code == 200:
+                        datos_m = resp_map.json()
 
-                if resp_map.status_code == 200:
-                    datos_m = resp_map.json()
+                if datos_m:
                     features = datos_m["geojson"].get("features", [])
                     
                     # 1. Identificar municipios únicos presentes en el mapa actual
@@ -991,7 +1104,8 @@ with tab_dinamica:
                         hover_data={"id": False, "Estado": False, "Municipio Matriz": True, "Crecimiento (%)": True},
                         mapbox_style="open-street-map", # 🚀 FIX: Forzar motor libre OSM
                         center={"lat": datos_m["centro"]["lat"], "lon": datos_m["centro"]["lon"]},
-                        zoom=9 if nivel_backend == "MUNICIPAL" else 7, opacity=0.75
+                        zoom=14 if nivel_backend in ["VEREDA", "BARRIO"] else (13 if nivel_backend == "COMUNA" else (9 if nivel_backend == "MUNICIPAL" else 7)),
+                        opacity=0.75
                     )
                     fig_t.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=600)
                     st.plotly_chart(fig_t, width="stretch")

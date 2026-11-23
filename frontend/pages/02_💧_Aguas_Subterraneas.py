@@ -825,12 +825,45 @@ if gdf_zona is not None:
         if st.button("🔄 Recargar Mapa Contexto", key="btn_ctx_uniq"): st.rerun()
         
         try:
-            pad = 0.05
-            min_lat, max_lat = df_puntos['latitud'].min(), df_puntos['latitud'].max()
-            min_lon, max_lon = df_puntos['longitud'].min(), df_puntos['longitud'].max()
-            
-            m = folium.Map(location=[(min_lat+max_lat)/2, (min_lon+max_lon)/2], zoom_start=11, tiles="OpenStreetMap")
-            m.fit_bounds([[min_lat-pad, min_lon-pad], [max_lat+pad, max_lon+pad]])
+            pad = 0.02
+            if gdf_limite_original is not None and not gdf_limite_original.empty:
+                gdf_lim_4326 = gdf_limite_original.to_crs(epsg=4326)
+                min_lon, min_lat, max_lon, max_lat = gdf_lim_4326.total_bounds
+            else:
+                df_p_ok = df_puntos[
+                    df_puntos['latitud'].between(-5, 15) & df_puntos['longitud'].between(-82, -66)
+                ]
+                if not df_p_ok.empty:
+                    min_lat, max_lat = df_p_ok['latitud'].min(), df_p_ok['latitud'].max()
+                    min_lon, max_lon = df_p_ok['longitud'].min(), df_p_ok['longitud'].max()
+                else:
+                    min_lat, max_lat, min_lon, max_lon = 6.15, 6.35, -75.65, -75.45
+
+            span = max(max_lat - min_lat, max_lon - min_lon)
+            if span < 0.02: zoom_calc = 15
+            elif span < 0.08: zoom_calc = 13
+            elif span < 0.25: zoom_calc = 11
+            elif span < 1.0: zoom_calc = 9
+            else: zoom_calc = 8
+
+            m = folium.Map(
+                location=[(min_lat + max_lat) / 2, (min_lon + max_lon) / 2],
+                zoom_start=zoom_calc,
+                tiles="OpenStreetMap"
+            )
+
+            # Dibujar el polígono exacto del territorio (Barrio / Vereda / Municipio / Cuenca)
+            if gdf_limite_original is not None and not gdf_limite_original.empty:
+                folium.GeoJson(
+                    gdf_limite_original.to_crs(epsg=4326),
+                    name=f"Límite: {nombre_zona}",
+                    style_function=lambda x: {
+                        'fillColor': '#e74c3c',
+                        'color': '#c0392b',
+                        'weight': 3,
+                        'fillOpacity': 0.12
+                    }
+                ).add_to(m)
 
             st.markdown("<style>.leaflet-tooltip {white-space: normal !important; max-width: 300px;}</style>", unsafe_allow_html=True)
 

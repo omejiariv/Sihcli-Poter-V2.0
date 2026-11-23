@@ -792,8 +792,8 @@ with tab4:
     # Ecuaciones para mostrar en el Dashboard
     coef_v = vol_max_m3 / (h_max_efectiva**3) if h_max_efectiva > 0 else 0
     coef_a = area_max_m2 / (h_max_efectiva**2) if h_max_efectiva > 0 else 0
-    eq_cav_vol = f"V(h) = {coef_v:.1f}·h³"
-    eq_cav_area = f"A(h) = {coef_a:.1f}·h²"
+    eq_cav_vol = f"{coef_v:.1f}·h³"
+    eq_cav_area = f"{coef_a:.1f}·h²"
 
     area_dinamica_ha = calcular_area_ha(cota_actual)
     
@@ -961,7 +961,7 @@ with tab4:
     k1, k2, k_piscina, k3, k4, k5, k6, k7 = st.columns(8)
     k1.metric("💧 Evap. Neta", f"{evap_mitigada_dia:.2f} mm/d", f"Base: {evap_dia:.2f}" if factor_mit > 0 else None, delta_color="inverse")
     k2.metric("📉 Pérdida Vol.", f"{perdida_vol_dia:,.0f} m³/d", "Diario", delta_color="off")
-    k_piscina.metric("🏊‍♂ Escala Física", f"{piscinas_dia:,.1f} Piscinas/d", "Olímpicas", delta_color="off")
+    k_piscina.metric("🏊‍♂ Escala Física", f"{piscinas_dia:,.1f}", "Pisc. Olímp/día (2500m³)", delta_color="off")
     k3.metric("🛡️ Agua Salvada", f"{vol_salvado_dia:,.0f} m³/d", f"{(factor_mit*100):.0f}% global" if factor_mit > 0 else "Sin mitigar")
     k4.metric("📦 Volumen Útil", f"{volumen_util_m3/1e6:,.2f} Mm³", f"Muerto: {volumen_muerto_operativo_m3/1e6:,.2f} Mm³", delta_color="off")
     k5.metric("📐 Área Dinámica", f"{area_dinamica_ha:,.0f} ha", f"Cota XM: {cota_actual:.0f}m", delta_color="off")
@@ -1008,7 +1008,7 @@ with tab4:
     )
     d_fin_suds.metric(
         "💰 Ventaja vs. SUDS",
-        f"{factor_ventaja_fin:,.1f}x Menor Costo",
+        f"{factor_ventaja_fin:,.1f}x <Costo",
         f"CAPEX ${capex_proy_mcop:,.0f}M vs ${costo_equiv_suds_mcop:,.0f}M",
         delta_color="normal",
         help=(
@@ -1239,7 +1239,15 @@ with tab4:
 
     with col_der:
         st.markdown("#### 2. Radiografía Regional de Pérdidas")
-        tipo_grafico = st.radio("Métrica de Análisis", ["Pérdidas Absolutas (m³/día)", "Impacto Relativo (% del Volumen Útil/día)"], horizontal=True)
+        tipo_grafico = st.radio(
+            "Métrica de Análisis",
+            [
+                "Pérdidas Absolutas (m³/día)",
+                "Impacto Relativo (% del Volumen Útil/día)",
+                f"💸 Lucro Cesante (M COP / {escala_temporal})"
+            ],
+            horizontal=True
+        )
         
         if not df_embalses.empty:
             nombres, valores = [], []
@@ -1257,15 +1265,31 @@ with tab4:
                 nombres.append(e_nom)
                 if "Absolutas" in tipo_grafico:
                     valores.append(e_perdida)
-                else:
+                elif "Relativo" in tipo_grafico:
                     impacto_pct = (e_perdida / (e_vol * 1_000_000)) * 100
                     valores.append(impacto_pct)
+                else:
+                    # Lucro Cesante por embalse según su perfil (Acueducto / Energía / Mixto)
+                    _, e_fc, e_pct_agua = PERFIL_EMBALSES.get(e_nom, ("Mixto", 1.00, 50))
+                    e_vol_escala = e_perdida * dias_escala
+                    e_v_agua = e_vol_escala * (e_pct_agua / 100.0)
+                    e_v_ener = e_vol_escala * ((100 - e_pct_agua) / 100.0)
+                    lucro_mcop = ((e_v_agua * tarifa_agua_cop) + (e_v_ener * e_fc * precio_energia_cop)) / 1e6
+                    valores.append(lucro_mcop)
                 
-            eje_x_title = 'Pérdida (m³)' if "Absolutas" in tipo_grafico else 'Pérdida (% Vol. Útil)'
+            if "Absolutas" in tipo_grafico:
+                eje_x_title, formato_texto, escala_color = 'Pérdida (m³/día)', '.2s', 'Reds'
+            elif "Relativo" in tipo_grafico:
+                eje_x_title, formato_texto, escala_color = 'Pérdida (% Vol. Útil)', '.3f', 'Reds'
+            else:
+                eje_x_title, formato_texto, escala_color = f'Lucro Cesante (M COP / {escala_temporal})', ',.0f', 'OrRd'
+
             df_reg = pd.DataFrame({'Embalse': nombres, eje_x_title: valores}).sort_values(eje_x_title, ascending=True)
             
-            formato_texto = '.2s' if "Absolutas" in tipo_grafico else '.3f'
-            fig_bar = px.bar(df_reg, x=eje_x_title, y='Embalse', orientation='h', text_auto=formato_texto, color=eje_x_title, color_continuous_scale='Reds')
+            fig_bar = px.bar(
+                df_reg, x=eje_x_title, y='Embalse', orientation='h',
+                text_auto=formato_texto, color=eje_x_title, color_continuous_scale=escala_color
+            )
             fig_bar.update_layout(margin=dict(t=10, b=0, l=0, r=0), height=310, coloraxis_showscale=False)
             st.plotly_chart(fig_bar, width="stretch")
         else:
@@ -1449,11 +1473,11 @@ with tab5:
                                     secondary_y=True
                                 )
                                 
-                                # Configuración de Ejes y Leyendas
+                                # Configuración de Ejes y Leyendas (con margen limpio para evitar choques)
                                 fig_xm.update_layout(
                                     title=f"Evolución del Volumen y Cota Operativa: {embalse_sel}",
-                                    height=450, margin=dict(t=40, b=0, l=0, r=0),
-                                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                                    height=470, margin=dict(t=85, b=10, l=0, r=0),
+                                    legend=dict(orientation="h", yanchor="bottom", y=1.08, xanchor="right", x=1)
                                 )
                                 fig_xm.update_yaxes(title_text="Volumen Calculado (m³)", secondary_y=False)
                                 fig_xm.update_yaxes(title_text="Cota Equivalente (msnm)", secondary_y=True)
@@ -1477,16 +1501,30 @@ with tab5:
                                     type="date"
                                 )
                                 
-                                # Dibujar Líneas de Referencia (Alineadas al Eje Primario/Secundario)
-                                if vol_regla_segura > 0:
-                                    fig_xm.add_hline(y=vol_regla_segura, line_dash="dash", line_color="#e74c3c", 
-                                                     annotation_text=f"Regla Segura", 
-                                                     annotation_position="bottom right", secondary_y=False)
-                                    fig_xm.add_hline(y=cota_min, line_color="rgba(0,0,0,0)", secondary_y=True) # Sincronizador de eje
-                                if vol_captacion is not None:
-                                    fig_xm.add_hline(y=vol_captacion, line_dash="dot", line_color="#f39c12", 
-                                                     annotation_text=f"Captación", 
-                                                     annotation_position="top left", secondary_y=False)
+                                # Líneas de Referencia directamente sobre el eje de Cotas (secondary_y=True)
+                                x_extremos = [df_filtrado[col_date].min(), df_filtrado[col_date].max()]
+                                if cota_min > 0:
+                                    fig_xm.add_trace(
+                                        go.Scatter(
+                                            x=x_extremos,
+                                            y=[cota_min, cota_min],
+                                            mode="lines",
+                                            name=f"Regla Segura / Mín. Op. ({cota_min:,.0f} msnm)",
+                                            line=dict(color="#e74c3c", width=2, dash="dash")
+                                        ),
+                                        secondary_y=True
+                                    )
+                                if cota_cap is not None and cota_cap > 0:
+                                    fig_xm.add_trace(
+                                        go.Scatter(
+                                            x=x_extremos,
+                                            y=[cota_cap, cota_cap],
+                                            mode="lines",
+                                            name=f"Cota de Captación ({cota_cap:,.0f} msnm)",
+                                            line=dict(color="#f39c12", width=2, dash="dot")
+                                        ),
+                                        secondary_y=True
+                                    )
 
                                 st.plotly_chart(fig_xm, width="stretch")
                                 
