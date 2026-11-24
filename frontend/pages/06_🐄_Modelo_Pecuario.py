@@ -234,20 +234,39 @@ if 'df_matriz_pecuaria' in st.session_state:
 
                 if not df_padre.empty:
                     # Calcular proporción de área real (Vereda/Corregimiento vs Municipio Padre)
+                    # Calcular proporción de área real (Vereda/Corregimiento vs Municipio Padre)
                     factor_area = 0.03
                     try:
+                        def _area_m2_segura(gdf_in):
+                            g = gdf_in.copy()
+                            if g.crs is None:
+                                g = g.set_crs(epsg=4326)
+                            try:
+                                return float(g.to_crs(epsg=3116).geometry.area.sum())
+                            except Exception:
+                                return float(g.geometry.area.sum()) * (111132.0 ** 2)
+
                         gdf_act = st.session_state.get('aleph_poligono')
-                        if gdf_act is not None and not gdf_act.empty:
-                            area_micro_m2 = float(gdf_act.to_crs(epsg=3116).area.sum())
+                        if gdf_act is not None and hasattr(gdf_act, 'empty') and not gdf_act.empty:
+                            area_micro_m2 = _area_m2_segura(gdf_act)
                             gdf_m_all = cargar_capa_espacial_cache("SELECT * FROM municipios", geom_col="geometry")
                             if gdf_m_all is not None and not gdf_m_all.empty:
-                                col_m_tmp = next((c for c in ['nombre_municipio', 'mpio_cnmbr', 'MPIO_CNMBR', 'municipio'] if c in gdf_m_all.columns), 'municipio')
-                                mask_mp = gdf_m_all[col_m_tmp].apply(limpiar_fuerte) == limpiar_fuerte(mpio_puro)
-                                if mask_mp.any():
-                                    area_mpio_m2 = float(gdf_m_all[mask_mp].to_crs(epsg=3116).area.sum())
-                                    if area_mpio_m2 > 0:
-                                        factor_area = min(1.0, max(0.001, area_micro_m2 / area_mpio_m2))
-                    except Exception:
+                                if 'dpto_cnmbr' in gdf_m_all.columns:
+                                    gdf_m_ant = gdf_m_all[gdf_m_all['dpto_cnmbr'].astype(str).str.contains('ANTIOQUIA', case=False, na=False)]
+                                    if not gdf_m_ant.empty:
+                                        gdf_m_all = gdf_m_ant
+                                col_m_tmp = next(
+                                    (c for c in gdf_m_all.columns if c.lower() in ['nombre_municipio', 'mpio_cnmbr', 'municipio', 'nombre']),
+                                    None
+                                )
+                                if col_m_tmp:
+                                    mask_mp = gdf_m_all[col_m_tmp].apply(limpiar_fuerte) == limpiar_fuerte(mpio_puro)
+                                    if mask_mp.any():
+                                        area_mpio_m2 = _area_m2_segura(gdf_m_all[mask_mp])
+                                        if area_mpio_m2 > 0 and area_micro_m2 > 0:
+                                            factor_area = min(1.0, max(0.0005, area_micro_m2 / area_mpio_m2))
+                    except Exception as e_area:
+                        st.caption(f"⚠️ Detalle cálculo de área: {e_area}")
                         pass
 
                     df_filtrado = df_padre.copy()
