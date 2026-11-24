@@ -1005,7 +1005,7 @@ with tab_dinamica:
                 import pandas as pd
                 
                 datos_m = None
-                if nivel_backend in ["VEREDA", "BARRIO"]:
+                if nivel_backend in ["VEREDA", "BARRIO", "COMUNA"]:
                     datos_m = obtener_geometria_micro_local()
                 else:
                     resp_map = requests.post("https://sihcli-poter-v2-0.onrender.com/api/demografia/mapa", json=payload_map, timeout=240)
