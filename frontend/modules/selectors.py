@@ -301,7 +301,9 @@ def renderizar_menu_navegacion(pagina_actual):
                     mpio = str(props.get("mpio_cnmbr") or "").upper()
                     tipo = str(props.get("tipo") or "").upper()
                     nom_barrio = str(props.get("bar_ccnmbr") or props.get("nombre") or "").strip()
-                    nom_comu = str(props.get("comu_nmbre") or "").strip()
+                    nom_comu_raw = str(props.get("comu_nmbre") or "").strip()
+                    # Unifica polígonos fronterizos (ej. "Altavista - San Cristobal" -> "Altavista")
+                    nom_comu = nom_comu_raw.split(" - ")[0].strip() if " - " in nom_comu_raw else nom_comu_raw
 
                     if tipo == "BARRIO" and nom_barrio:
                         barrios[nom_barrio] = feat
