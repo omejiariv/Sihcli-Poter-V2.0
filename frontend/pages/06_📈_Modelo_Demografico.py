@@ -77,6 +77,64 @@ territorio_puro = re.sub(r'\s*-\s*\(.*?\)', '', str(territorio_sel)).strip()
 # Calculador original (Directo a la matriz matemática)
 datos_modelo = calcular_poblacion_al_vuelo(territorio_puro, nivel_backend, area_global)
 
+@st.cache_data(ttl=86400, show_spinner=False, max_entries=1)
+def cargar_dane_comunas_medellin():
+    """Lee PoblacionComunasCorregimientosMedellin.csv (DANE 2018-2040) desde Supabase."""
+    import unicodedata, re
+    url = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/sihcli_maestros/PoblacionComunasCorregimientosMedellin.csv"
+    try:
+        df = pd.read_csv(url, sep=';', encoding='utf-8-sig', dtype=str)
+    except Exception:
+        return pd.DataFrame()
+    if df.empty:
+        return df
+
+    def _norm_c(t):
+        t = ''.join(c for c in unicodedata.normalize('NFD', str(t).upper().strip()) if unicodedata.category(c) != 'Mn')
+        t = re.sub(r'\s+[RU]$', '', t).strip()  # Une "AltaVista R" + "Altavista U" -> "ALTAVISTA"
+        alias = {
+            "SAN ANTONIO": "SAN ANTONIO DE PRADO",
+            "SAN SEBASTIAN DE PALMITAS": "PALMITAS",
+            "LAURELES ESTADIO": "LAURELES"
+        }
+        return alias.get(t, t)
+
+    df['comuna_norm'] = df['Comuna Corregimiento'].apply(_norm_c)
+    df['Anio'] = pd.to_numeric(df['Año'], errors='coerce').fillna(0).astype(int)
+
+    cols_h = [c for c in df.columns if c.endswith('-H')]
+    cols_m = [c for c in df.columns if c.endswith('-M')]
+    for c in cols_h + cols_m:
+        df[c] = pd.to_numeric(df[c].str.replace('.', '', regex=False).str.replace(',', '', regex=False), errors='coerce').fillna(0)
+
+    df['Total'] = df[cols_h + cols_m].sum(axis=1)
+    # Sumar R + U cuando aplique (corregimientos)
+    return df.groupby(['comuna_norm', 'Anio'], as_index=False)['Total'].sum()
+
+
+@st.cache_data(ttl=86400, show_spinner=False, max_entries=1)
+def cargar_dane_barrios_medellin():
+    """Lee ProyeccionesPoblacionBarriosMedellinSexoEdad.csv (DANE 2018-2030) desde Supabase."""
+    import unicodedata, re
+    url = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/sihcli_maestros/ProyeccionesPoblacionBarriosMedellinSexoEdad.csv"
+    try:
+        df = pd.read_csv(url, sep=';', encoding='latin1', dtype=str)
+    except Exception:
+        return pd.DataFrame()
+    if df.empty:
+        return df
+
+    def _norm_b(t):
+        t = ''.join(c for c in unicodedata.normalize('NFD', str(t).upper().strip()) if unicodedata.category(c) != 'Mn')
+        return re.sub(r'[^A-Z0-9]', '', t)
+
+    df['barrio_norm'] = df['Nombre_Barrio'].apply(_norm_b)
+    cols_anios = [c for c in df.columns if c.isdigit() and 2018 <= int(c) <= 2040]
+    for c in cols_anios:
+        df[c] = pd.to_numeric(df[c].str.replace('.', '', regex=False).str.replace(',', '', regex=False), errors='coerce').fillna(0)
+
+    return df.groupby('barrio_norm', as_index=False)[cols_anios].sum()
+
 # 🚀 ADAPTADOR TOP-DOWN PARA VEREDAS Y BARRIOS
 factor_escala_micro = None
 mpio_padre_micro = None
@@ -117,6 +175,35 @@ if nivel_backend in ["VEREDA", "BARRIO", "COMUNA"] and (datos_modelo is None or 
             except Exception:
                 pass
 
+        # A2. Población OFICIAL DANE para Comunas, Corregimientos y Barrios de Medellín
+        serie_oficial_anios, serie_oficial_pobs = None, None
+        if nivel_backend == "COMUNA":
+            df_c_dane = cargar_dane_comunas_medellin()
+            if not df_c_dane.empty:
+                import unicodedata, re
+                t_norm = ''.join(c for c in unicodedata.normalize('NFD', str(territorio_sel).upper().strip()) if unicodedata.category(c) != 'Mn')
+                if t_norm == "SAN SEBASTIAN DE PALMITAS": t_norm = "PALMITAS"
+                if t_norm == "LAURELES ESTADIO": t_norm = "LAURELES"
+                sub_c = df_c_dane[df_c_dane['comuna_norm'] == t_norm].sort_values('Anio')
+                if not sub_c.empty:
+                    serie_oficial_anios = sub_c['Anio'].astype(int).tolist()
+                    serie_oficial_pobs = sub_c['Total'].astype(float).tolist()
+                    idx_24 = serie_oficial_anios.index(2024) if 2024 in serie_oficial_anios else -1
+                    pob_micro = float(serie_oficial_pobs[idx_24])
+
+        elif nivel_backend == "BARRIO":
+            df_b_dane = cargar_dane_barrios_medellin()
+            if not df_b_dane.empty:
+                import unicodedata, re
+                b_norm = re.sub(r'[^A-Z0-9]', '', ''.join(c for c in unicodedata.normalize('NFD', str(territorio_sel).upper().strip()) if unicodedata.category(c) != 'Mn'))
+                sub_b = df_b_dane[df_b_dane['barrio_norm'] == b_norm]
+                if not sub_b.empty:
+                    cols_a = sorted([c for c in sub_b.columns if c.isdigit()], key=int)
+                    serie_oficial_anios = [int(c) for c in cols_a]
+                    serie_oficial_pobs = [float(sub_b[c].iloc[0]) for c in cols_a]
+                    idx_24 = serie_oficial_anios.index(2024) if 2024 in serie_oficial_anios else -1
+                    pob_micro = float(serie_oficial_pobs[idx_24])
+
         # B. Población y área desde el polígono activo (Barrios o respaldo de Veredas)
         gdf_act = st.session_state.get('aleph_poligono')
         if gdf_act is not None and hasattr(gdf_act, 'empty') and not gdf_act.empty:
@@ -154,6 +241,10 @@ if nivel_backend in ["VEREDA", "BARRIO", "COMUNA"] and (datos_modelo is None or 
         datos_modelo['df_edades'] = df_ed_esc
         datos_modelo['total_actual'] = int(round(pob_micro))
         datos_modelo['area_geo'] = area_micro_m2
+
+        if serie_oficial_anios and serie_oficial_pobs:
+            datos_modelo['hist_anios'] = serie_oficial_anios
+            datos_modelo['hist_pob'] = [round(p, 1) for p in serie_oficial_pobs]        
 
 # ==========================================
 # 📊 PESTAÑAS DE LA INTERFAZ

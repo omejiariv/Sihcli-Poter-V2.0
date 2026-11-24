@@ -233,42 +233,49 @@ if 'df_matriz_pecuaria' in st.session_state:
                 df_padre = obtener_todas_las_especies(df_mun_mat, 'Firma_DB', firma_padre)
 
                 if not df_padre.empty:
-                    # Calcular proporción de área real (Vereda/Corregimiento vs Municipio Padre)
-                    # Calcular proporción de área real (Vereda/Corregimiento vs Municipio Padre)
-                    # Calcular proporción de área real (Vereda/Corregimiento vs Municipio Padre)
+
                     factor_area = 0.03
-                    try:
-                        gdf_act = st.session_state.get('aleph_poligono')
-                        area_micro_ha = 0.0
-                        if gdf_act is not None and hasattr(gdf_act, 'empty') and not gdf_act.empty:
+                    area_micro_ha = 0.0
+                    area_mpio_ha = 0.0
+
+                    # 1. Área de la Vereda o Corregimiento (en hectáreas)
+                    gdf_act = st.session_state.get('aleph_poligono')
+                    if gdf_act is not None and hasattr(gdf_act, 'empty') and not gdf_act.empty:
+                        try:
                             g_tmp = gdf_act.copy()
                             if g_tmp.crs is None:
                                 g_tmp = g_tmp.set_crs(epsg=4326)
                             area_micro_ha = float(g_tmp.to_crs(epsg=3116).geometry.area.sum()) / 10_000.0
+                        except Exception:
+                            # Respaldo métrico directo si falla pyproj
+                            area_micro_ha = float(gdf_act.geometry.area.sum()) * (111.132 ** 2) * 100.0
 
-                        area_mpio_ha = 0.0
-                        if area_micro_ha > 0:
-                            from sqlalchemy import text
-                            from modules.db_manager import get_engine
-                            q_area = text("""
-                                SELECT SUM(ST_Area(ST_Transform(ST_SetSRID(geometry, 4326), 3116))) / 10000.0
-                                FROM municipios
-                                WHERE UPPER(TRANSLATE(COALESCE(mpio_cnmbr, ''), 'ÁÉÍÓÚáéíóú', 'AEIOUaeiou')) = :mpio
-                            """)
-                            with get_engine().connect() as conn:
-                                res_a = conn.execute(q_area, {"mpio": mpio_puro.upper()}).scalar()
-                                if res_a:
-                                    area_mpio_ha = float(res_a)
+                    # 2. Área del Municipio Padre (en hectáreas)
+                    if area_micro_ha > 0:
+                        if "MEDELL" in mpio_puro.upper():
+                            area_mpio_ha = 38064.0  # Área oficial de Medellín (ha)
+                        else:
+                            try:
+                                from sqlalchemy import text
+                                from modules.db_manager import get_engine
+                                q_area = text("""
+                                    SELECT SUM(ST_Area(ST_Transform(ST_SetSRID(geometry, 4326), 3116))) / 10000.0
+                                    FROM municipios
+                                    WHERE UPPER(TRANSLATE(COALESCE(mpio_cnmbr, ''), 'ÁÉÍÓÚáéíóú', 'AEIOUaeiou')) = :mpio
+                                """)
+                                with get_engine().connect() as conn:
+                                    res_a = conn.execute(q_area, {"mpio": mpio_puro.upper()}).scalar()
+                                    if res_a:
+                                        area_mpio_ha = float(res_a)
+                            except Exception:
+                                pass
 
-                            # Respaldo exacto para Medellín (38,064 ha) si la tabla municipios usa otra columna
-                            if area_mpio_ha <= 0 and "MEDELL" in mpio_puro.upper():
-                                area_mpio_ha = 38064.0
-
-                            if area_mpio_ha > 0:
-                                factor_area = min(1.0, max(0.0005, area_micro_ha / area_mpio_ha))
-                    except Exception as e_area:
-                        st.caption(f"⚠️ Detalle cálculo de área: {e_area}")
-                        pass
+                        if area_mpio_ha > 0:
+                            factor_area = min(1.0, max(0.0005, area_micro_ha / area_mpio_ha))
+                        else:
+                            st.caption(f"🔎 Diagnóstico área: micro={area_micro_ha:.1f} ha | mpio={area_mpio_ha:.1f} ha")
+                    else:
+                        st.caption("🔎 Diagnóstico área: aleph_poligono llegó vacío a Modelo Pecuario.")
 
                     df_filtrado = df_padre.copy()
                     for col_esc in ['Poblacion_Base', 'Lin_m', 'Lin_b', 'Log_K']:
