@@ -49,3 +49,4 @@ geoalchemy2
 pydataxm
 fastapi
 uvicorn
+toml
