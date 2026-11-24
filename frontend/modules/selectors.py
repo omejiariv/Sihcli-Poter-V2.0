@@ -285,51 +285,43 @@ def renderizar_menu_navegacion(pagina_actual):
                 pass
             return None
 
-        @st.cache_data(ttl=86400, show_spinner=False)
-        def obtener_barrios_medellin():
-            """Extrae el catálogo de barrios de Medellín desde TerritorioMaestro (solo al seleccionarse)."""
+        @st.cache_data(ttl=86400, show_spinner=False, max_entries=1)
+        def obtener_catalogo_medellin():
+            """Descarga TerritorioMaestro una sola vez, extrae Medellín y libera RAM."""
+            import gc
             try:
                 url_tm = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
                 r = requests.get(url_tm, timeout=20)
                 if r.status_code != 200:
-                    return {}
-                barrios = {}
-                for feat in r.json().get("features", []):
-                    props = feat.get("properties", {})
-                    tipo = str(props.get("tipo", "")).upper()
-                    nom_barrio = str(props.get("bar_ccnmbr") or props.get("nombre") or "").strip()
-                    if tipo == "BARRIO" and nom_barrio:
-                        barrios[nom_barrio] = feat
-                return dict(sorted(barrios.items()))
-            except Exception:
-                return {}
-
-        @st.cache_data(ttl=86400, show_spinner=False)
-        def obtener_comunas_corregimientos_medellin():
-            """Extrae Comunas y Corregimientos de Medellín desde TerritorioMaestro."""
-            try:
-                url_tm = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/TerritorioMaestro.geojson"
-                r = requests.get(url_tm, timeout=20)
-                if r.status_code != 200:
-                    return {}
-                grupos = {}
-                for feat in r.json().get("features", []):
+                    return {}, {}
+                raw = r.json()
+                barrios, comunas = {}, {}
+                for feat in raw.get("features", []):
                     props = feat.get("properties", {})
                     mpio = str(props.get("mpio_cnmbr") or "").upper()
                     tipo = str(props.get("tipo") or "").upper()
+                    nom_barrio = str(props.get("bar_ccnmbr") or props.get("nombre") or "").strip()
                     nom_comu = str(props.get("comu_nmbre") or "").strip()
 
-                    # Caso 1: Polígono explícito de Comuna o Corregimiento
+                    if tipo == "BARRIO" and nom_barrio:
+                        barrios[nom_barrio] = feat
                     if any(k in tipo for k in ["COMUNA", "CORREGIMIENTO"]):
-                        clave = nom_comu or str(props.get("nombre") or props.get("bar_ccnmbr") or "").strip()
+                        clave = nom_comu or nom_barrio
                         if clave:
-                            grupos.setdefault(clave, []).append(feat)
-                    # Caso 2: Agrupación por comu_nmbre dentro de Medellín
+                            comunas.setdefault(clave, []).append(feat)
                     elif "MEDELL" in mpio and nom_comu and nom_comu.upper() not in ["NONE", "NAN", "NO APLICA", ""]:
-                        grupos.setdefault(nom_comu, []).append(feat)
-                return dict(sorted(grupos.items()))
+                        comunas.setdefault(nom_comu, []).append(feat)
+                del raw, r
+                gc.collect()
+                return dict(sorted(barrios.items())), dict(sorted(comunas.items()))
             except Exception:
-                return {}        
+                return {}, {}
+
+        def obtener_barrios_medellin():
+            return obtener_catalogo_medellin()[0]
+
+        def obtener_comunas_corregimientos_medellin():
+            return obtener_catalogo_medellin()[1]
 
         niveles = {
             "🏛️ Departamental": "DEPARTAMENTAL",

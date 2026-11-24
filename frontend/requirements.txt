@@ -50,3 +50,4 @@ pydataxm
 fastapi
 uvicorn
 toml
+pyarrow<25
