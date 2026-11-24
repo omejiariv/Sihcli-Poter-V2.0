@@ -209,7 +209,56 @@ if 'df_matriz_pecuaria' in st.session_state:
         if df_filtrado.empty and len(firma_buscada) > 3:
             df_filtrado = obtener_todas_las_especies(df_nivel, 'Firma_DB', firma_buscada[:-1])
 
-    if df_filtrado.empty:
+    # 🚀 ADAPTADOR TOP-DOWN PARA VEREDAS, CORREGIMIENTOS Y BARRIOS
+    es_zona_urbana_sin_ganado = False
+    if df_filtrado.empty and nivel_backend in ["VEREDA", "BARRIO", "COMUNA"]:
+        CORREGIMIENTOS_MED = {"ALTAVISTA", "PALMITAS", "SAN SEBASTIAN DE PALMITAS", "SAN CRISTOBAL", "SAN ANTONIO DE PRADO", "SANTA ELENA"}
+        terr_norm_check = ''.join(c for c in unicodedata.normalize('NFD', str(territorio_sel).upper()) if unicodedata.category(c) != 'Mn').strip()
+
+        if nivel_backend == "BARRIO" or (nivel_backend == "COMUNA" and terr_norm_check not in CORREGIMIENTOS_MED):
+            es_zona_urbana_sin_ganado = True
+            st.info(f"🏙️ **Zona Urbana ({territorio_sel}):** Sin inventario pecuario significativo (0 cabezas/aves).")
+            st.session_state['ica_bovinos_calc_met'] = 0.0
+            st.session_state['ica_porcinos_calc_met'] = 0.0
+            st.session_state['ica_aves_calc_met'] = 0.0
+        else:
+            mpio_padre = st.session_state.get('aleph_municipio_padre', 'MEDELLIN')
+            mpio_puro = ''.join(c for c in unicodedata.normalize('NFD', str(mpio_padre).upper()) if unicodedata.category(c) != 'Mn').strip()
+            mpio_puro = excepciones_antioquia.get(mpio_puro, mpio_puro)
+            firma_padre = crear_firma(mpio_puro)
+
+            df_mun_mat = df_mat[df_mat['Nivel'].str.upper().str.contains("MUNI", na=False)].copy()
+            if not df_mun_mat.empty:
+                df_mun_mat['Firma_DB'] = df_mun_mat['Territorio'].apply(crear_firma)
+                df_padre = obtener_todas_las_especies(df_mun_mat, 'Firma_DB', firma_padre)
+
+                if not df_padre.empty:
+                    # Calcular proporción de área real (Vereda/Corregimiento vs Municipio Padre)
+                    factor_area = 0.03
+                    try:
+                        gdf_act = st.session_state.get('aleph_poligono')
+                        if gdf_act is not None and not gdf_act.empty:
+                            area_micro_m2 = float(gdf_act.to_crs(epsg=3116).area.sum())
+                            gdf_m_all = cargar_capa_espacial_cache("SELECT * FROM municipios", geom_col="geometry")
+                            if gdf_m_all is not None and not gdf_m_all.empty:
+                                col_m_tmp = next((c for c in ['nombre_municipio', 'mpio_cnmbr', 'MPIO_CNMBR', 'municipio'] if c in gdf_m_all.columns), 'municipio')
+                                mask_mp = gdf_m_all[col_m_tmp].apply(limpiar_fuerte) == limpiar_fuerte(mpio_puro)
+                                if mask_mp.any():
+                                    area_mpio_m2 = float(gdf_m_all[mask_mp].to_crs(epsg=3116).area.sum())
+                                    if area_mpio_m2 > 0:
+                                        factor_area = min(1.0, max(0.001, area_micro_m2 / area_mpio_m2))
+                    except Exception:
+                        pass
+
+                    df_filtrado = df_padre.copy()
+                    for col_esc in ['Poblacion_Base', 'Lin_m', 'Lin_b', 'Log_K']:
+                        if col_esc in df_filtrado.columns:
+                            df_filtrado[col_esc] = pd.to_numeric(df_filtrado[col_esc], errors='coerce').fillna(0.0) * factor_area
+                    st.info(f"📐 **Estimación Top-Down activa:** Inventario escalado proporcionalmente desde **{mpio_padre}** (fracción territorial: **{factor_area*100:.2f}%** del área municipal).")
+
+    if es_zona_urbana_sin_ganado:
+        pass
+    elif df_filtrado.empty:
         llave_busqueda = generar_llave_maestra(nivel_backend, territorio_sel)
         st.warning(f"⚠️ No hay modelos entrenados para **{territorio_sel}**. Despliega el 'Entrenador de Modelos' abajo para forjarlo.")
     else:

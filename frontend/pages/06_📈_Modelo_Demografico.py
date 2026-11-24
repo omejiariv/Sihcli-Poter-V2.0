@@ -635,7 +635,7 @@ with tab_modelos:
     
     # 🔥 FIX: Definimos la escala aquí mismo para que Python sepa qué es 'es_escala_micro'
     nivel_norm = str(st.session_state.get('aleph_escala', '')).upper().strip()
-    es_escala_micro = "MUNICIPAL" in nivel_norm or "MUNICIPIO" in nivel_norm
+    es_escala_micro = nivel_norm in ["VEREDA", "BARRIO", "COMUNA"]
     
     if es_escala_micro and datos_modelo:
         pob_actual = datos_modelo.get('total_actual', 0)
