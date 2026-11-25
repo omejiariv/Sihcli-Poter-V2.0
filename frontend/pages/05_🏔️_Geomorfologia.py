@@ -1108,10 +1108,15 @@ if gdf_zona_seleccionada is not None:
                     m_pour.add_child(folium.LatLngPopup())
                     folium.LayerControl().add_to(m_pour)
                     
+                    if st.button("🔄 Centrar / Recargar Mapa", key="btn_reload_pour"):
+                        st.session_state['reload_pour'] = st.session_state.get('reload_pour', 0) + 1
+
+                    terr_key = str(st.session_state.get('aleph_lugar', 'default'))
                     mapa_clic = st_folium(
-                        m_pour, 
-                        height=550, 
-                        use_container_width=True, 
+                        m_pour,
+                        width=750,
+                        height=550,
+                        key=f"mapa_pour_{terr_key}_{st.session_state.get('reload_pour', 0)}",
                         returned_objects=["last_clicked"]
                     )
                     
