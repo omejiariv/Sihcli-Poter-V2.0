@@ -1549,10 +1549,11 @@ def main():
         
         with col_herramientas:
             st.markdown("**Opciones de Diseño**")
-            hc1, hc2, hc3 = st.columns(3)
+            hc1, hc2, hc3, hc4 = st.columns([1.2, 1.2, 0.8, 1.1])
             colorscale_sel = hc1.selectbox("🎨 Escala:", ["Viridis", "Turbo", "Plasma", "YlGnBu", "Spectral", "Inferno"])
             suavidad = hc2.slider("🌫️ Transparencia:", 0.0, 1.0, 0.65)
             mostrar_lineas = hc3.checkbox("📉 Líneas", value=True)
+            unificar_escala = hc4.checkbox("🔗 Unificar A=B", value=True, help="Usa el mismo rango de colores en ambos mapas para comparar años Niño vs. Niña sin distorsión visual.")
             
         with col_clinica:
             st.markdown("**Motor de Inteligencia**")
@@ -1780,7 +1781,7 @@ def main():
 
                 gdf_poligono_actual = obtener_poligono_territorio()
 
-                def crear_mapa_folium(df_data, metodo, map_tag):
+                def crear_mapa_folium(df_data, metodo, map_tag, vmin_fijo=None, vmax_fijo=None):
                     if df_data.empty or len(df_data) < 3:
                         return folium.Map(location=[6.25, -75.58], zoom_start=11), 0.0, 100.0
                         
@@ -1829,6 +1830,9 @@ def main():
                         vmin, vmax = float(np.min(vals)), float(np.max(vals))
                         if abs(vmax - vmin) < 1e-2:
                             vmax = vmin + 10.0
+
+                    if vmin_fijo is not None and vmax_fijo is not None:
+                        vmin, vmax = vmin_fijo, vmax_fijo        
                     
                     fig_m = plt.figure(figsize=(6, 6), dpi=150)
                     ax_m = fig_m.add_axes([0, 0, 1, 1])
@@ -1839,7 +1843,29 @@ def main():
                     niveles = np.linspace(vmin, vmax, 16)
                     ax_m.contourf(gx, gy, z, levels=niveles, cmap=cmap_mpl, alpha=suavidad, extend='both')
                     if mostrar_lineas:
-                        ax_m.contour(gx, gy, z, levels=niveles, colors='black', linewidths=0.55, alpha=0.8)
+                        import matplotlib.patheffects as pe
+                        cs = ax_m.contour(
+                            gx, gy, z,
+                            levels=niveles,
+                            colors='black',
+                            linewidths=0.65,
+                            alpha=0.85
+                        )
+                        etiquetas = ax_m.clabel(
+                            cs,
+                            levels=niveles[::2],
+                            inline=True,
+                            inline_spacing=4,
+                            fmt='%.0f mm',
+                            fontsize=7.5,
+                            colors='white'
+                        )
+                        for txt in etiquetas:
+                            txt.set_fontweight('bold')
+                            txt.set_path_effects([
+                                pe.Stroke(linewidth=2.0, foreground='#0f172a', alpha=0.85),
+                                pe.Normal()
+                            ])
                     
                     buf = io.BytesIO()
                     plt.savefig(buf, format='png', transparent=True)
@@ -1876,9 +1902,10 @@ def main():
                             name='Límite Territorial Seleccionado',
                             style_function=lambda x: {
                                 'fillColor': 'transparent',
-                                'color': '#0f172a',
+                                'color': '#ef4444',
                                 'weight': 3.0,
-                                'dashArray': '5, 3'
+                                'dashArray': '6, 6',
+                                'opacity': 0.95
                             }
                         ).add_to(m)
                         
@@ -1890,17 +1917,6 @@ def main():
                             tooltip=f"<b>{row['nombre']}</b> ({row['id_estacion']})<br>Lluvia: {row['valor']:.1f} mm"
                         ).add_to(station_group)
                     station_group.add_to(m)
-                    
-                    import branca.colormap as cm
-                    cmap_obj = plt.get_cmap(cmap_mpl)
-                    colores_hex = [mcolors.to_hex(cmap_obj(i)) for i in np.linspace(0, 1, 8)]
-                    colormap = cm.LinearColormap(
-                        colors=colores_hex,
-                        vmin=round(vmin, 1),
-                        vmax=round(vmax, 1),
-                        caption=f'Precipitación (mm) - {metodo.upper()}'
-                    )
-                    m.add_child(colormap)
                     
                     sync_and_css = f"""
                     <style>
@@ -1923,6 +1939,8 @@ def main():
                     (function() {{
                         var mapTag = "{map_tag}";
                         var isSyncing = false;
+                        var channel = ("BroadcastChannel" in window) ? new BroadcastChannel("sihcli_isoyetas_sync") : null;
+
                         function findLeafletMap() {{
                             for (var k in window) {{
                                 if (k.startsWith("map_") && window[k] && typeof window[k].getCenter === "function") {{
@@ -1931,34 +1949,39 @@ def main():
                             }}
                             return null;
                         }}
+
                         function setupSync() {{
                             var myMap = findLeafletMap();
                             if (!myMap) {{
-                                setTimeout(setupSync, 250);
+                                setTimeout(setupSync, 200);
                                 return;
                             }}
+
                             function broadcastView() {{
-                                if (isSyncing) return;
+                                if (isSyncing || !channel) return;
                                 var c = myMap.getCenter();
                                 var z = myMap.getZoom();
-                                var msg = {{ type: "SIHCLI_MAP_SYNC", source: mapTag, lat: c.lat, lng: c.lng, zoom: z }};
-                                try {{
-                                    for (var i = 0; i < window.parent.frames.length; i++) {{
-                                        window.parent.frames[i].postMessage(msg, "*");
-                                    }}
-                                }} catch (e) {{}}
+                                channel.postMessage({{
+                                    source: mapTag,
+                                    lat: c.lat,
+                                    lng: c.lng,
+                                    zoom: z
+                                }});
                             }}
+
                             myMap.on("moveend", broadcastView);
                             myMap.on("zoomend", broadcastView);
 
-                            window.addEventListener("message", function(event) {{
-                                var data = event.data;
-                                if (data && data.type === "SIHCLI_MAP_SYNC" && data.source !== mapTag) {{
-                                    isSyncing = true;
-                                    myMap.setView([data.lat, data.lng], data.zoom, {{ animate: false }});
-                                    setTimeout(function() {{ isSyncing = false; }}, 120);
-                                }}
-                            }});
+                            if (channel) {{
+                                channel.onmessage = function(event) {{
+                                    var data = event.data;
+                                    if (data && data.source !== mapTag) {{
+                                        isSyncing = true;
+                                        myMap.setView([data.lat, data.lng], data.zoom, {{ animate: false }});
+                                        setTimeout(function() {{ isSyncing = false; }}, 150);
+                                    }}
+                                }};
+                            }}
                         }}
                         setupSync();
                     }})();
@@ -1969,13 +1992,20 @@ def main():
                     folium.LayerControl().add_to(m)
                     return m, vmin, vmax
 
+                vmin_glob, vmax_glob = None, None
+                if unificar_escala and not df_iso1.empty and not df_iso2.empty:
+                    vmin_glob = float(min(df_iso1['valor'].min(), df_iso2['valor'].min()))
+                    vmax_glob = float(max(df_iso1['valor'].max(), df_iso2['valor'].max()))
+                    if abs(vmax_glob - vmin_glob) < 1e-2:
+                        vmax_glob = vmin_glob + 10.0
+
                 with col_map1:
-                    m1, vmin1, vmax1 = crear_mapa_folium(df_iso1, metodo_1, "MAPA_A")
+                    m1, vmin1, vmax1 = crear_mapa_folium(df_iso1, metodo_1, "MAPA_A", vmin_glob, vmax_glob)
                     st_folium(m1, use_container_width=True, height=580, returned_objects=[], key="fol_m1")
                     st.markdown(renderizar_barra_leyenda_html(vmin1, vmax1, cmap_mpl, metodo_1, year_1), unsafe_allow_html=True)
                 
                 with col_map2:
-                    m2, vmin2, vmax2 = crear_mapa_folium(df_iso2, metodo_2, "MAPA_B")
+                    m2, vmin2, vmax2 = crear_mapa_folium(df_iso2, metodo_2, "MAPA_B", vmin_glob, vmax_glob)
                     st_folium(m2, use_container_width=True, height=580, returned_objects=[], key="fol_m2")
                     st.markdown(renderizar_barra_leyenda_html(vmin2, vmax2, cmap_mpl, metodo_2, year_2), unsafe_allow_html=True)
 
