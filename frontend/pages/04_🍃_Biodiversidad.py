@@ -757,7 +757,7 @@ with tab_mapa:
             fig.add_trace(go.Scattermapbox(lon=gdf_bio['lon'], lat=gdf_bio['lat'], mode='markers', marker=dict(size=7, color='rgb(0, 200, 100)'), text=hover_text, name='Biodiversidad'))
 
         fig.update_layout(mapbox_style="open-street-map", mapbox=dict(center=dict(lat=center_lat, lon=center_lon), zoom=10), margin={"r":0,"t":0,"l":0,"b":0}, height=600, legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor="rgba(255, 255, 255, 0.8)"))
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, width="stretch", config={"scrollZoom": True})
         
         if not gdf_bio.empty:
             st.download_button("💾 Descargar Datos (CSV)", save_to_csv(gdf_bio.drop(columns='geometry', errors='ignore')), f"biodiv_{nombre_seleccion}.csv", "text/csv")
@@ -792,7 +792,21 @@ with tab_taxonomia:
         st.markdown("##### Detalle de Registros")
         df_mostrar = gdf_bio.drop(columns=['geometry'], errors='ignore').astype(str)
         st.dataframe(df_mostrar, width="stretch", hide_index=True)
-    else: st.info("No hay datos de biodiversidad para mostrar estadísticas.")
+    else:
+        if gdf_zona is not None and not gdf_zona.empty:
+            if st.session_state.get('bio_gbif_escaneado') == nombre_seleccion:
+                st.warning(f"ℹ️ No se encontraron registros biológicos en GBIF para **{nombre_seleccion}**.")
+            else:
+                st.info(f"📡 Aún no se han descargado los registros GBIF para **{nombre_seleccion}**.")
+            if st.button(f"📡 Escanear registros GBIF en vivo para {nombre_seleccion}", type="primary", key="btn_gbif_taxonomia"):
+                with st.spinner(f"📡 Consultando GBIF para {nombre_seleccion}..."):
+                    gdf_bio = gbif_connector.get_biodiversity_in_polygon(gdf_zona, limit=3000)
+                    st.session_state['bio_gbif_df'] = gdf_bio
+                    st.session_state['bio_gbif_terr'] = nombre_seleccion
+                    st.session_state['bio_gbif_escaneado'] = nombre_seleccion
+                    st.rerun()
+        else:
+            st.info("👈 Seleccione una zona con polígono válido en el menú lateral para consultar su taxonomía.")
 
 # ==============================================================================
 # TAB 4: CALCULADORA DE CARBONO (INTEGRADA & DOCUMENTADA)
@@ -970,7 +984,7 @@ with tab_forestal:
             m3.metric("Valor Potencial", f"${(total_c_bosque * precio_usd):,.0f} USD")
             
             fig = px.area(df_bosque, x='Año', y='Proyecto_tCO2e_Acumulado', title=f"Dinámica - {carbon_calculator.ESCENARIOS_CRECIMIENTO[estrategia]['nombre']}", color_discrete_sequence=['#2ecc71'])
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, width="stretch", config={"scrollZoom": True})
             
             with st.expander("📊 Ver Tabla Financiera y Descargar Reporte"):
                 df_fin_bosque = df_bosque.copy()
@@ -1173,7 +1187,7 @@ with tab_afolu:
             fig.add_trace(go.Scatter(x=df_bal['Año'], y=df_bal['Balance_Neto_tCO2e'], mode='lines', name='Balance Neto Real', line=dict(color='black', width=4, dash='dot')))
         
         fig.update_layout(xaxis_title="Año", yaxis_title="Acumulado (tCO2e)", hovermode="x unified", height=500)
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, width="stretch", config={"scrollZoom": True})
 
 # ==============================================================================
 # TAB 6: COMPARADOR DE ESCENARIOS (NUEVO)
