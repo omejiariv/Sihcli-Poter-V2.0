@@ -702,12 +702,15 @@ if gdf_zona is None or gdf_zona.empty:
 with tab_mapa:
     if gdf_zona is not None:
         if gdf_bio.empty:
+            if st.session_state.get('bio_gbif_escaneado') == nombre_seleccion:
+                st.warning(f"ℹ️ No se tienen registros biológicos en GBIF para **{nombre_seleccion}**.")
             if st.button(f"📡 Escanear registros GBIF en vivo para {nombre_seleccion}", type="primary"):
                 with st.spinner(f"📡 Consultando GBIF para {nombre_seleccion}..."):
                     gdf_bio = gbif_connector.get_biodiversity_in_polygon(gdf_zona, limit=3000)
                     st.session_state['bio_gbif_df'] = gdf_bio
                     st.session_state['bio_gbif_terr'] = nombre_seleccion
-                    st.rerun()        
+                    st.session_state['bio_gbif_escaneado'] = nombre_seleccion
+                    st.rerun()
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Registros GBIF", f"{len(gdf_bio):,.0f}")
         c2.metric("Especies", f"{gdf_bio['Nombre Científico'].nunique():,.0f}" if not gdf_bio.empty else "0")

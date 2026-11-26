@@ -163,26 +163,49 @@ def obtener_especies_tematica_sib(slug: str, tematica: str = "amenazadas-naciona
 
 def renderizar_tablero_sib(nombre_seleccion: str, nivel_escala: str):
     """Renderiza el tablero completo de Biodiversidad en Cifras (SiB Colombia)."""
+    nivel_up = str(nivel_escala or "").upper()
+
+    # Aviso explícito para Barrios (sin registros oficiales en SiB)
+    if "BARRIO" in nivel_up:
+        st.warning(
+            f"ℹ️ **Sin registros oficiales para {nombre_seleccion}:** "
+            "El SiB Colombia no cuenta con cifras oficiales desagregadas a escala de barrio. "
+            "Puedes buscar observaciones puntuales en vivo en la pestaña **🗺️ Mapa & GBIF**, "
+            "o cambiar a escala **Municipal (Medellín)** para ver el consolidado oficial."
+        )
+        return
+
     slug, etiqueta = resolver_slug_sib(nombre_seleccion, nivel_escala)
 
     st.subheader(f"🇨🇴 Biodiversidad en Cifras — {etiqueta}")
     st.caption("Fuente oficial en vivo: **SiB Colombia** (`cifras.biodiversidad.co`) · Resolución 0126/2024 MinAmbiente & Lista Roja UICN.")
+
+    if any(k in nivel_up for k in ["VEREDA", "COMUNA"]):
+        st.info(
+            f"ℹ️ **Nota de escala:** El SiB Colombia publica estadísticas oficiales a nivel municipal y departamental. "
+            f"No existen cifras oficiales exclusivas para **{nombre_seleccion}**; se muestra el consolidado de **{etiqueta}**. "
+            f"Para registros puntuales dentro del polígono exacto, usa la pestaña **🗺️ Mapa & GBIF**."
+        )
 
     with st.spinner(f"📡 Consultando cifras oficiales del SiB Colombia para {etiqueta}..."):
         resumen = obtener_resumen_region_sib(slug)
         df_grupos, _ = obtener_grupos_biologicos_sib(slug, tipo="biologico")
 
     if not resumen and df_grupos.empty:
-        st.warning("⚠️ No se pudo conectar con la API de cifras.biodiversidad.co en este momento.")
+        st.warning(f"ℹ️ No se tienen registros oficiales del SiB Colombia para **{etiqueta}** en este momento.")
         return
 
-    # 1. KPIs Principales
-    esp_obs = int(resumen.get("especies_region_total") or (df_grupos["Especies"].max() if not df_grupos.empty else 0))
-    reg_tot = int(resumen.get("registros_region_total") or (df_grupos["Registros"].max() if not df_grupos.empty else 0))
-    am_nal = int(resumen.get("especies_amenazadas_nacional_total") or 0)
-    endem = int(resumen.get("especies_endemicas") or 0)
-    exot = int(resumen.get("especies_exoticas_total") or 0)
-    cites = int(resumen.get("especies_cites_total") or 0)
+    # 1. KPIs Principales (con respaldo por reinos principales si lean=1 omite totales)
+    reinos_base = df_grupos[
+        df_grupos["Grupo"].isin(["Plantas", "Animales", "Hongos", "Bacterias", "Protozoos", "Cromistas"])
+    ] if not df_grupos.empty else pd.DataFrame()
+
+    esp_obs = int(resumen.get("especies_region_total") or (reinos_base["Especies"].sum() if not reinos_base.empty else 0))
+    reg_tot = int(resumen.get("registros_region_total") or (reinos_base["Registros"].sum() if not reinos_base.empty else 0))
+    am_nal = int(resumen.get("especies_amenazadas_nacional_total") or (reinos_base["Amenazadas Nal (Res.0126)"].sum() if not reinos_base.empty else 0))
+    endem = int(resumen.get("especies_endemicas") or (reinos_base["Endémicas"].sum() if not reinos_base.empty else 0))
+    cites = int(resumen.get("especies_cites_total") or (reinos_base["CITES"].sum() if not reinos_base.empty else 0))
+    exot = int(resumen.get("especies_exoticas_total") or (reinos_base["Exóticas/Invasoras"].sum() if not reinos_base.empty else 0))
 
     k1, k2, k3, k4, k5, k6 = st.columns(6)
     k1.metric("🌿 Especies", f"{esp_obs:,}")
