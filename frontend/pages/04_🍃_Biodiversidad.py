@@ -496,6 +496,23 @@ def load_layer_cached(layer_name):
         except: return None
     return None
 
+@st.cache_data(ttl=86400, show_spinner=False, max_entries=1)
+def cargar_predios_ejecutados_url():
+    import requests, io
+    url = "https://ldunpssoxvifemoyeuac.supabase.co/storage/v1/object/public/geojson/PrediosEjecutados.geojson"
+    try:
+        r = requests.get(url, timeout=20)
+        if r.status_code == 200:
+            gdf = gpd.read_file(io.BytesIO(r.content))
+            if gdf.crs is None:
+                gdf = gdf.set_crs(epsg=4326)
+            elif gdf.crs.to_epsg() != 4326:
+                gdf = gdf.to_crs(epsg=4326)
+            return gdf
+    except Exception:
+        pass
+    return gpd.GeoDataFrame()    
+
 # --- FUNCIÓN analizar_coberturas_por_zona_vida ---
 @st.cache_data(show_spinner=False)
 def analizar_coberturas_por_zona_vida(_gdf_zona, zone_key, path_dem, path_ppt, path_cov):
@@ -717,47 +734,73 @@ with tab_mapa:
         c3.metric("Familias", f"{gdf_bio['Familia'].nunique():,.0f}" if not gdf_bio.empty and 'Familia' in gdf_bio.columns else "0")
         c4.metric("Amenazadas (IUCN)", f"{n_threat}")
 
-        st.markdown("##### Visor Territorial")
-        fig = go.Figure()
+        st.markdown("##### 🗺️ Visor Territorial (Capas GIS)")
+        import folium
+        from streamlit_folium import st_folium
 
         try:
-            center = gdf_zona.to_crs("+proj=cea").centroid.to_crs("EPSG:4326").iloc[0]
-            center_lat, center_lon = center.y, center.x
-        except: center_lat, center_lon = 6.5, -75.5
+            zona_4326 = gdf_zona.to_crs(epsg=4326) if gdf_zona.crs and gdf_zona.crs.to_epsg() != 4326 else gdf_zona.copy()
+            c_pt = zona_4326.to_crs("+proj=cea").centroid.to_crs("EPSG:4326").iloc[0]
+            center_lat, center_lon = c_pt.y, c_pt.x
+        except Exception:
+            zona_4326 = gdf_zona.copy()
+            center_lat, center_lon = 6.25, -75.58
 
-        for idx, row in gdf_zona.iterrows():
-            if row.geometry:
-                polys = [row.geometry] if row.geometry.geom_type == 'Polygon' else list(row.geometry.geoms) if row.geometry.geom_type == 'MultiPolygon' else []
-                for poly in polys:
-                    x, y = poly.exterior.xy
-                    fig.add_trace(go.Scattermapbox(lon=list(x), lat=list(y), mode='lines', line=dict(width=3, color='red'), name='Zona Selección', hoverinfo='skip'))
+        m_bio = folium.Map(location=[center_lat, center_lon], zoom_start=12, tiles=None, scrollWheelZoom=True)
+        folium.TileLayer("OpenStreetMap", name="Calles (OSM)", control=True).add_to(m_bio)
+        folium.TileLayer("CartoDB positron", name="Base Clara", control=True).add_to(m_bio)
+        folium.TileLayer(
+            tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+            attr="Esri", name="Satélite", control=True
+        ).add_to(m_bio)
 
-        layers_to_show = [("Municipios", "gray", 1), ("Cuencas", "blue", 1.5), ("Predios", "orange", 1)]
-        for lyr_name, color, width in layers_to_show:
-            gdf_lyr = load_layer_cached(lyr_name)
-            if gdf_lyr is not None:
-                if lyr_name == "Predios":
-                    try:
-                        roi_buf = gdf_zona.to_crs("EPSG:3116").buffer(1000).to_crs("EPSG:4326")
-                        gdf_lyr = gpd.clip(gdf_lyr, roi_buf)
-                    except: pass
-                
-                if not gdf_lyr.empty:
-                    for idx, row in gdf_lyr.iterrows():
-                        if row.geometry:
-                            polys = [row.geometry] if row.geometry.geom_type == 'Polygon' else list(row.geometry.geoms) if row.geometry.geom_type == 'MultiPolygon' else []
-                            for i, poly in enumerate(polys):
-                                x, y = poly.exterior.xy
-                                show_leg = True if idx == 0 and i == 0 else False
-                                visible_opt = 'legendonly' if lyr_name == "Predios" else True
-                                fig.add_trace(go.Scattermapbox(lon=list(x), lat=list(y), mode='lines', line=dict(width=width, color=color), name=lyr_name, legendgroup=lyr_name, showlegend=show_leg, hoverinfo='skip', visible=visible_opt))
+        # Capa 1: Polígono Seleccionado
+        folium.GeoJson(
+            zona_4326[["geometry"]].to_json(),
+            name="🔴 Polígono Seleccionado",
+            style_function=lambda x: {"fillColor": "transparent", "color": "#ef4444", "weight": 3.0, "dashArray": "5, 4"}
+        ).add_to(m_bio)
 
+        # Capa 2: Predios Ejecutados CuencaVerde (desde Supabase Storage)
+        gdf_predios = cargar_predios_ejecutados_url()
+        if not gdf_predios.empty:
+            try:
+                roi_buf = zona_4326.to_crs("EPSG:3116").buffer(2000).to_crs("EPSG:4326")
+                predios_clip = gpd.clip(gdf_predios, roi_buf)
+            except Exception:
+                predios_clip = gdf_predios
+
+            if not predios_clip.empty:
+                cols_tip = [c for c in ["nombre_pre", "mpio_nombr", "cuenca", "entidad"] if c in predios_clip.columns]
+                tooltip_pred = folium.GeoJsonTooltip(fields=cols_tip, aliases=cols_tip) if cols_tip else None
+                folium.GeoJson(
+                    predios_clip.to_json(),
+                    name=f"🟠 Predios Ejecutados ({len(predios_clip)})",
+                    style_function=lambda x: {"fillColor": "#f59e0b", "color": "#d97706", "weight": 1.8, "fillOpacity": 0.35},
+                    tooltip=tooltip_pred,
+                    show=True
+                ).add_to(m_bio)
+
+        # Capa 3: Registros Biológicos GBIF
         if not gdf_bio.empty:
-            hover_text = gdf_bio['Nombre Común'] if 'Nombre Común' in gdf_bio.columns else gdf_bio['Nombre Científico'] if 'Nombre Científico' in gdf_bio.columns else "Registro Biológico"
-            fig.add_trace(go.Scattermapbox(lon=gdf_bio['lon'], lat=gdf_bio['lat'], mode='markers', marker=dict(size=7, color='rgb(0, 200, 100)'), text=hover_text, name='Biodiversidad'))
+            fg_gbif = folium.FeatureGroup(name=f"🟢 Registros GBIF ({len(gdf_bio)})")
+            for _, row in gdf_bio.iterrows():
+                nom = row.get("Nombre Científico", "Registro")
+                com = row.get("Nombre Común", "")
+                iucn = row.get("Amenaza IUCN", "NE")
+                folium.CircleMarker(
+                    location=[row["lat"], row["lon"]],
+                    radius=4.5, color="#065f46", weight=1, fill=True, fill_color="#10b981", fill_opacity=0.85,
+                    tooltip=f"<b>{nom}</b><br>{com}<br>IUCN: {iucn}"
+                ).add_to(fg_gbif)
+            fg_gbif.add_to(m_bio)
 
-        fig.update_layout(mapbox_style="open-street-map", mapbox=dict(center=dict(lat=center_lat, lon=center_lon), zoom=10), margin={"r":0,"t":0,"l":0,"b":0}, height=600, legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor="rgba(255, 255, 255, 0.8)"))
-        st.plotly_chart(fig, width="stretch", config={"scrollZoom": True})
+        # Ajustar zoom automático al polígono seleccionado
+        minx, miny, maxx, maxy = zona_4326.total_bounds
+        m_bio.fit_bounds([[miny, minx], [maxy, maxx]])
+
+        folium.LayerControl(collapsed=False).add_to(m_bio)
+        st_folium(m_bio, use_container_width=True, height=600, returned_objects=[], key=f"visor_bio_{nombre_seleccion}")
         
         if not gdf_bio.empty:
             st.download_button("💾 Descargar Datos (CSV)", save_to_csv(gdf_bio.drop(columns='geometry', errors='ignore')), f"biodiv_{nombre_seleccion}.csv", "text/csv")

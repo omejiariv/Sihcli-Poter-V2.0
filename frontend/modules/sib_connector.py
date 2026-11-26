@@ -167,12 +167,24 @@ def renderizar_tablero_sib(nombre_seleccion: str, nivel_escala: str):
 
     # Aviso explícito para Barrios (sin registros oficiales en SiB)
     if "BARRIO" in nivel_up:
-        st.warning(
-            f"ℹ️ **Sin registros oficiales para {nombre_seleccion}:** "
-            "El SiB Colombia no cuenta con cifras oficiales desagregadas a escala de barrio. "
-            "Puedes buscar observaciones puntuales en vivo en la pestaña **🗺️ Mapa & GBIF**, "
-            "o cambiar a escala **Municipal (Medellín)** para ver el consolidado oficial."
+        df_gbif_mem = st.session_state.get("bio_gbif_df")
+        n_gbif_barrio = len(df_gbif_mem) if (
+            isinstance(df_gbif_mem, pd.DataFrame)
+            and not df_gbif_mem.empty
+            and st.session_state.get("bio_gbif_terr") == nombre_seleccion
+        ) else 0
+
+        st.info(
+            f"ℹ️ **Escala de Barrio ({nombre_seleccion}):** El portal *Biodiversidad en Cifras* (SiB Colombia) "
+            "solo consolida estadísticas oficiales a escala **Municipal y Departamental**. "
+            "Sin embargo, nuestra plataforma sí realiza **intersección espacial directa con el polígono del barrio** "
+            "en la pestaña **🗺️ Mapa & GBIF** para detectar observaciones puntuales geolocalizadas."
         )
+        if n_gbif_barrio > 0:
+            st.success(
+                f"🟢 Ya se detectaron **{n_gbif_barrio} registros puntuales en GBIF** dentro del polígono de "
+                f"**{nombre_seleccion}**. Puedes explorarlos en **🗺️ Mapa & GBIF** y **🧬 Taxonomía**."
+            )
         return
 
     slug, etiqueta = resolver_slug_sib(nombre_seleccion, nivel_escala)
