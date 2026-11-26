@@ -19,6 +19,7 @@ from shapely.geometry import shape
 # --- IMPORTACIÓN DE MÓDULOS DEL SISTEMA ---
 try:
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    from modules import selectors, config, gbif_connector, carbon_calculator, sib_connector
     from modules import selectors, config, gbif_connector, carbon_calculator
     from modules import life_zones as lz 
     from modules import land_cover as lc
@@ -591,9 +592,10 @@ def generar_mapa_coberturas_vectorial(_gdf_zona, path_cov):
 # =========================================================================
 # 🗂️ SISTEMA DE PESTAÑAS (NAVEGACIÓN)
 # =========================================================================
-tab_factura, tab_mapa, tab_taxonomia, tab_forestal, tab_afolu, tab_comparador, tab_ecologia, tab_ret_dosel, tab_micro = st.tabs([
+tab_factura, tab_mapa, tab_sib, tab_taxonomia, tab_forestal, tab_afolu, tab_comparador, tab_ecologia, tab_ret_dosel, tab_micro = st.tabs([
     "💰 La Factura de la Naturaleza", 
-    "🗺️ Mapa & GBIF", 
+    "🗺️ Mapa & GBIF",
+    "🇨🇴 Cifras Oficiales (SiB)",
     "🧬 Taxonomía",
     "🌲 Bosque e Inventarios",
     "⚖️ Metabolismo (AFOLU)",
@@ -679,24 +681,33 @@ with tab_factura:
 # ==============================================================================
 # 🌍 MOTOR DE BIODIVERSIDAD GLOBAL (GBIF - CARGA BAJO DEMANDA)
 # ==============================================================================
-gdf_bio = st.session_state.get('bio_gbif_df', pd.DataFrame())
-if st.session_state.get('bio_gbif_terr') != nombre_seleccion:
+gdf_bio = st.session_state.get('bio_gbif_df')
+if gdf_bio is None or not isinstance(gdf_bio, pd.DataFrame) or st.session_state.get('bio_gbif_terr') != nombre_seleccion:
     gdf_bio = pd.DataFrame()
 
 threatened = pd.DataFrame()
 n_threat = 0
+
 if not gdf_bio.empty and 'Amenaza IUCN' in gdf_bio.columns:
-    threatened = gdf_bio[~gdf_bio['Amenaza IUCN'].isin(['NE', 'LC', 'NT', 'DD', 'nan'])]
-    n_threat = threatened['Nombre Científico'].nunique()
-    else:
-        st.warning(f"No se pudo cargar el mapa vectorial para {nombre_seleccion}, por lo que la búsqueda de especies en GBIF está inactiva.")
-except NameError: pass
+    threatened = gdf_bio[~gdf_bio['Amenaza IUCN'].astype(str).isin(['NE', 'LC', 'NT', 'DD', 'nan', 'None'])]
+    if 'Nombre Científico' in threatened.columns:
+        n_threat = threatened['Nombre Científico'].nunique()
+
+if gdf_zona is None or gdf_zona.empty:
+    st.warning(f"No se pudo cargar el mapa vectorial para {nombre_seleccion}, por lo que la búsqueda de especies en GBIF está inactiva.")
 
 # ==============================================================================
 # 🗺️ TAB 2: MAPA Y MÉTRICAS
 # ==============================================================================
 with tab_mapa:
     if gdf_zona is not None:
+        if gdf_bio.empty:
+            if st.button(f"📡 Escanear registros GBIF en vivo para {nombre_seleccion}", type="primary"):
+                with st.spinner(f"📡 Consultando GBIF para {nombre_seleccion}..."):
+                    gdf_bio = gbif_connector.get_biodiversity_in_polygon(gdf_zona, limit=3000)
+                    st.session_state['bio_gbif_df'] = gdf_bio
+                    st.session_state['bio_gbif_terr'] = nombre_seleccion
+                    st.rerun()        
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Registros GBIF", f"{len(gdf_bio):,.0f}")
         c2.metric("Especies", f"{gdf_bio['Nombre Científico'].nunique():,.0f}" if not gdf_bio.empty else "0")
@@ -748,6 +759,9 @@ with tab_mapa:
         if not gdf_bio.empty:
             st.download_button("💾 Descargar Datos (CSV)", save_to_csv(gdf_bio.drop(columns='geometry', errors='ignore')), f"biodiv_{nombre_seleccion}.csv", "text/csv")
     else: st.info("👈 Seleccione una zona en el menú lateral para visualizar el mapa.")
+
+with tab_sib:
+    sib_connector.renderizar_tablero_sib(nombre_seleccion, nivel_jerarquico)
 
 # ==============================================================================
 # TAB 3: TAXONOMÍA
