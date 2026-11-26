@@ -610,7 +610,7 @@ def generar_mapa_coberturas_vectorial(_gdf_zona, path_cov):
 # =========================================================================
 # 🗂️ SISTEMA DE PESTAÑAS (NAVEGACIÓN)
 # =========================================================================
-tab_factura, tab_mapa, tab_sib, tab_taxonomia, tab_forestal, tab_afolu, tab_comparador, tab_ecologia, tab_ret_dosel, tab_micro = st.tabs([
+tab_factura, tab_mapa, tab_sib, tab_taxonomia, tab_forestal, tab_afolu, tab_comparador, tab_ecologia, tab_restauracion, tab_ret_dosel, tab_micro = st.tabs([
     "💰 La Factura de la Naturaleza", 
     "🗺️ Mapa & GBIF",
     "🇨🇴 Cifras Oficiales (SiB)",
@@ -618,7 +618,8 @@ tab_factura, tab_mapa, tab_sib, tab_taxonomia, tab_forestal, tab_afolu, tab_comp
     "🌲 Bosque e Inventarios",
     "⚖️ Metabolismo (AFOLU)",
     "⚖️ Comparativa de Carbono",
-    "🌿 Ecología del Paisaje", 
+    "🌿 Ecología del Paisaje",
+    "🌱 Restauración Eco-Hidrológica",
     "🌳 Retención del Dosel",
     "🔬 Ecohidrología: Bosque a PTAP"
 ])
@@ -906,6 +907,12 @@ with tab_taxonomia:
         st.markdown("---")
         st.markdown("##### Detalle de Registros")
         df_mostrar = gdf_bio.drop(columns=['geometry'], errors='ignore').astype(str)
+        from modules.nombres_comunes import enriquecer_nombres_comunes
+        df_mostrar = enriquecer_nombres_comunes(
+            gdf_bio.drop(columns=['geometry'], errors='ignore'),
+            col_cientifico='Nombre Científico',
+            col_comun='Nombre Común'
+        ).astype(str)
         st.dataframe(df_mostrar, width="stretch", hide_index=True)
     else:
         if gdf_zona is not None and not gdf_zona.empty:
@@ -961,6 +968,8 @@ with tab_forestal:
     total_potencial = 0
     
     if df_diagnostico is not None and not df_diagnostico.empty:
+        zv_top = df_diagnostico.groupby('Zona_Vida')['Hectareas'].sum().idxmax()
+        st.session_state['aleph_zona_vida_dom'] = str(zv_top)
         st.markdown("##### 📊 Distribución de Coberturas por Zona de Vida")
         fig_diag = px.bar(df_diagnostico, x='Hectareas', y='Zona_Vida', color='Cobertura', orientation='h', title="Hectáreas por Cobertura y Clima", color_discrete_sequence=px.colors.qualitative.Prism, height=400)
         st.plotly_chart(fig_diag, width="stretch")

@@ -130,10 +130,11 @@ def obtener_grupos_biologicos_sib(slug: str, tipo: str = "biologico"):
     except Exception:
         return pd.DataFrame(), []
 
-
 @st.cache_data(ttl=86400, show_spinner=False, max_entries=15)
 def obtener_especies_tematica_sib(slug: str, tematica: str = "amenazadas-nacional") -> pd.DataFrame:
     """Descarga el listado oficial de especies para una temática de conservación."""
+    from modules.nombres_comunes import enriquecer_nombres_comunes
+
     url = f"{SIB_BASE_URL}/species?region={slug}&tematica={tematica}"
     try:
         r = requests.get(url, timeout=20)
@@ -156,10 +157,10 @@ def obtener_especies_tematica_sib(slug: str, tematica: str = "amenazadas-naciona
         df_out = df[cols_ok].rename(columns=cols_map)
         if "Observaciones" in df_out.columns:
             df_out = df_out.sort_values("Observaciones", ascending=False)
+        df_out = enriquecer_nombres_comunes(df_out, col_cientifico="Especie", col_comun="Nombre Común")
         return df_out.reset_index(drop=True)
     except Exception:
         return pd.DataFrame()
-
 
 def renderizar_tablero_sib(nombre_seleccion: str, nivel_escala: str):
     """Renderiza el tablero completo de Biodiversidad en Cifras (SiB Colombia)."""
@@ -287,3 +288,88 @@ def renderizar_tablero_sib(nombre_seleccion: str, nivel_escala: str):
         )
     else:
         st.info("No se encontraron registros para esta temática en el territorio seleccionado.")
+
+def renderizar_cruce_ecohidrologico(nombre_seleccion: str, nivel_escala: str):
+    """Fase 3: Cruce entre Holdridge (Tab 4), Déficit Ripario (Tab 7) y Cifras Oficiales SiB."""
+    from modules.nombres_comunes import obtener_paleta_por_zona_vida
+
+    st.subheader(f"🌱 Cruce Eco-Hidrológico y Priorización de Restauración — {nombre_seleccion}")
+    st.caption(
+        "Integra el piso térmico dominante (Holdridge), el déficit de bosque ripario y las especies "
+        "amenazadas e invasoras registradas por el SiB Colombia para orientar la restauración ecológica."
+    )
+
+    slug, etiqueta = resolver_slug_sib(nombre_seleccion, nivel_escala)
+
+    # 1. Lectura de insumos desde memoria viva (Aleph)
+    zv_dom = st.session_state.get("aleph_zona_vida_dom", "Bosque húmedo Montano Bajo (bh-MB)")
+    ha_deficit = float(st.session_state.get("ha_deficit_ripario") or 0.0)
+    ha_potencial = float(st.session_state.get("aleph_ha_pastos") or 0.0)
+
+    # Si aún no se ha corrido Tab 7 (Ecología del Paisaje), usamos el potencial de restauración como referencia
+    area_meta_base = ha_deficit if ha_deficit > 0 else max(10.0, ha_potencial * 0.15)
+    origen_area = "Déficit Ripario exacto (Tab 7)" if ha_deficit > 0 else "Estimación base (15% de pasturas)"
+
+    with st.spinner("🔗 Cruzando datos de biodiversidad (SiB) con pisos térmicos y déficit ripario..."):
+        df_am = obtener_especies_tematica_sib(slug, "amenazadas-nacional")
+        df_end = obtener_especies_tematica_sib(slug, "endemicas")
+        df_inv = obtener_especies_tematica_sib(slug, "exoticas-total")
+
+    n_am = len(df_am)
+    n_end = len(df_end)
+    n_inv = len(df_inv)
+
+    # Índice compuesto de prioridad (0 - 100)
+    score_bio = min(50.0, (n_am * 0.35) + (n_end * 0.08))
+    score_hidro = min(50.0, (area_meta_base / 50.0) * 50.0) if area_meta_base > 0 else 15.0
+    indice_prioridad = min(100.0, round(score_bio + score_hidro, 1))
+    nivel_prio = "🔴 Crítica" if indice_prioridad >= 70 else "🟠 Alta" if indice_prioridad >= 45 else "🟢 Moderada"
+
+    # KPIs de síntesis
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Índice de Prioridad", f"{indice_prioridad:.0f} / 100", nivel_prio)
+    c2.metric("Piso Térmico Dominante", obtener_paleta_por_zona_vida(zv_dom)[0], str(zv_dom)[:28])
+    c3.metric("Meta de Restauración", f"{area_meta_base:,.1f} ha", origen_area)
+    c4.metric("Presión Biológica (SiB)", f"{n_am} Amenazadas", f"{n_end} Endémicas · {n_inv} Exóticas")
+
+    st.divider()
+
+    # 2. Simulador de Diseño de Restauración
+    col_cfg, col_pal = st.columns([1, 1.8], gap="large")
+
+    with col_cfg:
+        st.markdown("##### 📐 Parámetros de Intervención")
+        ha_intervenir = st.number_input(
+            "Hectáreas a restaurar:",
+            min_value=1.0,
+            value=float(round(area_meta_base, 1)),
+            step=5.0,
+            key="f3_ha_rest",
+        )
+        densidad_arb = st.slider("Densidad de siembra (árboles/ha):", 400, 1600, 1100, step=100, key="f3_dens")
+        costo_ha_usd = st.number_input("Costo integral por hectárea (USD):", min_value=500.0, value=2500.0, step=250.0, key="f3_costo")
+
+        total_arboles = int(ha_intervenir * densidad_arb)
+        presupuesto_usd = ha_intervenir * costo_ha_usd
+
+        st.success(
+            f"🌳 **Meta Operativa:** Se requieren **{total_arboles:,} árboles nativos** "
+            f"con una inversión estimada de **${presupuesto_usd:,.0f} USD**."
+        )
+
+    with col_pal:
+        cod_zv, paleta = obtener_paleta_por_zona_vida(zv_dom)
+        st.markdown(f"##### 🌿 Paleta de Especies Nativas Sugeridas ({cod_zv})")
+        df_paleta = pd.DataFrame(paleta, columns=["Especie", "Nombre Común", "Rol Eco-Hidrológico"])
+        st.dataframe(df_paleta, use_container_width=True, hide_index=True)
+
+        if not df_inv.empty:
+            top_inv = df_inv.head(5)
+            lista_inv = ", ".join(
+                f"*{r['Especie']}* ({r['Nombre Común']})" if r.get("Nombre Común", "—") != "—" else f"*{r['Especie']}*"
+                for _, r in top_inv.iterrows()
+            )
+            st.warning(
+                f"⚠️ **Alerta de Control Previo ({etiqueta}):** Se reportan **{n_inv} especies exóticas/invasoras**. "
+                f"Verificar y erradicar focos antes de plantar: {lista_inv}."
+            )        
