@@ -677,20 +677,17 @@ with tab_factura:
     st.success(f"🌱 **El Mensaje para los Tomadores de Decisiones:** Proteger las cuencas y los bosques que abastecen a estos **{poblacion:,.0f} habitantes** le ahorra al Estado y a la sociedad **${costo_total_naturaleza / 1e6:,.1f} millones de dólares anuales** en infraestructura artificial. La conservación es la inversión más rentable.")
 
 # ==============================================================================
-# 🌍 MOTOR DE BIODIVERSIDAD GLOBAL (GBIF)
+# 🌍 MOTOR DE BIODIVERSIDAD GLOBAL (GBIF - CARGA BAJO DEMANDA)
 # ==============================================================================
-gdf_bio = pd.DataFrame()
+gdf_bio = st.session_state.get('bio_gbif_df', pd.DataFrame())
+if st.session_state.get('bio_gbif_terr') != nombre_seleccion:
+    gdf_bio = pd.DataFrame()
+
 threatened = pd.DataFrame()
 n_threat = 0
-
-try:
-    if gdf_zona is not None and not gdf_zona.empty: # Verificamos que el mapa no esté vacío
-        with st.spinner(f"📡 Escaneando biodiversidad en {nombre_seleccion}..."):
-            gdf_bio = gbif_connector.get_biodiversity_in_polygon(gdf_zona, limit=3000)
-            
-        if not gdf_bio.empty and 'Amenaza IUCN' in gdf_bio.columns:
-            threatened = gdf_bio[~gdf_bio['Amenaza IUCN'].isin(['NE', 'LC', 'NT', 'DD', 'nan'])]
-            n_threat = threatened['Nombre Científico'].nunique()
+if not gdf_bio.empty and 'Amenaza IUCN' in gdf_bio.columns:
+    threatened = gdf_bio[~gdf_bio['Amenaza IUCN'].isin(['NE', 'LC', 'NT', 'DD', 'nan'])]
+    n_threat = threatened['Nombre Científico'].nunique()
     else:
         st.warning(f"No se pudo cargar el mapa vectorial para {nombre_seleccion}, por lo que la búsqueda de especies en GBIF está inactiva.")
 except NameError: pass
@@ -1260,12 +1257,12 @@ with tab_ecologia:
                 # 2. Creamos el polígono REAL del corredor (Buffer en metros)
                 if not rios_9377.empty:
                     corredor_poly_9377 = rios_9377.buffer(buffer_m).unary_union
-                    area_total_ha = corredor_poly_9377.area / 10000.0
+                    area_corredor_ha = corredor_poly_9377.area / 10000.0
                 else:
                     corredor_poly_9377 = None
-                    area_total_ha = 0.0
+                    area_corredor_ha = 0.0
                 
-                st.metric("Área Total del Corredor", f"{area_total_ha:,.1f} ha")
+                st.metric("Área Total del Corredor", f"{area_corredor_ha:,.1f} ha")
                 
                 # 3. CRUCE ESPACIAL (Análisis de Brechas exacto desde el Raster)
                 ha_bosque = 0.0
@@ -1288,7 +1285,7 @@ with tab_ecologia:
                             pct_bosque = sum(pct for cov, pct in stats_corredor.items() if any(k in cov.lower() for k in ['bosque', 'vegetaci', 'arbust', 'natural']))
                             
                             # Convertimos el porcentaje en hectáreas reales
-                            ha_bosque = (pct_bosque / 100.0) * area_total_ha
+                            ha_bosque = (pct_bosque / 100.0) * area_corredor_ha
                         else:
                             st.warning("⚠️ El corredor ripario cayó fuera del mapa de coberturas o el área es muy pequeña.")
                     else:
@@ -1297,7 +1294,7 @@ with tab_ecologia:
                 except Exception as e:
                     st.error(f"⚠️ Error matemático en el análisis raster: {e}")
                 
-                ha_deficit = max(0.0, area_total_ha - ha_bosque)
+                ha_deficit = max(0.0, area_corredor_ha - ha_bosque)
                 
             st.markdown("---")
             st.markdown("#### 📊 Análisis de Brechas (Gap)")
@@ -1337,8 +1334,8 @@ with tab_ecologia:
                     capas_mapa.append(pdk.Layer("GeoJsonLayer", data=zona_json, opacity=1, stroked=True, get_line_color=[0, 200, 0, 255], get_line_width=3, filled=False))
                 
                 # 🚀 FIX VISUAL 2: Renderizamos el polígono REAL del buffer, en lugar de una línea engrosada
-                if 'corredor_poly' in locals() and corredor_poly is not None:
-                    gdf_buffer = gpd.GeoDataFrame(geometry=[corredor_poly], crs="EPSG:3116").to_crs(epsg=4326)
+                if corredor_poly_9377 is not None:
+                    gdf_buffer = gpd.GeoDataFrame(geometry=[corredor_poly_9377], crs="EPSG:9377").to_crs(epsg=4326)
                     buffer_json = json.loads(gdf_buffer.to_json())
                     
                     capas_mapa.append(pdk.Layer(
