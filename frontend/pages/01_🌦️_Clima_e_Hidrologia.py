@@ -1597,7 +1597,7 @@ def main():
             anio_int = int(anio)
             if anio_int == datetime.now().year:
                 oni_vivo = None
-                for k in ['oni_actual', 'oni', 'aleph_oni', 'ultimo_oni', 'oni_val', 'indice_oni']:
+                for k in ['aleph_oni_val', 'oni_actual', 'oni', 'aleph_oni', 'ultimo_oni', 'oni_val', 'indice_oni']:    
                     val = st.session_state.get(k)
                     if val is not None:
                         try:

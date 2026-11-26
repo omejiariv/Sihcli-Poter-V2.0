@@ -27,132 +27,175 @@ def decodificar_tildes(texto):
     return texto
 
 def renderizar_telemetria_aleph():
-    """Panel de control universal que monitorea las variables de estado en tiempo real."""
+    """Panel de control universal que monitorea las variables climáticas en tiempo real."""
     import datetime
-    
+
     st.sidebar.markdown("### 🧠 Telemetría del Aleph")
-    
+
     mes_actual = datetime.datetime.now().month
     trimestres = {
         1: "DEF", 2: "EFM", 3: "FMA", 4: "MAM", 5: "AMJ", 6: "MJJ",
         7: "JJA", 8: "JAS", 9: "ASO", 10: "SON", 11: "OND", 12: "NDE"
     }
-    trimestre_str = trimestres.get(mes_actual, "JAS")
-        
+    trimestre_default = trimestres.get(mes_actual, "Actual")
+
+    def _clasificar_pluma(p_nino, p_nina):
+        if p_nina > 50:
+            return "Niña 🌧️", "#3498db"
+        if p_nino > 50:
+            return "Niño ☀️", "#e74c3c"
+        return "Neutro ⚖️", "#2ecc71"
+
+    def _pct_progreso(val):
+        try:
+            return min(1.0, max(0.0, float(val) / 100.0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _fmt_metric(val):
+        try:
+            return f"{float(val):.2f}"
+        except (TypeError, ValueError):
+            return "N/A"
+
     with st.sidebar.expander("🌦️ Pulso Climático Global", expanded=False):
-        if 'aleph_iri_nino' not in st.session_state:
+        if not st.session_state.get('aleph_telemetria_cargada', False):
+            st.session_state['aleph_telemetria_cargada'] = True
             try:
-                from modules.climate_api import get_iri_enso_forecast, get_live_oni_data, get_live_soi_data, get_live_iod_data
-                
+                from modules.climate_api import (
+                    get_iri_enso_forecast,
+                    get_live_oni_data,
+                    get_live_soi_data,
+                    get_live_iod_data,
+                )
+
                 df_enso, metadatos_enso = get_iri_enso_forecast()
-                
+
                 if df_enso is not None and not df_enso.empty:
                     fila_actual = df_enso.iloc[0]
                     p_nina = float(fila_actual.get('La Niña', 0))
                     p_nino = float(fila_actual.get('El Niño', 0))
                     p_neutro = float(fila_actual.get('Neutral', 0))
-                    trim_txt = str(fila_actual.get('Trimestre', 'Actual'))
-                    fuente = metadatos_enso.get("fuente", "Conexión")
-                    
-                    if p_nina > 50: estado = "Niña 🌧️"
-                    elif p_nino > 50: estado = "Niño ☀️"
-                    else: estado = "Neutro ⚖️"
-                    
+                    trim_txt = str(fila_actual.get('Trimestre', trimestre_default))
+                    fuente = (metadatos_enso or {}).get("fuente", "NOAA/IRI")
+
+                    estado, _ = _clasificar_pluma(p_nino, p_nina)
+
                     st.session_state['enso_fase'] = estado
-                    st.session_state['aleph_iri_nino'] = int(p_nino)
-                    st.session_state['aleph_iri_neutro'] = int(p_neutro)
-                    st.session_state['aleph_iri_nina'] = int(p_nina)
+                    st.session_state['aleph_iri_nino'] = int(round(p_nino))
+                    st.session_state['aleph_iri_neutro'] = int(round(p_neutro))
+                    st.session_state['aleph_iri_nina'] = int(round(p_nina))
                     st.session_state['aleph_iri_trimestre'] = trim_txt
                     st.session_state['aleph_iri_tendencia'] = f"Sincronizado: {fuente} 📡"
-                    
+
                     if len(df_enso) > 1:
                         fila_sig = df_enso.iloc[1]
-                        st.session_state['aleph_iri_nino_sig'] = int(float(fila_sig.get('El Niño', 0)))
-                        st.session_state['aleph_iri_neutro_sig'] = int(float(fila_sig.get('Neutral', 0)))
-                        st.session_state['aleph_iri_nina_sig'] = int(float(fila_sig.get('La Niña', 0)))
+                        st.session_state['aleph_iri_nino_sig'] = int(round(float(fila_sig.get('El Niño', 0))))
+                        st.session_state['aleph_iri_neutro_sig'] = int(round(float(fila_sig.get('Neutral', 0))))
+                        st.session_state['aleph_iri_nina_sig'] = int(round(float(fila_sig.get('La Niña', 0))))
                         st.session_state['aleph_iri_trimestre_sig'] = str(fila_sig.get('Trimestre', 'Siguiente'))
-                
+
                 oni_res = get_live_oni_data()
                 df_oni, delta_oni = oni_res if oni_res else (None, 0.0)
-                
+
                 soi_res = get_live_soi_data()
                 df_soi, delta_soi = soi_res if soi_res else (None, 0.0)
-                
+
                 iod_res = get_live_iod_data()
                 df_iod, delta_iod = iod_res if iod_res else (None, 0.0)
-                
+
                 if df_oni is not None and not df_oni.empty:
                     oni_actual = df_oni.iloc[-1]
-                    st.session_state['aleph_oni_val'] = oni_actual['anomalia_oni']
-                    st.session_state['aleph_oni_delta'] = delta_oni
-                    st.session_state['aleph_enso_categoria'] = oni_actual.get('categoria', '')
+                    st.session_state['aleph_oni_val'] = float(oni_actual['anomalia_oni'])
+                    st.session_state['aleph_oni_delta'] = float(delta_oni or 0.0)
+                    st.session_state['aleph_enso_categoria'] = str(oni_actual.get('categoria', ''))
                 if df_soi is not None and not df_soi.empty:
-                    st.session_state['aleph_soi_val'] = df_soi['soi'].iloc[-1]
-                    st.session_state['aleph_soi_delta'] = delta_soi
+                    st.session_state['aleph_soi_val'] = float(df_soi['soi'].iloc[-1])
+                    st.session_state['aleph_soi_delta'] = float(delta_soi or 0.0)
                 if df_iod is not None and not df_iod.empty:
-                    st.session_state['aleph_iod_val'] = df_iod['iod'].iloc[-1]
-                    st.session_state['aleph_iod_delta'] = delta_iod
-                    
+                    st.session_state['aleph_iod_val'] = float(df_iod['iod'].iloc[-1])
+                    st.session_state['aleph_iod_delta'] = float(delta_iod or 0.0)
+
             except Exception as e:
-                st.session_state['aleph_iri_tendencia'] = f"Error conectando: {str(e)}"
-                
+                st.session_state['aleph_iri_tendencia'] = f"Sin conexión en vivo ({type(e).__name__})"
+
         # --- RENDERIZADO VISUAL DEL ESTADO GLOBAL ---
         st.caption("📡 **Plumas de Probabilidad NOAA (En Vivo)**")
-        
+
         enso_global = st.session_state.get('enso_fase', 'Desconocido ⚠️')
         enso_cat = st.session_state.get('aleph_enso_categoria', '')
-        
+
         if "Súper Fuerte" in enso_cat:
             cat_str = f"🔥 (¡{enso_cat}!)"
-            st.error(f"⚠️ ALERTA CLIMÁTICA: Anomalía ONI clasificada como {enso_cat}. Se esperan impactos hidrológicos extremos.")
+            st.error(
+                f"⚠️ ALERTA CLIMÁTICA: Anomalía ONI clasificada como {enso_cat}. "
+                "Se esperan impactos hidrológicos extremos."
+            )
         else:
             cat_str = f"({enso_cat})" if enso_cat and enso_cat != "Normal" else ""
-            
-        color_enso = "#3498db" if "Niña" in enso_global else "#e74c3c" if "Niño" in enso_global else "#f39c12" if "Desconocido" in enso_global else "#2ecc71"
-        
-        etiqueta_clima = f"<span style='color:{color_enso}; font-size:1.0em'><b>🌍 Clima ENSO: {enso_global} {cat_str}</b></span>"
-        
+
+        color_enso = (
+            "#3498db" if "Niña" in enso_global
+            else "#e74c3c" if "Niño" in enso_global
+            else "#f39c12" if "Desconocido" in enso_global
+            else "#2ecc71"
+        )
+        etiqueta_clima = (
+            f"<span style='color:{color_enso}; font-size:1.0em'>"
+            f"<b>🌍 Clima ENSO: {enso_global} {cat_str}</b></span>"
+        )
+
         # --- PLUMA ACTUAL ---
         p_nino = st.session_state.get('aleph_iri_nino', 0)
         p_neutro = st.session_state.get('aleph_iri_neutro', 0)
         p_nina = st.session_state.get('aleph_iri_nina', 0)
-        trimestre = st.session_state.get('aleph_iri_trimestre', 'Actual')
-        
+        trimestre = st.session_state.get('aleph_iri_trimestre', trimestre_default)
+
         if (p_nino + p_neutro + p_nina) > 0:
             st.markdown(f"**Trimestre {trimestre}:** &nbsp; {etiqueta_clima}", unsafe_allow_html=True)
-            st.progress(p_nino / 100.0 if p_nino > 1 else p_nino, text=f"☀️ El Niño ({p_nino}%)")
-            st.progress(p_neutro / 100.0 if p_neutro > 1 else p_neutro, text=f"⚖️ Neutro ({p_neutro}%)")
-            st.progress(p_nina / 100.0 if p_nina > 1 else p_nina, text=f"🌧️ La Niña ({p_nina}%)")
-            
-        # --- PLUMA SIGUIENTE ---
+            st.progress(_pct_progreso(p_nino), text=f"☀️ El Niño ({p_nino}%)")
+            st.progress(_pct_progreso(p_neutro), text=f"⚖️ Neutro ({p_neutro}%)")
+            st.progress(_pct_progreso(p_nina), text=f"🌧️ La Niña ({p_nina}%)")
+
+        # --- PLUMA SIGUIENTE (con su propia clasificación) ---
         trim_sig = st.session_state.get('aleph_iri_trimestre_sig', '')
         if trim_sig:
             p_nino_sig = st.session_state.get('aleph_iri_nino_sig', 0)
             p_neutro_sig = st.session_state.get('aleph_iri_neutro_sig', 0)
             p_nina_sig = st.session_state.get('aleph_iri_nina_sig', 0)
-            
-            st.markdown(f"<br>**Próximo Trimestre ({trim_sig}):** &nbsp; {etiqueta_clima}", unsafe_allow_html=True)
-            st.progress(p_nino_sig / 100.0 if p_nino_sig > 1 else p_nino_sig, text=f"☀️ El Niño ({p_nino_sig}%)")
-            st.progress(p_neutro_sig / 100.0 if p_neutro_sig > 1 else p_neutro_sig, text=f"⚖️ Neutro ({p_neutro_sig}%)")
-            st.progress(p_nina_sig / 100.0 if p_nina_sig > 1 else p_nina_sig, text=f"🌧️ La Niña ({p_nina_sig}%)")
-            
+            estado_sig, color_sig = _clasificar_pluma(p_nino_sig, p_nina_sig)
+            etiqueta_sig = (
+                f"<span style='color:{color_sig}; font-size:1.0em'>"
+                f"<b>🌍 Pronóstico: {estado_sig}</b></span>"
+            )
+
+            st.markdown(f"<br>**Próximo Trimestre ({trim_sig}):** &nbsp; {etiqueta_sig}", unsafe_allow_html=True)
+            st.progress(_pct_progreso(p_nino_sig), text=f"☀️ El Niño ({p_nino_sig}%)")
+            st.progress(_pct_progreso(p_neutro_sig), text=f"⚖️ Neutro ({p_neutro_sig}%)")
+            st.progress(_pct_progreso(p_nina_sig), text=f"🌧️ La Niña ({p_nina_sig}%)")
+
         st.markdown("📊 **Índices Climáticos Actuales**")
         col_oni, col_soi, col_iod = st.columns(3)
-        
+
         oni_val = st.session_state.get('aleph_oni_val', 'N/A')
         soi_val = st.session_state.get('aleph_soi_val', 'N/A')
         iod_val = st.session_state.get('aleph_iod_val', 'N/A')
-        
-        oni_d = st.session_state.get('aleph_oni_delta', 0.0)
-        soi_d = st.session_state.get('aleph_soi_delta', 0.0)
-        iod_d = st.session_state.get('aleph_iod_delta', 0.0)
-        
-        col_oni.metric("ONI", f"{oni_val:.2f}" if isinstance(oni_val, float) else oni_val, f"{oni_d:+.2f}")
-        col_soi.metric("SOI", f"{soi_val:.2f}" if isinstance(soi_val, float) else soi_val, f"{soi_d:+.2f}")
-        col_iod.metric("IOD", f"{iod_val:.2f}" if isinstance(iod_val, float) else iod_val, f"{iod_d:+.2f}")
-        
+
+        oni_d = float(st.session_state.get('aleph_oni_delta', 0.0) or 0.0)
+        soi_d = float(st.session_state.get('aleph_soi_delta', 0.0) or 0.0)
+        iod_d = float(st.session_state.get('aleph_iod_delta', 0.0) or 0.0)
+
+        col_oni.metric("ONI", _fmt_metric(oni_val), f"{oni_d:+.2f}", delta_color="off")
+        col_soi.metric("SOI", _fmt_metric(soi_val), f"{soi_d:+.2f}", delta_color="off")
+        col_iod.metric("IOD", _fmt_metric(iod_val), f"{iod_d:+.2f}", delta_color="off")
+
         tendencia = st.session_state.get('aleph_iri_tendencia', '')
-        if tendencia: st.caption(f"📈 {tendencia}")
+        if tendencia:
+            st.caption(f"📈 {tendencia}")
+
+        if st.button("🔄 Actualizar Telemetría", key="btn_refresh_telemetria", use_container_width=True):
+            st.session_state['aleph_telemetria_cargada'] = False
+            st.rerun()
 
 # ====================================================================
 # 📂 NAVEGACIÓN GLOBAL Y EL ALEPH V2.5
