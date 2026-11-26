@@ -1589,11 +1589,33 @@ def main():
             2023: "☀️ El Niño Fuerte",
             2024: "☀️ El Niño / Neutro",
             2025: "🌧️ La Niña Débil / Neutro Frío",
-            2026: "⚖️ Neutro"
+            2026: "🔥 Súper El Niño"
         }
         
         def obtener_etiqueta_enso(anio):
-            return enso_historico.get(int(anio), "⚖️ Neutro / Histórico")
+            from datetime import datetime
+            anio_int = int(anio)
+            if anio_int == datetime.now().year:
+                oni_vivo = None
+                for k in ['oni_actual', 'oni', 'aleph_oni', 'ultimo_oni', 'oni_val', 'indice_oni']:
+                    val = st.session_state.get(k)
+                    if val is not None:
+                        try:
+                            oni_vivo = float(val)
+                            break
+                        except (TypeError, ValueError):
+                            pass
+                if oni_vivo is not None:
+                    if oni_vivo >= 2.0:   return f"🔥 Súper El Niño (ONI {oni_vivo:+.2f})"
+                    if oni_vivo >= 1.5:   return f"☀️ El Niño Fuerte (ONI {oni_vivo:+.2f})"
+                    if oni_vivo >= 1.0:   return f"☀️ El Niño Moderado (ONI {oni_vivo:+.2f})"
+                    if oni_vivo >= 0.5:   return f"☀️ El Niño Débil (ONI {oni_vivo:+.2f})"
+                    if oni_vivo <= -2.0:  return f"🌊 Súper La Niña (ONI {oni_vivo:+.2f})"
+                    if oni_vivo <= -1.5:  return f"🌧️ La Niña Fuerte (ONI {oni_vivo:+.2f})"
+                    if oni_vivo <= -1.0:  return f"🌧️ La Niña Moderada (ONI {oni_vivo:+.2f})"
+                    if oni_vivo <= -0.5:  return f"🌧️ La Niña Débil (ONI {oni_vivo:+.2f})"
+                    return f"⚖️ Neutro (ONI {oni_vivo:+.2f})"
+            return enso_historico.get(anio_int, "⚖️ Neutro / Histórico")
 
         # 🧭 BUSCADOR INTELIGENTE DE LA CAPA DEL TERRITORIO SELECCIONADO (Municipio, Cuenca, Región, CAR)
         def obtener_poligono_territorio():
@@ -1783,7 +1805,7 @@ def main():
 
                 def crear_mapa_folium(df_data, metodo, map_tag, vmin_fijo=None, vmax_fijo=None):
                     if df_data.empty or len(df_data) < 3:
-                        return folium.Map(location=[6.25, -75.58], zoom_start=11), 0.0, 100.0
+                        return folium.Map(location=[6.25, -75.58], zoom_start=11), 0.0, 100.0, 0.0
                         
                     geometry = [Point(xy) for xy in zip(df_data['lon'], df_data['lat'])]
                     gdf_puntos = gpd.GeoDataFrame(df_data, geometry=geometry, crs="EPSG:4326")
@@ -1834,7 +1856,19 @@ def main():
                     if vmin_fijo is not None and vmax_fijo is not None:
                         vmin, vmax = vmin_fijo, vmax_fijo        
                     
-                    fig_m = plt.figure(figsize=(6, 6), dpi=150)
+                    # Precipitación media areal exacta dentro del polígono rojo
+                    media_poligono = float(np.nanmean(z))
+                    if gdf_poligono_actual is not None and not gdf_poligono_actual.empty:
+                        try:
+                            from shapely import contains_xy
+                            geom_union = gdf_poligono_actual.geometry.unary_union
+                            mask_poly = contains_xy(geom_union, gx, gy)
+                            if np.any(mask_poly):
+                                media_poligono = float(np.nanmean(z[mask_poly]))
+                        except Exception:
+                            pass
+
+                    fig_m = plt.figure(figsize=(8, 8), dpi=180)
                     ax_m = fig_m.add_axes([0, 0, 1, 1])
                     ax_m.axis('off')
                     ax_m.set_xlim(minx, maxx)
@@ -1848,22 +1882,22 @@ def main():
                             gx, gy, z,
                             levels=niveles,
                             colors='black',
-                            linewidths=0.65,
-                            alpha=0.85
+                            linewidths=0.55,
+                            alpha=0.80
                         )
                         etiquetas = ax_m.clabel(
                             cs,
-                            levels=niveles[::2],
+                            levels=niveles,       # Etiqueta TODAS las isoyetas
                             inline=True,
-                            inline_spacing=4,
-                            fmt='%.0f mm',
-                            fontsize=7.5,
+                            inline_spacing=2,     # Permite etiquetar curvas más cerradas
+                            fmt='%.0f',           # Más corto (la unidad mm ya está en la barra)
+                            fontsize=5.2,         # Tamaño cartográfico fino al hacer zoom
                             colors='white'
                         )
                         for txt in etiquetas:
                             txt.set_fontweight('bold')
                             txt.set_path_effects([
-                                pe.Stroke(linewidth=2.0, foreground='#0f172a', alpha=0.85),
+                                pe.Stroke(linewidth=1.3, foreground='#0f172a', alpha=0.85),
                                 pe.Normal()
                             ])
                     
@@ -1990,7 +2024,7 @@ def main():
                     m.get_root().html.add_child(folium.Element(sync_and_css))
                     
                     folium.LayerControl().add_to(m)
-                    return m, vmin, vmax
+                    return m, vmin, vmax, media_poligono
 
                 vmin_glob, vmax_glob = None, None
                 if unificar_escala and not df_iso1.empty and not df_iso2.empty:
@@ -2000,12 +2034,20 @@ def main():
                         vmax_glob = vmin_glob + 10.0
 
                 with col_map1:
-                    m1, vmin1, vmax1 = crear_mapa_folium(df_iso1, metodo_1, "MAPA_A", vmin_glob, vmax_glob)
+                    m1, vmin1, vmax1, media_poly1 = crear_mapa_folium(df_iso1, metodo_1, "MAPA_A", vmin_glob, vmax_glob)
+                    ph_caja_a.info(
+                        f"📌 **Año {year_1} ({enso_1})** — **{n_est_1}** estaciones | "
+                        f"Red: **{prom_1}** | 🎯 Polígono: **{media_poly1:,.0f} mm**"
+                    )
                     st_folium(m1, use_container_width=True, height=580, returned_objects=[], key="fol_m1")
                     st.markdown(renderizar_barra_leyenda_html(vmin1, vmax1, cmap_mpl, metodo_1, year_1), unsafe_allow_html=True)
                 
                 with col_map2:
-                    m2, vmin2, vmax2 = crear_mapa_folium(df_iso2, metodo_2, "MAPA_B", vmin_glob, vmax_glob)
+                    m2, vmin2, vmax2, media_poly2 = crear_mapa_folium(df_iso2, metodo_2, "MAPA_B", vmin_glob, vmax_glob)
+                    ph_caja_b.info(
+                        f"📌 **Año {year_2} ({enso_2})** — **{n_est_2}** estaciones | "
+                        f"Red: **{prom_2}** | 🎯 Polígono: **{media_poly2:,.0f} mm**"
+                    )
                     st_folium(m2, use_container_width=True, height=580, returned_objects=[], key="fol_m2")
                     st.markdown(renderizar_barra_leyenda_html(vmin2, vmax2, cmap_mpl, metodo_2, year_2), unsafe_allow_html=True)
 
