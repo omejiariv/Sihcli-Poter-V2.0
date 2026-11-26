@@ -310,14 +310,16 @@ def renderizar_cruce_ecohidrologico(nombre_seleccion: str, nivel_escala: str):
     area_meta_base = ha_deficit if ha_deficit > 0 else max(10.0, ha_potencial * 0.15)
     origen_area = "Déficit Ripario exacto (Tab 7)" if ha_deficit > 0 else "Estimación base (15% de pasturas)"
 
-    with st.spinner("🔗 Cruzando datos de biodiversidad (SiB) con pisos térmicos y déficit ripario..."):
-        df_am = obtener_especies_tematica_sib(slug, "amenazadas-nacional")
-        df_end = obtener_especies_tematica_sib(slug, "endemicas")
-        df_inv = obtener_especies_tematica_sib(slug, "exoticas-total")
+    # Reutilizamos el resumen ya cacheado (evita 3 descargas pesadas por cada cambio de territorio)
+    resumen = obtener_resumen_region_sib(slug)
+    df_grupos, _ = obtener_grupos_biologicos_sib(slug, tipo="biologico")
+    reinos_base = df_grupos[
+        df_grupos["Grupo"].isin(["Plantas", "Animales", "Hongos", "Bacterias", "Protozoos", "Cromistas"])
+    ] if not df_grupos.empty else pd.DataFrame()
 
-    n_am = len(df_am)
-    n_end = len(df_end)
-    n_inv = len(df_inv)
+    n_am = int(resumen.get("especies_amenazadas_nacional_total") or (reinos_base["Amenazadas Nal (Res.0126)"].sum() if not reinos_base.empty else 0))
+    n_end = int(resumen.get("especies_endemicas") or (reinos_base["Endémicas"].sum() if not reinos_base.empty else 0))
+    n_inv = int(resumen.get("especies_exoticas_total") or (reinos_base["Exóticas/Invasoras"].sum() if not reinos_base.empty else 0))
 
     # Índice compuesto de prioridad (0 - 100)
     score_bio = min(50.0, (n_am * 0.35) + (n_end * 0.08))
@@ -363,13 +365,13 @@ def renderizar_cruce_ecohidrologico(nombre_seleccion: str, nivel_escala: str):
         df_paleta = pd.DataFrame(paleta, columns=["Especie", "Nombre Común", "Rol Eco-Hidrológico"])
         st.dataframe(df_paleta, use_container_width=True, hide_index=True)
 
-        if not df_inv.empty:
-            top_inv = df_inv.head(5)
-            lista_inv = ", ".join(
-                f"*{r['Especie']}* ({r['Nombre Común']})" if r.get("Nombre Común", "—") != "—" else f"*{r['Especie']}*"
-                for _, r in top_inv.iterrows()
-            )
-            st.warning(
-                f"⚠️ **Alerta de Control Previo ({etiqueta}):** Se reportan **{n_inv} especies exóticas/invasoras**. "
-                f"Verificar y erradicar focos antes de plantar: {lista_inv}."
-            )        
+        if n_inv > 0:
+            if st.button(f"⚠️ Ver alerta de especies exóticas/invasoras ({etiqueta})", key=f"btn_inv_{slug}"):
+                df_inv = obtener_especies_tematica_sib(slug, "exoticas-total")
+                if not df_inv.empty:
+                    top_inv = df_inv.head(5)
+                    lista_inv = ", ".join(
+                        f"*{r['Especie']}* ({r['Nombre Común']})" if r.get("Nombre Común", "—") != "—" else f"*{r['Especie']}*"
+                        for _, r in top_inv.iterrows()
+                    )
+                    st.warning(f"⚠️ **Control previo sugerido:** {lista_inv}.")

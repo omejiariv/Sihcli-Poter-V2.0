@@ -833,7 +833,7 @@ with tab_mapa:
                     pct_area_pred = (area_pred_ha / area_total_ha * 100.0) if area_total_ha > 0 else 0.0
 
                     st.markdown("---")
-                    st.markdown("##### 🟠 Efectividad de Conservación: Predios Ejecutados CuencaVerde")
+                    st.markdown("##### 🟠 Efectividad de Conservación: Predios protegidos L99/93, Distr. Med, GobAnt, CARs, epm, FLA, CuencaVerde")
                     p1, p2, p3, p4 = st.columns(4)
                     p1.metric("Predios en la Zona", f"{len(predios_en_zona):,}", f"{area_pred_ha:,.1f} ha ({pct_area_pred:.1f}%)")
                     p2.metric("Registros en Predios", f"{n_reg_pred:,}", f"{pct_reg_pred:.1f}% del total GBIF")
@@ -2054,3 +2054,9 @@ with tab_micro:
             * **Lodo en Fondo (Vol. Muerto):** {lodo_fondo_m3:,.0f} m³
             * **Lodo Suspendido (Abrasión):** {lodo_turbinas_m3:,.0f} m³
         """)
+
+# =========================================================================
+# PESTAÑA: RESTAURACIÓN ECO-HIDROLÓGICA (FASE 3)
+# =========================================================================
+with tab_restauracion:
+    sib_connector.renderizar_cruce_ecohidrologico(nombre_seleccion, nivel_jerarquico)        
