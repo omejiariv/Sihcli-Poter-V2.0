@@ -64,44 +64,49 @@ LAND_COVER_COLORS = {
     9: "#228B22", 10: "#9ACD32", 11: "#8B4513", 12: "#00CED1", 13: "#0000FF"
 }
 
-def homologar_leyenda_satelite(data):
+def homologar_leyenda_satelite(data, nodata_val=255):
     """
-    Piedra Rosetta: Traduce mapas de Earth Engine (ESA / Dynamic World) 
-    al estándar Corine Land Cover (1-13) al vuelo.
+    Piedra Rosetta: Traduce mapas de Earth Engine (ESA / Dynamic World)
+    al estándar Corine Land Cover (1-13) al vuelo sin corromper el nodata.
     """
-    if data is None: return data
+    if data is None:
+        return data
     data_reclass = np.copy(data)
-    
-    # 1. Detectar si es ESA WorldCover (Usa decenas: 10, 20, 30, 50...)
-    if np.any(data == 10) or np.any(data == 50):
+    validos = data[(data != nodata_val)]
+    if validos.size == 0:
+        return data_reclass
+
+    # 1. ESA WorldCover (decenas: 10, 20, 30, 50...)
+    if np.any(validos == 10) or np.any(validos == 50) or np.any(validos > 13):
         mapping_esa = {
             10: 9,   # Árboles -> Bosque
             20: 10,  # Matorrales -> Veg. Arbustiva
             30: 7,   # Pastizales -> Pastos
             40: 5,   # Cultivos -> Cultivos transitorios
             50: 1,   # Construido -> Zonas Urbanas
-            60: 11,  # Suelo desnudo -> Áreas abiertas sin cobertura
+            60: 11,  # Suelo desnudo -> Áreas abiertas
             80: 13,  # Cuerpos de agua -> Agua
             90: 12   # Humedales -> Humedales
         }
         for k, v in mapping_esa.items():
             data_reclass[data == k] = v
-            
-    # 2. Detectar si es Dynamic World (Usa 0 a 8)
-    # Validamos que no tenga valores mayores a 8 (para no confundir con Corine que llega a 13)
-    elif np.any(data == 1) and np.any(data == 6) and not np.any(data > 10):
+
+    # 2. Dynamic World (valores en 0..8, sin valores > 8)
+    elif np.max(validos) <= 8:
         mapping_dw = {
             0: 13,   # Agua -> Agua
             1: 9,    # Árboles -> Bosque
             2: 7,    # Pastos -> Pastos
-            3: 5,    # Cultivos -> Cultivos
+            3: 5,    # Cultivos -> Cultivos transitorios
             4: 10,   # Matorrales -> Veg. Arbustiva
             5: 11,   # Suelo desnudo -> Áreas abiertas
-            6: 1     # Construido -> Zonas Urbanas
+            6: 1,    # Construido -> Zonas Urbanas
+            7: 11,   # Suelo desnudo (estándar DW) -> Áreas abiertas
+            8: 11    # Nieve/hielo -> Áreas abiertas
         }
         for k, v in mapping_dw.items():
             data_reclass[data == k] = v
-            
+
     return data_reclass
 
 # --- 2. FUNCIONES AUXILIARES ---
@@ -294,21 +299,33 @@ def agrupar_coberturas_turc(stats_dict):
 
 def obtener_imagen_folium_coberturas(gdf_zona, raster_path):
     safe_path = get_cached_raster(raster_path)
-    if gdf_zona is None or not safe_path: return None, None
+    if gdf_zona is None or not safe_path:
+        return None, None
     try:
         with rasterio.open(safe_path) as src:
-            if gdf_zona.crs != src.crs: gdf_zona = gdf_zona.to_crs(src.crs)
-            out_image, out_transform = mask(src, gdf_zona.geometry, crop=True)
-            data = homologar_leyenda_satelite(out_image[0])
+            if gdf_zona.crs != src.crs:
+                gdf_zona = gdf_zona.to_crs(src.crs)
+
+            out_image, out_transform = mask(src, gdf_zona.geometry, crop=True, nodata=255)
+            raw = out_image[0]
+            mascara_fuera = (raw == 255)
+            if src.nodata is not None:
+                mascara_fuera = mascara_fuera | (raw == src.nodata)
+
+            data = homologar_leyenda_satelite(raw, nodata_val=255)
+            data[mascara_fuera] = 0
+
             rgba = np.zeros((data.shape[0], data.shape[1], 4), dtype=np.uint8)
             for cat_id, hex_color in LAND_COVER_COLORS.items():
                 r, g, b = tuple(int(hex_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
                 mask_cat = (data == cat_id)
-                rgba[mask_cat, 0], rgba[mask_cat, 1], rgba[mask_cat, 2], rgba[mask_cat, 3] = r, g, b, 180 
-            rgba[(data == src.nodata) | (data == 0), 3] = 0
+                rgba[mask_cat, 0], rgba[mask_cat, 1], rgba[mask_cat, 2], rgba[mask_cat, 3] = r, g, b, 180
+
+            rgba[mascara_fuera | (data == 0), 3] = 0
             minx, miny, maxx, maxy = gdf_zona.to_crs("EPSG:4326").total_bounds
             return rgba, [[miny, minx], [maxy, maxx]]
-    except: return None, None
+    except Exception:
+        return None, None
 
 def obtener_vector_coberturas_ligero(gdf_zona, raster_path, max_dim=180):
     safe_path = get_cached_raster(raster_path)

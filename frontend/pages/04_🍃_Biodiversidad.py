@@ -555,6 +555,7 @@ def analizar_coberturas_por_zona_vida(_gdf_zona, zone_key, path_dem, path_ppt, p
 
         ppt_arr = alinear_desde_disco(path_ppt, out_shape, out_transform, out_crs)
         cov_arr = alinear_desde_disco(path_cov, out_shape, out_transform, out_crs, es_cat=True)
+        cov_arr = lc.homologar_leyenda_satelite(cov_arr, nodata_val=255)
 
         v_classify = np.vectorize(lz.classify_life_zone_alt_ppt)
         dem_safe = np.nan_to_num(dem_arr, nan=-9999)
@@ -802,6 +803,44 @@ with tab_mapa:
         folium.LayerControl(collapsed=False).add_to(m_bio)
         st_folium(m_bio, use_container_width=True, height=600, returned_objects=[], key=f"visor_bio_{nombre_seleccion}")
         
+# --- ESTADÍSTICAS DE EFECTIVIDAD EN PREDIOS EJECUTADOS ---
+        if not gdf_bio.empty and not gdf_predios.empty:
+            try:
+                from shapely.geometry import Point
+                gdf_pts_bio = gpd.GeoDataFrame(
+                    gdf_bio.copy(),
+                    geometry=[Point(xy) for xy in zip(gdf_bio['lon'], gdf_bio['lat'])],
+                    crs="EPSG:4326"
+                )
+                predios_en_zona = gpd.clip(gdf_predios, zona_4326)
+                if not predios_en_zona.empty:
+                    cruce_pred = gpd.sjoin(gdf_pts_bio, predios_en_zona[['geometry']], how='inner', predicate='within')
+                    n_reg_tot = len(gdf_pts_bio)
+                    n_reg_pred = cruce_pred.index.nunique()
+                    pct_reg_pred = (n_reg_pred / n_reg_tot * 100.0) if n_reg_tot > 0 else 0.0
+
+                    esp_tot = gdf_pts_bio['Nombre Científico'].nunique() if 'Nombre Científico' in gdf_pts_bio.columns else 0
+                    esp_pred = cruce_pred['Nombre Científico'].nunique() if 'Nombre Científico' in cruce_pred.columns else 0
+                    pct_esp_pred = (esp_pred / esp_tot * 100.0) if esp_tot > 0 else 0.0
+
+                    am_pred = 0
+                    if 'Amenaza IUCN' in cruce_pred.columns and not cruce_pred.empty:
+                        am_df = cruce_pred[~cruce_pred['Amenaza IUCN'].astype(str).isin(['NE', 'LC', 'NT', 'DD', 'nan', 'None'])]
+                        am_pred = am_df['Nombre Científico'].nunique()
+
+                    area_pred_ha = predios_en_zona.to_crs('+proj=cea').area.sum() / 10000.0
+                    pct_area_pred = (area_pred_ha / area_total_ha * 100.0) if area_total_ha > 0 else 0.0
+
+                    st.markdown("---")
+                    st.markdown("##### 🟠 Efectividad de Conservación: Predios Ejecutados CuencaVerde")
+                    p1, p2, p3, p4 = st.columns(4)
+                    p1.metric("Predios en la Zona", f"{len(predios_en_zona):,}", f"{area_pred_ha:,.1f} ha ({pct_area_pred:.1f}%)")
+                    p2.metric("Registros en Predios", f"{n_reg_pred:,}", f"{pct_reg_pred:.1f}% del total GBIF")
+                    p3.metric("Especies en Predios", f"{esp_pred:,}", f"{pct_esp_pred:.1f}% de las especies")
+                    p4.metric("Amenazadas en Predios", f"{am_pred:,}", "Categorías CR / EN / VU")
+            except Exception:
+                pass
+
         if not gdf_bio.empty:
             st.download_button("💾 Descargar Datos (CSV)", save_to_csv(gdf_bio.drop(columns='geometry', errors='ignore')), f"biodiv_{nombre_seleccion}.csv", "text/csv")
     else: st.info("👈 Seleccione una zona en el menú lateral para visualizar el mapa.")
@@ -814,6 +853,39 @@ with tab_sib:
 # ==============================================================================
 with tab_taxonomia:
     if not gdf_bio.empty:
+        # --- ÍNDICES DE DIVERSIDAD Y COMPLETITUD DE MUESTREO ---
+        if 'Nombre Científico' in gdf_bio.columns:
+            conteos = gdf_bio['Nombre Científico'].dropna().value_counts()
+            S_riq = int(len(conteos))
+            N_obs = int(conteos.sum())
+
+            if S_riq > 0 and N_obs > 0:
+                p_i = conteos.values / N_obs
+                shannon_h = float(-np.sum(p_i * np.log(p_i)))
+                simpson_d = float(1.0 - np.sum(p_i ** 2))
+                pielou_j = float(shannon_h / np.log(S_riq)) if S_riq > 1 else 0.0
+
+                # Estimador no paramétrico de Chao1 para completitud de muestreo
+                f1 = int((conteos == 1).sum())
+                f2 = int((conteos == 2).sum())
+                s_chao1 = S_riq + (f1 * (f1 - 1)) / (2.0 * (f2 + 1)) if f1 > 0 else float(S_riq)
+                completitud_pct = min(100.0, (S_riq / s_chao1) * 100.0) if s_chao1 > 0 else 100.0
+
+                st.markdown("##### 📐 Índices de Biodiversidad y Completitud del Muestreo")
+                i1, i2, i3, i4, i5 = st.columns(5)
+                i1.metric("Riqueza (S)", f"{S_riq:,}", f"{N_obs:,} obs.")
+                i2.metric("Shannon (H')", f"{shannon_h:.2f}", help="Combina riqueza y equilibrio de observaciones.")
+                i3.metric("Simpson (1 - D)", f"{simpson_d:.3f}", help="Probabilidad (0 a 1) de que dos registros al azar sean de distinta especie.")
+                i4.metric("Pielou (J')", f"{pielou_j:.3f}", help="Equitatividad (0 = dominancia extrema, 1 = distribución perfectamente equitativa).")
+                i5.metric("Completitud (Chao1)", f"{completitud_pct:.1f}%", f"Est. {s_chao1:,.0f} spp.")
+
+                st.caption(
+                    "📌 **Nota técnica:** Al emplear registros de presencia de GBIF como *proxy* de abundancia relativa, "
+                    "estos índices reflejan la **diversidad de observaciones y el esfuerzo de muestreo** reportado en el territorio, "
+                    "y no un censo poblacional exhaustivo en campo. La completitud se estima mediante el índice no paramétrico Chao1."
+                )
+                st.markdown("---")
+
         c1, c2 = st.columns([2, 1])
         with c1:
             st.markdown("##### Estructura Taxonómica")
