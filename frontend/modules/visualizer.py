@@ -1592,8 +1592,28 @@ def display_graphs_tab(
 
             if not diag.get("estaciones_clusters_df", pd.DataFrame()).empty:
                 st.markdown("##### 🗺️ Mapa de Estaciones Clasificadas (Clústeres K-Means)")
-                fig_cl_map = ce.plot_mapa_clusters_kmeans(diag["estaciones_clusters_df"])
-                st.plotly_chart(fig_cl_map, width="stretch")
+                fig_cl_map = ce.plot_mapa_clusters_kmeans(
+                    diag["estaciones_clusters_df"],
+                    gdf_zona=kwargs.get("gdf_zona"),
+                )
+                st.plotly_chart(fig_cl_map, width="stretch", config={"scrollZoom": True})
+
+            with st.expander("📚 Metodología: ¿Cómo se definen las Zonas Climáticas (K-Means)?", expanded=False):
+                st.markdown("""
+                La zonificación automática agrupa las estaciones activas del territorio seleccionado (y su área de influencia) mediante el algoritmo de aprendizaje no supervisado **K-Means ($k = 3$)** aplicado sobre la **precipitación media anual multianual** de cada estación (calculada únicamente con años completos de $\\ge 10$ meses válidos).
+
+                **1. Proceso de clasificación:**
+                * Se calcula el promedio anual histórico de cada estación en el período seleccionado.
+                * **K-Means** busca 3 centroides que minimizan la varianza interna de cada grupo, separando de forma objetiva las estaciones con comportamientos pluviométricos similares sin usar umbrales arbitrarios fijos.
+                * Los tres grupos se ordenan automáticamente de menor a mayor lluvia media y reciben su etiqueta hidroclimática:
+                  * 🌧️ **Núcleo Húmedo:** Estaciones con los mayores acumulados anuales del territorio (generalmente asociadas a vertientes de barlovento, divisoria de aguas o zonas de alta condensación orográfica).
+                  * ⚖️ **Transición:** Estaciones en el rango intermedio de precipitación que conectan los gradientes secos y húmedos del valle o cuenca.
+                  * 🌵 **Sombra de Lluvia:** Estaciones con los menores acumulados relativos (típicamente fondos de valle encañonados o vertientes de sotavento donde el aire desciende más seco).
+
+                **2. Consideraciones de lectura:**
+                * **Clasificación relativa al territorio y período:** Los límites entre grupos se recalculan dinámicamente al cambiar de municipio/cuenca, radio de búsqueda o rango de años.
+                * **Altitud de estaciones:** Cuando una estación carece de cota oficial en el catálogo (o registra `0 msnm`), el sistema rescata automáticamente su elevación consultando el Modelo de Elevación Digital (**DEM**).
+                """)
 
     # --- TAB 2: RANKING MULTIANUAL ---
     with tabs[1]:

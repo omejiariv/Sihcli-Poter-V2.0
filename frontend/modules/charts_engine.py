@@ -370,7 +370,7 @@ def calcular_diagnostico_ml(df_monthly, df_anual, gdf_stations, col_estacion, co
                 slope_alt = np.polyfit(m_alt["altitud"], m_alt["ppt_media"], 1)[0] * 100.0
                 diag["gradiente_txt"] = f"{slope_alt:+.1f} mm por cada 100 m de elevación"
 
-    # 4. Tabla georreferenciada de estaciones por clúster (para mapa interactivo)
+    # 4. Tabla georreferenciada de estaciones por clúster (con rescate DEM de altitudes en 0)
     diag["estaciones_clusters_df"] = pd.DataFrame()
     if "Zona" in est_media.columns and gdf_stations is not None and not gdf_stations.empty:
         col_nom_g = next((c for c in [col_estacion, "nombre", "id_estacion"] if c in gdf_stations.columns), None)
@@ -392,24 +392,45 @@ def calcular_diagnostico_ml(df_monthly, df_anual, gdf_stations, col_estacion, co
 
             cols_geo = [col_nom_g, "_lat", "_lon"] + (["altitud"] if "altitud" in gdf_geo.columns else [])
             df_map_cl = pd.merge(est_media, gdf_geo[cols_geo], left_on="estacion", right_on=col_nom_g, how="inner")
-            df_map_cl = df_map_cl.dropna(subset=["_lat", "_lon", "ppt_media"])
+            df_map_cl = df_map_cl.dropna(subset=["_lat", "_lon", "ppt_media"]).copy()
+
+            # Rescate de altitudes faltantes o en 0 usando el DEM
+            if "altitud" not in df_map_cl.columns:
+                df_map_cl["altitud"] = np.nan
+            else:
+                df_map_cl["altitud"] = pd.to_numeric(df_map_cl["altitud"], errors="coerce")
+                df_map_cl.loc[df_map_cl["altitud"] <= 0, "altitud"] = np.nan
+
+            if df_map_cl["altitud"].isna().any():
+                try:
+                    from modules.dem_extractor import completar_altitudes_con_dem
+                    df_map_cl = completar_altitudes_con_dem(
+                        df_estaciones=df_map_cl,
+                        col_lat="_lat",
+                        col_lon="_lon",
+                        col_alt="altitud",
+                    )
+                except Exception:
+                    pass
+
             diag["estaciones_clusters_df"] = df_map_cl
 
     return diag
 
-def plot_mapa_clusters_kmeans(df_clusters):
-    """Mapa interactivo de estaciones clasificadas por clúster K-Means."""
+def plot_mapa_clusters_kmeans(df_clusters, gdf_zona=None):
+    """Mapa interactivo de estaciones clasificadas por K-Means con límite territorial."""
     colores_zona = {
         "🌧️ Núcleo Húmedo": "#1d4ed8",
         "⚖️ Transición": "#10b981",
         "🌵 Sombra de Lluvia": "#ea580c",
     }
+    df_plot = df_clusters.copy()
     hover_cols = {"ppt_media": ":.0f", "Zona": True, "_lat": False, "_lon": False}
-    if "altitud" in df_clusters.columns:
+    if "altitud" in df_plot.columns and df_plot["altitud"].notna().any():
         hover_cols["altitud"] = ":.0f"
 
     fig = px.scatter_mapbox(
-        df_clusters,
+        df_plot,
         lat="_lat",
         lon="_lon",
         color="Zona",
@@ -421,12 +442,39 @@ def plot_mapa_clusters_kmeans(df_clusters):
         category_orders={"Zona": ["🌧️ Núcleo Húmedo", "⚖️ Transición", "🌵 Sombra de Lluvia"]},
         mapbox_style="open-street-map",
         zoom=9.5,
-        height=460,
+        height=480,
         labels={"ppt_media": "Media Anual (mm)", "altitud": "Altitud (msnm)"},
         title="Distribución Espacial de Estaciones por Zona Climática (K-Means)",
     )
+
+    # Capa del límite del polígono seleccionado
+    if gdf_zona is not None and not gdf_zona.empty:
+        try:
+            zona_4326 = gdf_zona.to_crs("EPSG:4326") if (gdf_zona.crs and gdf_zona.crs.to_epsg() != 4326) else gdf_zona
+            poly_union = zona_4326.geometry.make_valid().unary_union
+            geoms = list(poly_union.geoms) if hasattr(poly_union, "geoms") else [poly_union]
+
+            lons_poly, lats_poly = [], []
+            for g in geoms:
+                if hasattr(g, "exterior"):
+                    x, y = g.exterior.xy
+                    lons_poly.extend(list(x) + [None])
+                    lats_poly.extend(list(y) + [None])
+
+            if lons_poly:
+                fig.add_trace(go.Scattermapbox(
+                    lon=lons_poly,
+                    lat=lats_poly,
+                    mode="lines",
+                    line=dict(color="#111827", width=2.8),
+                    name="Límite Territorial",
+                    hoverinfo="skip",
+                ))
+        except Exception:
+            pass
+
     fig.update_layout(
         margin=dict(l=0, r=0, t=40, b=0),
         legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1),
     )
-    return fig    
+    return fig
