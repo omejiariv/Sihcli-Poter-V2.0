@@ -346,7 +346,7 @@ def renderizar_cruce_ecohidrologico(nombre_seleccion: str, nivel_escala: str):
             min_value=1.0,
             value=float(round(area_meta_base, 1)),
             step=5.0,
-            key="f3_ha_rest",
+            key=f"f3_ha_rest_{nombre_seleccion}",
         )
         densidad_arb = st.slider("Densidad de siembra (árboles/ha):", 400, 1600, 1100, step=100, key="f3_dens")
         costo_ha_usd = st.number_input("Costo integral por hectárea (USD):", min_value=500.0, value=2500.0, step=250.0, key="f3_costo")

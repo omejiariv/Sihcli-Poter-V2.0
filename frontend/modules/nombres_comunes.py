@@ -202,18 +202,24 @@ def enriquecer_nombres_comunes(df: pd.DataFrame, col_cientifico: str = "Especie"
 
 def obtener_paleta_por_zona_vida(zona_vida_txt: str):
     """Retorna (codigo_zv, lista_especies) a partir del nombre de Zona de Vida de Holdridge."""
-    txt = str(zona_vida_txt or "").lower()
-    if "bmh-mb" in txt or "muy húmedo montano bajo" in txt or "muy humedo montano bajo" in txt:
+    import unicodedata
+
+    txt = unicodedata.normalize("NFKD", str(zona_vida_txt or "").lower())
+    txt = "".join(c for c in txt if unicodedata.category(c) != "Mn")
+
+    # El orden importa: evaluar "muy humedo / pluvial" antes que "humedo"
+    if any(k in txt for k in ["bmh-mb", "bmh-m", "bp-mb", "bp-m", "muy humedo montano", "pluvial montano"]):
         return "bmh-MB", PALETA_RESTAURACION_HOLDRIDGE["bmh-MB"]
-    if "bh-mb" in txt or "húmedo montano bajo" in txt or "humedo montano bajo" in txt:
+    if any(k in txt for k in ["bh-mb", "bh-m", "humedo montano"]):
         return "bh-MB", PALETA_RESTAURACION_HOLDRIDGE["bh-MB"]
-    if "bmh-pm" in txt or "muy húmedo premontano" in txt or "muy humedo premontano" in txt:
+    if any(k in txt for k in ["bmh-pm", "bp-pm", "muy humedo premontano", "pluvial premontano"]):
         return "bmh-PM", PALETA_RESTAURACION_HOLDRIDGE["bmh-PM"]
-    if "bh-pm" in txt or "húmedo premontano" in txt or "humedo premontano" in txt:
+    if any(k in txt for k in ["bh-pm", "humedo premontano"]):
         return "bh-PM", PALETA_RESTAURACION_HOLDRIDGE["bh-PM"]
-    if "bs-t" in txt or "seco tropical" in txt:
+    if any(k in txt for k in ["bs-t", "me-t", "seco tropical", "monte espinoso"]):
         return "bs-T", PALETA_RESTAURACION_HOLDRIDGE["bs-T"]
-    if "bh-t" in txt or "húmedo tropical" in txt or "humedo tropical" in txt:
+    if any(k in txt for k in ["bh-t", "bmh-t", "bp-t", "humedo tropical", "pluvial tropical"]):
         return "bh-T", PALETA_RESTAURACION_HOLDRIDGE["bh-T"]
+
     # Respaldo andino por defecto para Antioquia
     return "bh-MB", PALETA_RESTAURACION_HOLDRIDGE["bh-MB"]
