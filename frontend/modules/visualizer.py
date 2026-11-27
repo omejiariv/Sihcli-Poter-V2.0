@@ -215,162 +215,9 @@ def display_welcome_tab():
 
 # -----------------------------------------------------------------------------
 # 1. FUNCIONES AUXILIARES
-# -----------------------------------------------------------------------------
-
-# --- HELPER: GEOLOCALIZACIÓN MANUAL PARA PLOTLY ---
-def _get_user_location_sidebar(key_suffix=""):
-    """Agrega controles en el sidebar para ubicar al usuario en mapas Plotly."""
-    with st.sidebar.expander(f"📍 Mi Ubicación ({key_suffix})", expanded=False):
-        st.caption(
-            "Ingrese coordenadas para ver su ubicación en los mapas estáticos (Zonas de Vida, Isoyetas, etc)."
-        )
-        # Usamos key_suffix para hacer únicos los keys
-        u_lat = st.number_input(
-            "Latitud:", value=6.25, format="%.4f", step=0.01, key=f"u_lat_{key_suffix}"
-        )
-        u_lon = st.number_input(
-            "Longitud:",
-            value=-75.56,
-            format="%.4f",
-            step=0.01,
-            key=f"u_lon_{key_suffix}",
-        )
-        show_loc = st.checkbox(
-            "Mostrar en mapa", value=False, key=f"show_loc_{key_suffix}"
-        )
-
-        if show_loc:
-            st.success(f"📍 Ubicación activa:\nLat: {u_lat}\nLon: {u_lon}")
-            return (u_lat, u_lon)
-        return None
-
-# ==============================================================================
 # 0. ESTÉTICA UNIFICADA (EL ALEPH)
 # ==============================================================================
 
-# --- A. GENERADOR DE POPUPS (Tu diseño solicitado) ---
-def generar_popup_estacion(row, valor_col='ppt_media'):
-    """
-    Genera el HTML para el popup de la estación con datos estadísticos.
-    """
-    # Limpieza de strings para evitar errores de comillas
-    nombre = str(row.get('nombre', 'Estación')).replace("'", "")
-    muni = str(row.get('municipio', 'N/A')).replace("'", "")
-    
-    # Extracción de valores numéricos
-    altura = float(row.get('altitud', 0))
-    valor = float(row.get(valor_col, 0))
-    std = float(row.get('ppt_std', 0))
-    anios = int(row.get('n_anios', 0)) # <--- Nuevo campo calculado
-    
-    html = f"""
-    <div style='font-family:sans-serif; font-size:12px; min-width:160px; line-height:1.4;'>
-        <b style='color:#1f77b4; font-size:14px'>{nombre}</b>
-        <hr style='margin:4px 0; border-top:1px solid #ddd'>
-        📍 <b>Mpio:</b> {muni}<br>
-        ⛰️ <b>Altitud:</b> {altura:.0f} msnm<br>
-        💧 <b>P. Media:</b> {valor:.0f} mm/año<br>
-        📉 <b>Desv. Std:</b> ±{std:.0f} mm<br>
-        📅 <b>Registro:</b> {anios} años
-    </div>
-    """
-    return html
-
-def generar_popup_bocatoma(row):
-    """Popup HTML para Bocatomas (Campos Reales)."""
-    nombre = str(row.get('nombre_acu', 'Bocatoma')).replace("'", "")
-    fuente = str(row.get('fuente_aba', 'N/A')).replace("'", "")
-    # Combinamos Municipio y Vereda
-    mpio = str(row.get('municipio', '')).strip()
-    vereda = str(row.get('veredas', '')).strip()
-    ubicacion = f"{mpio} - {vereda}" if vereda else mpio
-    
-    tipo = str(row.get('tipo', 'N/A'))
-    entidad = str(row.get('entidad_ad', 'N/A'))
-
-    return f"""
-    <div style='font-family:sans-serif; font-size:12px; min-width:180px;'>
-        <b style='color:#16a085; font-size:14px'>🚰 {nombre}</b>
-        <hr style='margin:4px 0; border-top:1px solid #ddd'>
-        📍 <b>Ubicación:</b> {ubicacion}<br>
-        🌊 <b>Fuente:</b> {fuente}<br>
-        ⚙️ <b>Tipo:</b> {tipo}<br>
-        🏢 <b>Entidad:</b> {entidad}
-    </div>
-    """
-
-def generar_popup_predio(row):
-    """Popup HTML blindado contra mayúsculas/minúsculas."""
-    
-    # Normalizamos las llaves del row a minúsculas para buscar sin errores
-    datos_norm = {k.lower(): v for k, v in row.items()}
-    
-    def get_seguro(col_key, default='N/A'):
-        val = datos_norm.get(col_key.lower(), default)
-        if val is None or str(val).lower() in ['none', 'nan', 'null', '']:
-            return default
-        return str(val).strip()
-
-    # Ahora buscamos usando las claves en minúscula (coincide con tu tabla)
-    nombre = get_seguro('nombre_pre', 'Predio')
-    pk = get_seguro('pk_predios')
-    anio = get_seguro('año_acuer', '-')
-    
-    mpio = get_seguro('nomb_mpio')
-    vereda = get_seguro('nombre_ver')
-    ubicacion = f"{mpio} / {vereda}" if (mpio != 'N/A' or vereda != 'N/A') else "N/A"
-    
-    embalse = get_seguro('embalse')
-    mecanismo = get_seguro('mecanism')
-    
-    # Área
-    try:
-        # Buscamos 'area_ha' o 'shape_area' por si acaso
-        val_area = float(datos_norm.get('area_ha', 0))
-        area_txt = f"{val_area:.2f} ha"
-    except:
-        area_txt = "N/A"
-
-    return f"""
-    <div style='font-family:sans-serif; font-size:12px; min-width:200px;'>
-        <b style='color:#d35400; font-size:14px'>🏡 {nombre}</b>
-        <hr style='margin:4px 0; border-top:1px solid #ddd'>
-        🔑 <b>PK:</b> {pk}<br>
-        📅 <b>Año:</b> {anio}<br>
-        📍 <b>Ubicación:</b> {ubicacion}<br>
-        💧 <b>Embalse:</b> {embalse}<br>
-        📜 <b>Mecanismo:</b> {mecanismo}<br>
-        📐 <b>Área:</b> {area_txt}
-    </div>
-    """
-
-    # 3. HTML Estructurado
-    return f"""
-    <div style='font-family:sans-serif; font-size:12px; min-width:220px;'>
-        <b style='color:#d35400; font-size:14px'>🏡 {nombre_predio}</b>
-        <hr style='margin:4px 0; border-top:1px solid #ddd'>
-        🔑 <b>PK:</b> {pk}<br>
-        📅 <b>Año:</b> {anio}<br>
-        📍 <b>Ubicación:</b> {ubicacion}<br>
-        💧 <b>Embalse:</b> {embalse}<br>
-        📜 <b>Mecanismo:</b> {mecanismo}<br>
-        📐 <b>Área:</b> {area_txt}
-    </div>
-    """
-
-    # 2. Construcción del HTML
-    return f"""
-    <div style='font-family:sans-serif; font-size:12px; min-width:200px;'>
-        <b style='color:#d35400; font-size:14px'>🏡 {nombre}</b>
-        <hr style='margin:4px 0; border-top:1px solid #ddd'>
-        🆔 <b>ID Predio:</b> {pk_id}<br>
-        💧 <b>Embalse:</b> {embalse}<br>
-        📍 <b>Vereda:</b> {vereda}<br>
-        📐 <b>Área:</b> {area_txt}<br>
-        📜 <b>Mecanismo:</b> {mecanismo}
-    </div>
-    """
-    
 def _plot_panel_regional(rng, meth, col, tag, u_loc, df_long, gdf_stations):
     """Helper para graficar un panel regional (A o B)."""
     mask = (df_long[Config.YEAR_COL] >= rng[0]) & (df_long[Config.YEAR_COL] <= rng[1])
@@ -516,30 +363,16 @@ def _plot_panel_regional(rng, meth, col, tag, u_loc, df_long, gdf_stations):
                     m, height=350, width="stretch", key=f"fol_comp_{tag}"
                 )
 
-@st.cache_data(ttl=3600)
-def get_img_as_base64(url):
-    """
-    Descarga una imagen y la convierte a string Base64.
-    Esto permite incrustarla directamente en el HTML, evitando bloqueos de hotlinking.
-    """
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://google.com",
-    }
-    try:
-        r = requests.get(url, headers=headers, timeout=10)
-        if r.status_code == 200:
-            # Codificar a Base64
-            encoded = base64.b64encode(r.content).decode()
-            return f"data:image/png;base64,{encoded}"
-    except Exception as e:
-        print(f"Error Base64: {e}")
-    return None
-
 def analyze_point_data(lat, lon, df_long, gdf_stations, gdf_municipios, gdf_subcuencas):
     """Analiza un punto geográfico: Contexto, Datos Históricos y Variables Ambientales."""
-    results = {"Municipio": "Desconocido", "Cuenca": "Fuera de cuencas", "Altitud": 1500, "Cobertura": "No disponible", "Ppt_Media": 0}
-    point_geom = Point(lon, lat)  
+    results = {
+        "Municipio": "Desconocido",
+        "Cuenca": "Fuera de cuencas",
+        "Altitud": 1500,
+        "Cobertura": "No disponible",
+        "Ppt_Media": 0,
+    }
+    point_geom = Point(lon, lat)
 
     try:
         if gdf_municipios is not None and not gdf_municipios.empty:
@@ -552,20 +385,24 @@ def analyze_point_data(lat, lon, df_long, gdf_stations, gdf_municipios, gdf_subc
             matches_c = gdf_subcuencas[gdf_subcuencas.contains(point_geom)]
             if not matches_c.empty:
                 results["Cuenca"] = matches_c.iloc[0].get("nombre", "Sin Nombre")
-    except Exception as e: print(f"Error espacial: {e}")
+    except Exception as e:
+        print(f"Error espacial: {e}")
 
     try:
         if os.path.exists(Config.DEM_FILE_PATH):
             with rasterio.open(Config.DEM_FILE_PATH) as src:
                 val = next(src.sample([(lon, lat)]))[0]
-                if val > -1000: results["Altitud"] = int(val)
+                if val > -1000:
+                    results["Altitud"] = int(val)
         results["Cobertura"] = lc.get_land_cover_at_point(lat, lon, Config.LAND_COVER_RASTER_PATH)
-    except Exception as e: results["Cobertura"] = f"Error Raster: {e}"
+    except Exception as e:
+        results["Cobertura"] = f"Error Raster: {e}"
 
     try:
         z_id = lz.classify_life_zone_alt_ppt(results["Altitud"], results["Ppt_Media"])
         results["Zona_Vida"] = lz.holdridge_int_to_name_simplified.get(z_id, "Desconocido")
-    except: results["Zona_Vida"] = "Error cálculo LZ"
+    except Exception:
+        results["Zona_Vida"] = "Error cálculo LZ"
 
     return results
 
@@ -794,41 +631,6 @@ def create_enso_chart(enso_data):
 
 
 # 1. FUNCIONES AUXILIARES DE PARSEO Y DATOS
-# -----------------------------------------------------------------------------
-
-
-def parse_spanish_date_visualizer(x):
-    """
-    Función de rescate para fechas en español dentro del visualizador.
-    Convierte 'ene-70', 'feb-90' a datetime real.
-    """
-    if pd.isna(x) or str(x).strip() == "": return pd.NaT
-    if isinstance(x, pd.Timestamp): return x
-    
-    x_str = str(x).lower().strip()
-    
-    # Mapa de traducción
-    trans = {
-        "ene": "Jan", "feb": "Feb", "mar": "Mar", "abr": "Apr",
-        "may": "May", "jun": "Jun", "jul": "Jul", "ago": "Aug",
-        "sep": "Sep", "oct": "Oct", "nov": "Nov", "dic": "Dec"
-    }
-    
-    for es, en in trans.items():
-        if es in x_str:
-            x_str = x_str.replace(es, en)
-            break
-            
-    try:
-        # Intento 1: Formato corto 'Jan-70'
-        return pd.to_datetime(x_str, format="%b-%y")
-    except:
-        try:
-            # Intento 2: Estándar
-            return pd.to_datetime(x_str)
-        except:
-            return pd.NaT
-
 # -----------------------------------------------------------------------------
 # CONEXIÓN CON IRI (COLUMBIA UNIVERSITY) - BLOQUE DE VISUALIZACIÓN REFINADO
 # -----------------------------------------------------------------------------
@@ -3349,7 +3151,7 @@ def display_anomalies_tab(
                 # Parseo seguro de fechas
                 if enso_clean[Config.DATE_COL].dtype == "object":
                     enso_clean[Config.DATE_COL] = enso_clean[Config.DATE_COL].apply(
-                        parse_spanish_date
+                        parse_spanish_date_visualizer
                     )
                 else:
                     enso_clean[Config.DATE_COL] = pd.to_datetime(
@@ -6460,183 +6262,6 @@ def display_current_filters(stations_sel, regions_sel, munis_sel, year_range, in
                 if not munis_sel: txt_munis = f"(Incluye: {txt_munis})"
 
             st.markdown(f"**🏙️ Municipios:** {txt_munis}")
-
-# --- B. MAPA INTERACTIVO MAESTRO ---
-def generar_mapa_interactivo(grid_data, bounds, gdf_stations, gdf_zona, gdf_buffer, 
-                             gdf_predios=None, gdf_bocatomas=None, gdf_municipios=None,
-                             nombre_capa="Variable", cmap_name="Spectral_r", opacidad=0.7):
-    """
-    Genera el mapa completo con Raster coloreado, Isolíneas limpias y Vectores ricos.
-    """
-    minx, miny, maxx, maxy = bounds
-    center_lat = (miny + maxy) / 2
-    center_lon = (minx + maxx) / 2
-    
-    m = folium.Map(location=[center_lat, center_lon], zoom_start=11, tiles=None, control_scale=True)
-    
-    # Capas Base
-    folium.TileLayer(tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri", name="🛰️ Satélite", overlay=False).add_to(m)
-    folium.TileLayer(tiles="OpenStreetMap", name="🗺️ Mapa Claro", overlay=False).add_to(m)
-
-    # 1. RASTER (Imagen de Fondo)
-    if grid_data is not None:
-        Z = grid_data[0] if isinstance(grid_data, tuple) else grid_data
-        Z = Z.astype(float)
-        try:
-            valid = Z[~np.isnan(Z)]
-            vmin, vmax = (np.percentile(valid, 2), np.percentile(valid, 98)) if len(valid) > 0 else (0, 1)
-            
-            norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
-            cmap = plt.get_cmap(cmap_name)
-            rgba_img = cmap(norm(Z))
-            rgba_img[..., 3] = np.where(np.isnan(Z), 0, opacidad)
-            
-            folium.raster_layers.ImageOverlay(
-                image=np.flipud(rgba_img),
-                bounds=[[miny, minx], [maxy, maxx]], 
-                name=f"🎨 {nombre_capa}", opacity=1, mercator_project=True
-            ).add_to(m)
-            
-            # Leyenda
-            colors_hex = [mcolors.to_hex(cmap(i)) for i in np.linspace(0, 1, 15)]
-            cm.LinearColormap(colors=colors_hex, vmin=vmin, vmax=vmax, caption=nombre_capa).add_to(m)
-        except Exception as e: 
-            print(f"Error renderizando raster: {e}")
-
-    # 2. ISOLÍNEAS (Método limpio Allsegs con etiquetas)
-    if grid_data is not None:
-        fg_iso = folium.FeatureGroup(name="〰️ Isolíneas", overlay=True, show=True)
-        try:
-            Z_Smooth = gaussian_filter(np.nan_to_num(Z, nan=np.nanmean(Z)), sigma=1.0)
-            xi = np.linspace(minx, maxx, Z.shape[1])
-            yi = np.linspace(miny, maxy, Z.shape[0])
-            grid_x_mesh, grid_y_mesh = np.meshgrid(xi, yi)
-            
-            fig_iso, ax_iso = plt.subplots()
-            contours = ax_iso.contour(grid_x_mesh, grid_y_mesh, Z_Smooth, levels=12)
-            plt.close(fig_iso)
-            
-            for i, level_segs in enumerate(contours.allsegs):
-                val = contours.levels[i]
-                for segment in level_segs:
-                    lat_lon_coords = [[pt[1], pt[0]] for pt in segment]
-                    
-                    if len(lat_lon_coords) > 10: # Evitar micro-líneas
-                        # Trazar la línea
-                        folium.PolyLine(
-                            lat_lon_coords, color='black', weight=0.6, opacity=0.5,
-                            tooltip=f"{val:.1f}"
-                        ).add_to(fg_iso)
-                        
-                        # ETIQUETA DE TEXTO (DivIcon)
-                        mid_idx = len(lat_lon_coords) // 2
-                        mid_point = lat_lon_coords[mid_idx]
-                        
-                        folium.map.Marker(
-                            mid_point,
-                            icon=DivIcon(
-                                icon_size=(150,36),
-                                icon_anchor=(0,0),
-                                html=f'<div style="font-size: 9pt; font-weight: bold; color: #333; text-shadow: 1px 1px 0 #fff;">{val:.0f}</div>'
-                            )
-                        ).add_to(fg_iso)
-
-        except Exception as e: 
-            print(f"Error renderizando isolíneas: {e}")
-        fg_iso.add_to(m)
-
-    # 3. MUNICIPIOS (Con Tooltip de Área)
-    if gdf_municipios is not None and not gdf_municipios.empty:
-        if 'MPIO_NAREA' in gdf_municipios.columns:
-            gdf_municipios['area_ha_fmt'] = (gdf_municipios['MPIO_NAREA'] * 100).apply(lambda x: f"{x:,.1f} ha")
-            col_area = 'area_ha_fmt'
-        else:
-            col_area = None
-
-        col_name = next((c for c in gdf_municipios.columns if 'MPIO_CNMBR' in c or 'nombre' in c), None)
-        
-        fields = []
-        aliases = []
-        if col_name: 
-            fields.append(col_name); aliases.append('Municipio:')
-        if col_area:
-            fields.append(col_area); aliases.append('Área:')
-
-        folium.GeoJson(
-            gdf_municipios, name="🏛️ Municipios",
-            style_function=lambda x: {'color': '#7f8c8d', 'weight': 1, 'fill': False, 'dashArray': '4, 4'},
-            tooltip=folium.GeoJsonTooltip(fields=fields, aliases=aliases) if fields else None
-        ).add_to(m)
-
-    # 4. CAPAS ZONA (Límites de Cuenca y Buffer)
-    if gdf_zona is not None:
-        folium.GeoJson(gdf_zona, name="🟦 Cuenca", style_function=lambda x: {'color': 'black', 'weight': 2, 'fill': False}).add_to(m)
-    if gdf_buffer is not None:
-        folium.GeoJson(gdf_buffer, name="⭕ Buffer", style_function=lambda x: {'color': 'red', 'weight': 1, 'dashArray': '5, 5', 'fill': False}).add_to(m)
-
-    # 5. PREDIOS (Interacción Rica con conversión de CRS segura)
-    if gdf_predios is not None and not gdf_predios.empty:
-        fg_predios = folium.FeatureGroup(name="🏡 Predios", show=True)
-        
-        try:
-            if gdf_predios.crs is not None and gdf_predios.crs.to_string() != "EPSG:4326":
-                gdf_viz = gdf_predios.to_crs(epsg=4326)
-            else:
-                gdf_viz = gdf_predios
-        except:
-            gdf_viz = gdf_predios 
-            
-        for _, row in gdf_viz.iterrows():
-            if row.geometry and not row.geometry.is_empty:
-                try:
-                    html = generar_popup_predio(row)
-                    popup_obj = folium.Popup(html, max_width=250)
-                except:
-                    popup_obj = folium.Popup(str(row.get('nombre_pre', 'Predio')), max_width=200)
-
-                folium.GeoJson(
-                    row.geometry,
-                    style_function=lambda x: {'color': '#e67e22', 'weight': 1.5, 'fillOpacity': 0.3, 'fillColor': '#f39c12'},
-                    popup=popup_obj,
-                    tooltip=str(row.get('nombre_pre', 'Predio'))
-                ).add_to(fg_predios)
-
-        fg_predios.add_to(m)
-
-    # 6. BOCATOMAS
-    if gdf_bocatomas is not None and not gdf_bocatomas.empty:
-        fg_bocas = folium.FeatureGroup(name="🚰 Bocatomas", show=True)
-        for _, row in gdf_bocatomas.iterrows():
-            if row.geometry:
-                html = generar_popup_bocatoma(row)
-                folium.CircleMarker(
-                    location=[row.geometry.y, row.geometry.x],
-                    radius=6, color='white', weight=1, fill=True, fill_color='#16a085', fill_opacity=1,
-                    popup=folium.Popup(html, max_width=200),
-                    tooltip=str(row.get('nombre_predio', 'Bocatoma'))
-                ).add_to(fg_bocas)
-        fg_bocas.add_to(m)
-
-    # 7. ESTACIONES
-    if gdf_stations is not None and not gdf_stations.empty:
-        fg_est = folium.FeatureGroup(name="🌦️ Estaciones")
-        for _, row in gdf_stations.iterrows():
-            html = generar_popup_estacion(row)
-            folium.CircleMarker(
-                location=[row.geometry.y, row.geometry.x],
-                radius=5, color='black', weight=1, fill=True, fill_color='#3498db', fill_opacity=1,
-                popup=folium.Popup(html, max_width=200),
-                tooltip=row.get('nombre', 'Estación')
-            ).add_to(fg_est)
-        fg_est.add_to(m)
-
-    # Controles de UI del Mapa
-    folium.LayerControl(position='topright', collapsed=False).add_to(m)
-    Fullscreen().add_to(m)
-    MousePosition().add_to(m)
-    MeasureControl(position='bottomleft').add_to(m)
-    
-    return m
 
 # -------------------------------------------------------------------------
 # FUNCIÓN COMPARATIVA MULTIESCALAR (VERSIÓN SUPABASE MASTER)

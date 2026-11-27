@@ -288,167 +288,180 @@ def add_ee_layer(self, ee_image_object, vis_params, name):
 folium.Map.add_ee_layer = add_ee_layer
 
 # ==========================================
-# 3. RENDERIZADO DEL MAPA DINÁMICO (Conexión SIG)
+# 3. MOTOR SATELITAL ESTRUCTURAL (CACHEADO Y ADAPTATIVO)
 # ==========================================
+DW_VIS = {
+    'min': 0, 'max': 8,
+    'palette': [
+        '#419BDF',  # 0: Agua
+        '#397D49',  # 1: Árboles / Bosques
+        '#88B053',  # 2: Pastos
+        '#7A87C6',  # 3: Cultivos
+        '#E49635',  # 4: Matorrales
+        '#DFC35A',  # 5: Suelo Desnudo
+        '#C4281B',  # 6: Construido / Urbano
+        '#A59B8F',  # 7: Nieve / Hielo
+        '#B39FE1'   # 8: Nubes / Sin datos
+    ]
+}
+
+NOMBRES_CLASES_DW = {
+    0: "Agua", 1: "Bosques", 2: "Pastos", 3: "Cultivos",
+    4: "Matorrales", 5: "Suelo Desnudo", 6: "Urbano / Infraestructura",
+    7: "Nieve", 8: "Nubes"
+}
+
+
+@st.cache_data(ttl=86400, max_entries=12, show_spinner=False)
+def consultar_dynamic_world_gee(nombre_zona: str, geojson_str: str, anio: int, scale_m: int):
+    """Consulta cacheada a GEE: retorna (estadisticas_lista, tile_url)."""
+    roi_ee = ee.Geometry(json.loads(geojson_str))
+
+    dw_coleccion = (
+        ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
+        .filterBounds(roi_ee)
+        .filterDate(f'{anio}-01-01', f'{anio + 1}-01-01')
+    )
+    dw_imagen = dw_coleccion.select('label').mode().clip(roi_ee)
+
+    # 1. URL de teselas (rápido)
+    map_id_dict = dw_imagen.getMapId(DW_VIS)
+    tile_url = map_id_dict['tile_fetcher'].url_format
+
+    # 2. Estadísticas de área con tileScale=4 para evitar bloqueos en GEE
+    pixel_area = ee.Image.pixelArea()
+    area_por_clase = (
+        pixel_area.addBands(dw_imagen)
+        .reduceRegion(
+            reducer=ee.Reducer.sum().group(groupField=1, groupName='clase'),
+            geometry=roi_ee,
+            scale=scale_m,
+            maxPixels=1e13,
+            tileScale=4,
+            bestEffort=True
+        )
+        .get('groups')
+    )
+    estadisticas = area_por_clase.getInfo() or []
+    return estadisticas, tile_url
+
+
 if iniciar_conexion_gee():
-    # Validamos que el usuario haya seleccionado una zona válida en el selector
     if gdf_zona is not None and not gdf_zona.empty:
-        st.success(f"✅ Satélite enlazado. Escaneando la zona: **{nombre_zona}**")
-        
-        with st.spinner("Calculando órbitas y aplicando IA de clasificación... esto puede tomar unos segundos."):
-            # 1. Convertir el polígono Geopandas a formato Google Earth Engine
-            minx, miny, maxx, maxy = gdf_zona.total_bounds
-            
-            # Extraemos la geometría exacta (con todas sus curvas) para recortar el mapa
-            # 🔥 CURACIÓN TOPOLÓGICA: Hacemos válidas las geometrías y aplicamos un buffer 0 para eliminar nudos antes de unir
-            geom_unificada = gdf_zona.geometry.make_valid().buffer(0).unary_union
-            # Convertimos esa figura maestra al lenguaje que entiende el satélite
-            roi_ee = ee.Geometry(geom_unificada.__geo_interface__)
-            
-            # 2. Consultar Dynamic World para el último año
-            dw_coleccion = ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1') \
-                           .filterBounds(roi_ee) \
-                           .filterDate('2023-01-01', '2024-01-01')
-            
-            # Magia: Tomamos el promedio (mode) y lo RECORTAMOS con la forma exacta de la cuenca
-            dw_imagen = dw_coleccion.select('label').mode().clip(roi_ee)
-            
-            # ==========================================================
-            # 🧠 INVENTARIO TOTAL DE COBERTURAS EN TIEMPO REAL
-            # ==========================================================
+        c_top1, c_top2 = st.columns([2.5, 1])
+        with c_top1:
+            st.success(f"✅ Satélite enlazado. Territorio activo: **{nombre_zona}**")
+        with c_top2:
+            anio_sel = st.selectbox("Año de análisis (Sentinel-2):", [2025, 2024, 2023], index=0, key="gee_anio_sel")
+
+        # 1. Normalización estricta a WGS84 y cálculo de escala adaptativa
+        zona_4326 = gdf_zona.to_crs("EPSG:4326") if (gdf_zona.crs and gdf_zona.crs.to_epsg() != 4326) else gdf_zona.copy()
+        area_km2 = float(zona_4326.to_crs("+proj=cea").area.sum() / 1e6)
+
+        if area_km2 < 50:
+            scale_ee, tol_simp = 10, 0.00005    # Barrios / Veredas (~5m)
+        elif area_km2 < 2500:
+            scale_ee, tol_simp = 30, 0.0003     # Municipios / Cuencas (~30m)
+        else:
+            scale_ee, tol_simp = 100, 0.001     # Subregiones / Antioquia (~100m)
+
+        geom_unificada = zona_4326.geometry.make_valid().buffer(0).unary_union
+        geom_gee = geom_unificada.simplify(tol_simp, preserve_topology=True)
+        geojson_str = json.dumps(geom_gee.__geo_interface__)
+
+        with st.spinner(f"🛰️ Consultando Dynamic World {anio_sel} para {nombre_zona} (resolución {scale_ee} m)..."):
             try:
-                # 1. Agrupar píxeles por clase y sumar su área (m2)
-                pixel_area = ee.Image.pixelArea()
-                area_por_clase = pixel_area.addBands(dw_imagen).reduceRegion(
-                    reducer=ee.Reducer.sum().group(groupField=1, groupName='clase'),
-                    geometry=roi_ee,
-                    scale=10, # Resolución de 10x10 metros
-                    maxPixels=1e13, # 🔥 Límite expandido a 10 billones de píxeles
-                    bestEffort=True # 🔥 Si es muy pesado, Google ajustará la escala automáticamente para no fallar
-                ).get('groups')
-                
-                # 2. Traer los datos desde los servidores de Google a Python
-                estadisticas = area_por_clase.getInfo()
-                
-                # 3. Diccionario de Clases Oficial de Dynamic World
-                nombres_clases = {
-                    0: "Agua", 1: "Bosques", 2: "Pastos", 3: "Cultivos", 
-                    4: "Matorrales", 5: "Suelo Desnudo", 6: "Urbano / Infraestructura", 
-                    7: "Nieve", 8: "Nubes"
-                }
-                
-                # 4. Procesar resultados y capturar TODAS las coberturas
-                resultados = []
-                
-                # Inicializamos contadores en 0.0 para evitar errores si una clase no existe en la foto
-                ha_coberturas = {
-                    'Agua': 0.0, 'Bosques': 0.0, 'Pastos': 0.0, 
-                    'Cultivos': 0.0, 'Matorrales': 0.0, 
-                    'Suelo Desnudo': 0.0, 'Urbano': 0.0
-                }
-                
-                for item in estadisticas:
-                    clase_id = int(item['clase'])
-                    area_ha = item['sum'] / 10000.0 # Convertir m2 a Hectáreas
-                    nombre = nombres_clases.get(clase_id, "Desconocido")
-                    resultados.append({"Cobertura": nombre, "Área (ha)": area_ha})
-                    
-                    # 🧲 Atrapamos el valor exacto para cada clase
-                    if clase_id == 0: ha_coberturas['Agua'] = area_ha
-                    elif clase_id == 1: ha_coberturas['Bosques'] = area_ha
-                    elif clase_id == 2: ha_coberturas['Pastos'] = area_ha
-                    elif clase_id == 3: ha_coberturas['Cultivos'] = area_ha
-                    elif clase_id == 4: ha_coberturas['Matorrales'] = area_ha
-                    elif clase_id == 5: ha_coberturas['Suelo Desnudo'] = area_ha
-                    elif clase_id == 6: ha_coberturas['Urbano'] = area_ha
-                    
-                # 💾 INYECCIÓN AL TORRENTE SANGUÍNEO (SESSION STATE)
-                st.session_state['satelite_ha_agua'] = ha_coberturas['Agua']
-                st.session_state['satelite_ha_bosque'] = ha_coberturas['Bosques']
-                st.session_state['satelite_ha_pastos'] = ha_coberturas['Pastos']
-                st.session_state['satelite_ha_cultivos'] = ha_coberturas['Cultivos']
-                st.session_state['satelite_ha_matorrales'] = ha_coberturas['Matorrales']
-                st.session_state['satelite_ha_suelo_desnudo'] = ha_coberturas['Suelo Desnudo']
-                st.session_state['satelite_ha_urbano'] = ha_coberturas['Urbano']
-                
-                # 5. Renderizar Gráfico y Tabla en Streamlit
-                if resultados:
-                    import pandas as pd
-                    import plotly.express as px
-                    
-                    df_coberturas = pd.DataFrame(resultados).sort_values(by="Área (ha)", ascending=False)
-                    
-                    st.markdown("### 📊 Inventario Satelital de Uso de Suelo")
-                    c_graf, c_tabla = st.columns([2, 1])
-                    
-                    with c_tabla:
-                        st.dataframe(df_coberturas.style.format({"Área (ha)": "{:,.1f}"}), width="stretch")
-                        
-                    with c_graf:
-                        fig_pie = px.pie(
-                            df_coberturas, values='Área (ha)', names='Cobertura', hole=0.4, 
-                            color='Cobertura', color_discrete_map={
-                                "Agua": "#419BDF", "Bosques": "#397D49", "Pastos": "#88B053", 
-                                "Cultivos": "#7A87C6", "Matorrales": "#E49635", "Suelo Desnudo": "#DFC35A", 
-                                "Urbano / Infraestructura": "#C4281B", "Nieve": "#A59B8F", "Nubes": "#B39FE1"
-                            }
-                        )
-                        fig_pie.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=350)
-                        st.plotly_chart(fig_pie, width="stretch")
-                        
+                estadisticas, tile_url = consultar_dynamic_world_gee(nombre_zona, geojson_str, anio_sel, scale_ee)
             except Exception as e:
-                st.warning(f"Error procesando estadísticas satelitales: {e}")
-            # ==========================================================
-            # ==========================================================
-            
-            # 3. Paleta Oficial de Dynamic World
-            dw_vis = {
-                'min': 0, 'max': 8,
-                'palette': [
-                    '#419BDF', # 0: Agua
-                    '#397D49', # 1: Árboles / Bosques
-                    '#88B053', # 2: Pastos
-                    '#7A87C6', # 3: Cultivos
-                    '#E49635', # 4: Matorrales
-                    '#DFC35A', # 5: Suelo Desnudo
-                    '#C4281B', # 6: Construido / Urbano
-                    '#A59B8F', # 7: Nieve / Hielo
-                    '#B39FE1'  # 8: Nubes / Sin datos
-                ]
+                st.error(f"⚠️ Error consultando Google Earth Engine: {e}")
+                estadisticas, tile_url = [], None
+
+        # 2. Inventario de Coberturas e inyección a Session State
+        if estadisticas:
+            import pandas as pd
+            import plotly.express as px
+
+            resultados = []
+            ha_coberturas = {
+                'Agua': 0.0, 'Bosques': 0.0, 'Pastos': 0.0,
+                'Cultivos': 0.0, 'Matorrales': 0.0,
+                'Suelo Desnudo': 0.0, 'Urbano': 0.0
             }
-            
-            # 4. Crear Mapa Base Centrado en la Zona Seleccionada
-            centro_y = (miny + maxy) / 2
-            centro_x = (minx + maxx) / 2
-            m = folium.Map(location=[centro_y, centro_x], zoom_start=11)
-            
-            # Fondo satelital normal de Google
+
+            for item in estadisticas:
+                clase_id = int(item['clase'])
+                area_ha = item['sum'] / 10000.0
+                nombre = NOMBRES_CLASES_DW.get(clase_id, "Desconocido")
+                resultados.append({"Cobertura": nombre, "Área (ha)": area_ha})
+
+                if clase_id == 0: ha_coberturas['Agua'] = area_ha
+                elif clase_id == 1: ha_coberturas['Bosques'] = area_ha
+                elif clase_id == 2: ha_coberturas['Pastos'] = area_ha
+                elif clase_id == 3: ha_coberturas['Cultivos'] = area_ha
+                elif clase_id == 4: ha_coberturas['Matorrales'] = area_ha
+                elif clase_id == 5: ha_coberturas['Suelo Desnudo'] = area_ha
+                elif clase_id == 6: ha_coberturas['Urbano'] = area_ha
+
+            st.session_state['satelite_ha_agua'] = ha_coberturas['Agua']
+            st.session_state['satelite_ha_bosque'] = ha_coberturas['Bosques']
+            st.session_state['satelite_ha_pastos'] = ha_coberturas['Pastos']
+            st.session_state['satelite_ha_cultivos'] = ha_coberturas['Cultivos']
+            st.session_state['satelite_ha_matorrales'] = ha_coberturas['Matorrales']
+            st.session_state['satelite_ha_suelo_desnudo'] = ha_coberturas['Suelo Desnudo']
+            st.session_state['satelite_ha_urbano'] = ha_coberturas['Urbano']
+
+            df_coberturas = pd.DataFrame(resultados).sort_values(by="Área (ha)", ascending=False)
+
+            st.markdown(f"### 📊 Inventario Satelital de Uso de Suelo ({anio_sel} · {scale_ee} m)")
+            c_graf, c_tabla = st.columns([2, 1])
+
+            with c_tabla:
+                st.dataframe(df_coberturas.style.format({"Área (ha)": "{:,.1f}"}), width="stretch", hide_index=True)
+
+            with c_graf:
+                fig_pie = px.pie(
+                    df_coberturas, values='Área (ha)', names='Cobertura', hole=0.4,
+                    color='Cobertura', color_discrete_map={
+                        "Agua": "#419BDF", "Bosques": "#397D49", "Pastos": "#88B053",
+                        "Cultivos": "#7A87C6", "Matorrales": "#E49635", "Suelo Desnudo": "#DFC35A",
+                        "Urbano / Infraestructura": "#C4281B", "Nieve": "#A59B8F", "Nubes": "#B39FE1"
+                    }
+                )
+                fig_pie.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=350)
+                st.plotly_chart(fig_pie, width="stretch")
+
+        # 3. Renderizado del Mapa Interactivo
+        if tile_url:
+            minx, miny, maxx, maxy = zona_4326.total_bounds
+            m = folium.Map(location=[(miny + maxy) / 2, (minx + maxx) / 2], zoom_start=11, tiles=None, scrollWheelZoom=True)
+
             folium.TileLayer(
                 tiles='https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
-                attr='Google',
-                name='Satélite HD Base',
-                overlay=False,
+                attr='Google', name='Satélite HD Base', overlay=False, control=True
+            ).add_to(m)
+            folium.TileLayer("OpenStreetMap", name="Calles (OSM)", overlay=False, control=True).add_to(m)
+
+            folium.raster_layers.TileLayer(
+                tiles=tile_url,
+                attr='Map Data &copy; Google Earth Engine',
+                name=f'Cobertura IA {anio_sel} ({nombre_zona})',
+                overlay=True,
                 control=True
             ).add_to(m)
-            
-            # Inyectar la capa de IA
-            m.add_ee_layer(dw_imagen, dw_vis, f'Cobertura IA ({nombre_zona})')
-            
-            # Dibujar un borde blanco brillante alrededor del territorio
+
             folium.GeoJson(
-                gdf_zona,
+                zona_4326[["geometry"]].to_json(),
                 name="Límite Territorial",
-                style_function=lambda x: {'color': 'white', 'weight': 3, 'fillOpacity': 0}
+                style_function=lambda x: {'color': 'white', 'weight': 2.5, 'fillOpacity': 0}
             ).add_to(m)
-            
-            folium.LayerControl().add_to(m)
-            
-            # Renderizar en la pantalla de Streamlit
-            st_folium(m, width="100%", height=600, returned_objects=[])
-            
-            # Leyenda visual
+
+            m.fit_bounds([[miny, minx], [maxy, maxx]])
+            folium.LayerControl(collapsed=False).add_to(m)
+
+            st_folium(m, use_container_width=True, height=600, returned_objects=[], key=f"mapa_gee_{nombre_zona}_{anio_sel}")
+
             st.markdown("""
-            **Leyenda de Coberturas (Dynamic World a 10m de resolución):**
+            **Leyenda de Coberturas (Dynamic World · Sentinel-2):**
             🟦 Agua | 🟩 Bosques | 🟨 Pastos | 🟪 Cultivos | 🟧 Matorrales | 🟫 Suelo Desnudo | 🟥 Infraestructura / Urbano
             """)
     else:

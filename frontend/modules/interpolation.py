@@ -1,3 +1,4 @@
+
 # modules/interpolation.py
 
 import os
@@ -11,12 +12,11 @@ try:
     import pyproj
     pyproj.datadir.set_data_dir(pyproj.datadir.get_data_dir())
     os.environ['PROJ_DATA'] = pyproj.datadir.get_data_dir()
-except: 
+except Exception:
     pass
 # =========================================================================
 
 import gstools as gs
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -28,169 +28,308 @@ from sklearn.model_selection import LeaveOneOut
 
 from modules.config import Config
 
-# -----------------------------------------------------------------------------
-# FUNCIÓN _perform_loocv (ESTA ES LA FUNCIÓN QUE FALTABA)
-# -----------------------------------------------------------------------------
-def _perform_loocv(method, lons, lats, vals, elevs=None):
-    """
-    Función auxiliar interna que realiza el cálculo de Leave-One-Out Cross-Validation.
-    """
-    loo = LeaveOneOut()
-    y_true = []
-    y_pred = []
 
+# =========================================================================
+# 1. UTILIDADES INTERNAS (LIMPIEZA DETERMINÍSTICA Y VARIOGRAMA)
+# =========================================================================
+def _limpiar_y_agrupar_puntos(lons, lats, vals, elevs=None):
+    """
+    Elimina NaN/Inf y promedia estaciones con coordenadas idénticas (~1 m)
+    para evitar colapsos matriciales sin inyectar ruido aleatorio.
+    """
+    df = pd.DataFrame({
+        "lon": np.asarray(lons, dtype=float),
+        "lat": np.asarray(lats, dtype=float),
+        "val": np.asarray(vals, dtype=float),
+    })
+    if elevs is not None:
+        df["elev"] = np.asarray(elevs, dtype=float)
+
+    df = df.replace([np.inf, -np.inf], np.nan).dropna()
+    if df.empty:
+        return np.array([]), np.array([]), np.array([]), (np.array([]) if elevs is not None else None)
+
+    df["lon_r"] = df["lon"].round(5)
+    df["lat_r"] = df["lat"].round(5)
+
+    agg_dict = {"lon": "mean", "lat": "mean", "val": "mean"}
+    if elevs is not None:
+        agg_dict["elev"] = "mean"
+
+    df_agg = df.groupby(["lon_r", "lat_r"], as_index=False).agg(agg_dict)
+    out_elev = df_agg["elev"].values if elevs is not None else None
+    return df_agg["lon"].values, df_agg["lat"].values, df_agg["val"].values, out_elev
+
+
+def _ajustar_variograma(lons, lats, vals, modelo_variograma="spherical"):
+    """Ajusta un modelo de variograma GSTools con respaldo teórico si hay pocos puntos."""
+    model_map = {
+        "gaussian": gs.Gaussian(dim=2),
+        "exponential": gs.Exponential(dim=2),
+        "spherical": gs.Spherical(dim=2),
+        "linear": gs.Linear(dim=2),
+    }
+    model = model_map.get(str(modelo_variograma).lower(), gs.Spherical(dim=2))
+
+    varianza = float(np.var(vals))
+    if varianza < 1e-4 or np.isnan(varianza):
+        varianza = 1.0
+
+    dist_mat = np.sqrt((lons[:, None] - lons[None, :]) ** 2 + (lats[:, None] - lats[None, :]) ** 2)
+    max_dist = float(np.max(dist_mat)) if dist_mat.size > 0 else 0.1
+    rango_teorico = max(max_dist / 2.0, 0.05)
+
+    if len(vals) < 12:
+        model.var = varianza
+        model.len_scale = rango_teorico
+        model.nugget = varianza * 0.05
+        return model, None, None
+
+    try:
+        bin_center, gamma = gs.vario_estimate((lons, lats), vals)
+        model.fit_variogram(bin_center, gamma, nugget=True)
+        if model.var < 1e-4 or np.isnan(model.var) or model.len_scale <= 0:
+            model.var = varianza
+            model.len_scale = rango_teorico
+            model.nugget = varianza * 0.05
+        return model, bin_center, gamma
+    except Exception:
+        model.var = varianza
+        model.len_scale = rango_teorico
+        model.nugget = varianza * 0.05
+        return model, None, None
+
+
+def _interpolar_idw_flat(lons, lats, vals, xi_flat, yi_flat, power=2.0):
+    """IDW real vectorizado (1 / d^p) inmune a divisiones por cero."""
+    dist = np.sqrt((xi_flat[:, None] - lons[None, :]) ** 2 + (yi_flat[:, None] - lats[None, :]) ** 2)
+    dist = np.where(dist < 1e-10, 1e-10, dist)
+    weights = 1.0 / (dist ** power)
+    return np.sum(weights * vals[None, :], axis=1) / np.sum(weights, axis=1)
+
+
+# =========================================================================
+# 2. MOTOR DE INTERPOLACIÓN UNIFICADO (BLINDADO Y MULTIMÉTODO)
+# =========================================================================
+def interpolador_maestro(
+    df_puntos,
+    col_val,
+    grid_x,
+    grid_y,
+    metodo="kriging",
+    modelo_variograma="spherical",
+    dem_grid=None,
+):
+    """
+    Motor geoestadístico unificado. Soporta mallas generadas tanto con
+    np.meshgrid (indexing='xy') como con np.mgrid (indexing='ij').
+    Retorna: (matriz_z, matriz_std_o_None) con la misma forma que grid_x.
+    """
+    if hasattr(df_puntos, "geometry") and df_puntos.geometry is not None:
+        raw_lons = df_puntos.geometry.x.values
+        raw_lats = df_puntos.geometry.y.values
+    else:
+        col_lon = next((c for c in ["longitude", "longitud", "lon"] if c in df_puntos.columns), None)
+        col_lat = next((c for c in ["latitude", "latitud", "lat"] if c in df_puntos.columns), None)
+        raw_lons = df_puntos[col_lon].values
+        raw_lats = df_puntos[col_lat].values
+
+    raw_vals = pd.to_numeric(df_puntos[col_val], errors="coerce").values
+    lons, lats, vals, _ = _limpiar_y_agrupar_puntos(raw_lons, raw_lats, raw_vals)
+
+    if len(vals) == 0:
+        return np.zeros_like(grid_x, dtype=float), None
+
+    if len(vals) < 3:
+        z = griddata((lons, lats), vals, (grid_x, grid_y), method="nearest")
+        return np.nan_to_num(z, nan=float(np.mean(vals))), None
+
+    val_min, val_max = float(np.min(vals)), float(np.max(vals))
+    metodo_norm = str(metodo).lower().strip()
+
+    # Detección automática de orientación de malla (meshgrid xy vs mgrid ij)
+    es_meshgrid_xy = (
+        grid_x.ndim == 2
+        and grid_x.shape[1] > 1
+        and not np.allclose(grid_x[0, 0], grid_x[0, 1])
+    )
+    if es_meshgrid_xy:
+        grid_lon_1d = grid_x[0, :]
+        grid_lat_1d = grid_y[:, 0]
+    else:
+        grid_lon_1d = grid_x[:, 0]
+        grid_lat_1d = grid_y[0, :]
+
+    try:
+        if metodo_norm == "ked" and dem_grid is None:
+            metodo_norm = "kriging"
+
+        # --- A. KRIGING ORDINARIO ---
+        if metodo_norm == "kriging":
+            model, _, _ = _ajustar_variograma(lons, lats, vals, modelo_variograma)
+            krig = gs.krige.Ordinary(model, (lons, lats), vals)
+            z_krig, ss_krig = krig.structured([grid_lon_1d, grid_lat_1d], return_var=True)
+
+            if es_meshgrid_xy:
+                z_krig, ss_krig = z_krig.T, ss_krig.T
+
+            if np.isnan(z_krig).all():
+                raise ValueError("Kriging devolvió matriz vacía.")
+
+            z_krig = np.clip(z_krig, a_min=max(0.0, val_min * 0.85), a_max=val_max * 1.15)
+            return z_krig, np.sqrt(np.abs(ss_krig))
+
+        # --- B. KRIGING CON DERIVA EXTERNA (KED) ---
+        elif metodo_norm == "ked" and dem_grid is not None:
+            elev_stations = griddata(
+                (grid_x.ravel(), grid_y.ravel()), dem_grid.ravel(), (lons, lats), method="linear"
+            )
+            mask_nan_elev = np.isnan(elev_stations)
+            if np.any(mask_nan_elev):
+                elev_stations[mask_nan_elev] = griddata(
+                    (grid_x.ravel(), grid_y.ravel()),
+                    dem_grid.ravel(),
+                    (lons[mask_nan_elev], lats[mask_nan_elev]),
+                    method="nearest",
+                )
+
+            model, _, _ = _ajustar_variograma(lons, lats, vals, modelo_variograma)
+            krig = gs.krige.ExtDrift(model, (lons, lats), vals, drift_src=elev_stations)
+            drift_in = dem_grid.T if es_meshgrid_xy else dem_grid
+            z_ked, ss_ked = krig.structured([grid_lon_1d, grid_lat_1d], drift_tgt=drift_in, return_var=True)
+
+            if es_meshgrid_xy:
+                z_ked, ss_ked = z_ked.T, ss_ked.T
+
+            if np.isnan(z_ked).all():
+                raise ValueError("KED devolvió matriz vacía.")
+
+            # En KED solo recortamos negativos para preservar máximos orográficos en cumbres
+            z_ked = np.maximum(z_ked, 0.0)
+            return z_ked, np.sqrt(np.abs(ss_ked))
+
+        # --- C. IDW REAL (1 / d^2) ---
+        elif metodo_norm == "idw":
+            z_idw = _interpolar_idw_flat(lons, lats, vals, grid_x.ravel(), grid_y.ravel(), power=2.0)
+            z_idw = z_idw.reshape(grid_x.shape)
+            return np.clip(z_idw, a_min=val_min, a_max=val_max), None
+
+        # --- D. SPLINE (THIN PLATE REAL) ---
+        elif metodo_norm in ["spline", "rbf"]:
+            rbf = Rbf(lons, lats, vals, function="thin_plate", smooth=0.05)
+            z_rbf = rbf(grid_x, grid_y)
+            return np.clip(z_rbf, a_min=max(0.0, val_min * 0.85), a_max=val_max * 1.15), None
+
+        # --- E. TENDENCIA LINEAL ---
+        elif metodo_norm in ["trend", "linear"]:
+            z_trend = griddata((lons, lats), vals, (grid_x, grid_y), method="linear")
+            mask_nan = np.isnan(z_trend)
+            if np.any(mask_nan):
+                z_trend[mask_nan] = griddata(
+                    (lons, lats), vals, (grid_x[mask_nan], grid_y[mask_nan]), method="nearest"
+                )
+            return np.clip(z_trend, a_min=val_min, a_max=val_max), None
+
+    except Exception as e:
+        print(f"Fallback activado en interpolador_maestro ({metodo_norm}): {e}")
+
+    # --- FALLBACK 100% SEGURO ---
+    z_lin = griddata((lons, lats), vals, (grid_x, grid_y), method="linear")
+    mask_nan = np.isnan(z_lin)
+    if np.any(mask_nan):
+        z_lin[mask_nan] = griddata(
+            (lons, lats), vals, (grid_x[mask_nan], grid_y[mask_nan]), method="nearest"
+        )
+    return np.clip(np.nan_to_num(z_lin, nan=float(np.mean(vals))), a_min=val_min, a_max=val_max), None
+
+
+# =========================================================================
+# 3. VALIDACIÓN CRUZADA (LOOCV OPTIMIZADO: VARIOGRAMA ÚNICO)
+# =========================================================================
+def _perform_loocv(method, lons, lats, vals, elevs=None):
+    """Leave-One-Out Cross-Validation con variograma pre-ajustado y métodos reales."""
+    lons, lats, vals, elevs = _limpiar_y_agrupar_puntos(lons, lats, vals, elevs)
     if len(vals) < 4:
-        # No se puede interpolar con menos de 4 puntos de manera fiable
         return {"RMSE": np.nan, "MAE": np.nan}
 
-    for train_index, test_index in loo.split(lons):
-        # Datos de entrenamiento
-        lons_train, lats_train = lons[train_index], lats[train_index]
-        vals_train = vals[train_index]
+    # Ajustamos el variograma UNA sola vez fuera del bucle (hasta 50x más rápido)
+    model_global = None
+    if method in ["Kriging Ordinario", "Kriging con Deriva Externa (KED)"]:
+        model_global, _, _ = _ajustar_variograma(lons, lats, vals, "spherical")
 
-        # Datos de prueba (un solo punto)
-        lons_test, lats_test = lons[test_index], lats[test_index]
-        vals_test = vals[test_index]
+    loo = LeaveOneOut()
+    y_true, y_pred = [], []
 
-        # Asegurarse de que hay suficientes puntos para entrenar
-        if len(vals_train) < 3:
+    for train_idx, test_idx in loo.split(lons):
+        lons_tr, lats_tr, vals_tr = lons[train_idx], lats[train_idx], vals[train_idx]
+        lon_te, lat_te, val_te = lons[test_idx[0]], lats[test_idx[0]], vals[test_idx[0]]
+
+        if len(vals_tr) < 3:
             continue
 
         pred_val = np.nan
-
         try:
-            if method in ["Kriging Ordinario", "Kriging con Deriva Externa (KED)"]:
-                model = gs.Spherical(dim=2)
-                bin_center, gamma = gs.vario_estimate(
-                    (lons_train, lats_train), vals_train
-                )
-                model.fit_variogram(bin_center, gamma, nugget=True)
+            if method == "Kriging Ordinario":
+                krig = gs.krige.Ordinary(model_global, (lons_tr, lats_tr), vals_tr)
+                res, _ = krig([lon_te, lat_te])
+                pred_val = float(res[0])
 
-                if method == "Kriging Ordinario":
-                    krig = gs.krige.Ordinary(
-                        model, (lons_train, lats_train), vals_train
-                    )
-                    pred_val, _ = krig([lons_test[0], lats_test[0]])
-
-                elif method == "Kriging con Deriva Externa (KED)" and elevs is not None:
-                    elevs_train = elevs[train_index]
-                    elevs_test = elevs[test_index]
-                    krig = gs.krige.ExtDrift(
-                        model,
-                        (lons_train, lats_train),
-                        vals_train,
-                        drift_src=elevs_train,
-                    )
-                    pred_val, _ = krig(
-                        [lons_test[0], lats_test[0]], drift_tgt=[elevs_test[0]]
-                    )
-
-                else:  # Fallback si KED no tiene elevs
-                    points_train = np.column_stack((lons_train, lats_train))
-                    pred_val = griddata(
-                        points_train,
-                        vals_train,
-                        (lons_test[0], lats_test[0]),
-                        method="linear",
-                    )
+            elif method == "Kriging con Deriva Externa (KED)" and elevs is not None:
+                krig = gs.krige.ExtDrift(model_global, (lons_tr, lats_tr), vals_tr, drift_src=elevs[train_idx])
+                res, _ = krig([lon_te, lat_te], drift_tgt=[elevs[test_idx[0]]])
+                pred_val = float(res[0])
 
             elif method == "IDW":
-                points_train = np.column_stack((lons_train, lats_train))
-                pred_val = griddata(
-                    points_train,
-                    vals_train,
-                    (lons_test[0], lats_test[0]),
-                    method="linear",
-                )
+                res = _interpolar_idw_flat(lons_tr, lats_tr, vals_tr, np.array([lon_te]), np.array([lat_te]))
+                pred_val = float(res[0])
 
             elif method == "Spline (Thin Plate)":
-                points_train = np.column_stack((lons_train, lats_train))
-                pred_val = griddata(
-                    points_train,
-                    vals_train,
-                    (lons_test[0], lats_test[0]),
-                    method="cubic",
-                )
+                rbf = Rbf(lons_tr, lats_tr, vals_tr, function="thin_plate", smooth=0.05)
+                pred_val = float(rbf(lon_te, lat_te))
 
-            if not np.isnan(pred_val):
-                y_true.append(vals_test[0])
+            if np.isfinite(pred_val):
+                y_true.append(val_te)
                 y_pred.append(pred_val)
-
-        except Exception as e:
-            print(f"Advertencia en LOOCV (Método: {method}): {e}")
-            continue  # Saltar este punto si la interpolación falla
+        except Exception:
+            continue
 
     if not y_true:
         return {"RMSE": np.nan, "MAE": np.nan}
 
-    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-    mae = mean_absolute_error(y_true, y_pred)
-    return {"RMSE": rmse, "MAE": mae}
+    return {
+        "RMSE": float(np.sqrt(mean_squared_error(y_true, y_pred))),
+        "MAE": float(mean_absolute_error(y_true, y_pred)),
+    }
 
 
-def interpolate_idw(lons, lats, vals, grid_lon, grid_lat, method="cubic"):
-    """
-    Realiza una interpolación espacial utilizando scipy.griddata.
-    """
-    points = np.column_stack((lons, lats))
-    grid_x, grid_y = np.meshgrid(grid_lon, grid_lat)
-    grid_z = griddata(points, vals, (grid_x, grid_y), method=method)
-    grid_z = np.nan_to_num(grid_z)
-    return grid_z
-
-
-# -----------------------------------------------------------------------------
-# PESTAÑA DE VALIDACIÓN
-# -----------------------------------------------------------------------------
-
-
-# --- CORRECCIÓN ---
-# Eliminamos @st.cache_data de esta función interna
-# para evitar problemas de "caché anidado".
-# El caché en 'perform_loocv_for_all_methods' es suficiente.
 def perform_loocv_for_year(year, method, gdf_metadata, df_anual_non_na):
-    """
-    Realiza una Validación Cruzada Dejando Uno Afuera (LOOCV) para un año y método dados.
-    """
+    """Ejecuta LOOCV para un año y método específicos."""
     df_year = pd.merge(
         df_anual_non_na[df_anual_non_na[Config.YEAR_COL] == year],
         gdf_metadata,
         on=Config.STATION_NAME_COL,
     )
-
     clean_cols = [Config.LONGITUDE_COL, Config.LATITUDE_COL, Config.PRECIPITATION_COL]
-    if (
-        method == "Kriging con Deriva Externa (KED)"
-        and Config.ELEVATION_COL in df_year.columns
-    ):
+    if method == "Kriging con Deriva Externa (KED)" and Config.ELEVATION_COL in df_year.columns:
         clean_cols.append(Config.ELEVATION_COL)
 
     df_clean = df_year.dropna(subset=clean_cols).copy()
-    df_clean = df_clean[np.isfinite(df_clean[clean_cols]).all(axis=1)]
-    df_clean = df_clean.drop_duplicates(
-        subset=[Config.LONGITUDE_COL, Config.LATITUDE_COL]
-    )
-
     if len(df_clean) < 4:
         return {"RMSE": np.nan, "MAE": np.nan}
 
-    lons = df_clean[Config.LONGITUDE_COL].values
-    lats = df_clean[Config.LATITUDE_COL].values
-    vals = df_clean[Config.PRECIPITATION_COL].values
-    elevs = (
-        df_clean[Config.ELEVATION_COL].values
-        if Config.ELEVATION_COL in df_clean
-        else None
+    elevs = df_clean[Config.ELEVATION_COL].values if Config.ELEVATION_COL in df_clean.columns else None
+    return _perform_loocv(
+        method,
+        df_clean[Config.LONGITUDE_COL].values,
+        df_clean[Config.LATITUDE_COL].values,
+        df_clean[Config.PRECIPITATION_COL].values,
+        elevs,
     )
 
-    # --- CORRECCIÓN ---
-    # Llamamos a la función _perform_loocv que ahora sí existe
-    return _perform_loocv(method, lons, lats, vals, elevs)
 
-
-@st.cache_data
+@st.cache_data(ttl=3600, max_entries=10, show_spinner=False)
 def perform_loocv_for_all_methods(_year, _gdf_metadata, _df_anual_non_na):
-    """Ejecuta LOOCV para todos los métodos de interpolación para un año dado."""
+    """Ejecuta LOOCV para todos los métodos en un año dado."""
     methods = ["Kriging Ordinario", "IDW", "Spline (Thin Plate)"]
     if Config.ELEVATION_COL in _gdf_metadata.columns:
         methods.insert(1, "Kriging con Deriva Externa (KED)")
@@ -199,523 +338,138 @@ def perform_loocv_for_all_methods(_year, _gdf_metadata, _df_anual_non_na):
     for method in methods:
         metrics = perform_loocv_for_year(_year, method, _gdf_metadata, _df_anual_non_na)
         if metrics:
-            results.append(
-                {
-                    "Método": method,
-                    "Año": _year,
-                    "RMSE": metrics.get("RMSE"),
-                    "MAE": metrics.get("MAE"),
-                }
-            )
+            results.append({"Método": method, "Año": _year, "RMSE": metrics.get("RMSE"), "MAE": metrics.get("MAE")})
     return pd.DataFrame(results)
 
 
-# -----------------------------------------------------------------------------
-# PESTAÑA DE SUPERFICIES DE INTERPOLACIÓN
-# -----------------------------------------------------------------------------
-@st.cache_data
-def create_interpolation_surface(
-    df_period_mean, period_name, method, variogram_model, gdf_bounds, gdf_metadata
-):
-    """
-    Crea una superficie de interpolación para un DataFrame de precipitación promedio de un período.
+# =========================================================================
+# 4. SUPERFICIES DE INTERPOLACIÓN Y WRAPPERS DE COMPATIBILIDAD
+# =========================================================================
+@st.cache_data(ttl=3600, max_entries=10, show_spinner=False)
+def create_interpolation_surface(df_period_mean, period_name, method, variogram_model, gdf_bounds, gdf_metadata):
+    """Genera el mapa de contornos Plotly con orientación consistente (ny, nx) en todos los métodos."""
+    df_clean = pd.merge(df_period_mean, gdf_metadata, on=Config.STATION_NAME_COL, how="inner")
+    for col in [Config.LONGITUDE_COL, Config.LATITUDE_COL, Config.PRECIPITATION_COL]:
+        if col in df_clean.columns:
+            df_clean[col] = pd.to_numeric(df_clean[col], errors="coerce")
 
-    Args:
-        df_period_mean (pd.DataFrame): DataFrame con [Config.STATION_NAME_COL, Config.PRECIPITATION_COL]
-                                      conteniendo la precipitación media del período.
-        period_name (str): Nombre del período (ej. "1990-2000") para el título del gráfico.
-        method (str): "Kriging Ordinario", "IDW", etc.
-        variogram_model (str): Modelo de variograma a usar.
-        gdf_bounds (list): Límites [minx, miny, maxx, maxy] para la grilla.
-        gdf_metadata (gpd.GeoDataFrame): Metadatos de las estaciones (para unir geometría y elevación).
-    """
-
-    fig_var = None
-    error_msg = None
-
-    # --- Data Preparation (Modificada) ---
-    # Unir los datos de precipitación promedio con los metadatos (geometría, etc.)
-    df_clean = pd.merge(
-        df_period_mean, gdf_metadata, on=Config.STATION_NAME_COL, how="inner"
-    )
-
-    clean_cols = [Config.LONGITUDE_COL, Config.LATITUDE_COL, Config.PRECIPITATION_COL]
-    if (
-        method == "Kriging con Deriva Externa (KED)"
-        and Config.ELEVATION_COL in df_clean.columns
-    ):
-        clean_cols.append(Config.ELEVATION_COL)
-
-    df_clean = df_clean.dropna(subset=clean_cols).copy()
-    df_clean[Config.LONGITUDE_COL] = pd.to_numeric(
-        df_clean[Config.LONGITUDE_COL], errors="coerce"
-    )
-    df_clean[Config.LATITUDE_COL] = pd.to_numeric(
-        df_clean[Config.LATITUDE_COL], errors="coerce"
-    )
-    df_clean[Config.PRECIPITATION_COL] = pd.to_numeric(
-        df_clean[Config.PRECIPITATION_COL], errors="coerce"
-    )
-    df_clean = df_clean.dropna(
-        subset=[Config.LONGITUDE_COL, Config.LATITUDE_COL, Config.PRECIPITATION_COL]
-    )
-
-    df_clean = df_clean[np.isfinite(df_clean[clean_cols]).all(axis=1)]
-    df_clean = df_clean.drop_duplicates(
-        subset=[Config.LONGITUDE_COL, Config.LATITUDE_COL]
-    )
-
+    df_clean = df_clean.dropna(subset=[Config.LONGITUDE_COL, Config.LATITUDE_COL, Config.PRECIPITATION_COL]).copy()
     if len(df_clean) < 4:
-        error_msg = f"Se necesitan al menos 4 estaciones con datos válidos para el período {period_name} para interpolar (encontradas: {len(df_clean)})."
-        fig = go.Figure().update_layout(
-            title=error_msg, xaxis_visible=False, yaxis_visible=False
-        )
-        return fig, None, error_msg
+        msg = f"Se necesitan al menos 4 estaciones válidas para {period_name} (encontradas: {len(df_clean)})."
+        return go.Figure().update_layout(title=msg, xaxis_visible=False, yaxis_visible=False), None, msg
 
-    lons = df_clean[Config.LONGITUDE_COL].values
-    lats = df_clean[Config.LATITUDE_COL].values
-    vals = df_clean[Config.PRECIPITATION_COL].values
-    elevs = (
-        df_clean[Config.ELEVATION_COL].values
-        if Config.ELEVATION_COL in df_clean
-        else None
-    )
-
-    # --- CÁLCULO DE RMSE ELIMINADO ---
-    # El RMSE basado en LOOCV solo tiene sentido para un año específico,
-    # no para un promedio de período.
-
-    # Define grid based on bounds
     if gdf_bounds is None or len(gdf_bounds) != 4 or not all(np.isfinite(gdf_bounds)):
-        error_msg = "Límites geográficos (bounds) inválidos o no proporcionados."
-        fig = go.Figure().update_layout(
-            title=error_msg, xaxis_visible=False, yaxis_visible=False
-        )
-        return fig, None, error_msg
+        msg = "Límites geográficos (bounds) inválidos."
+        return go.Figure().update_layout(title=msg, xaxis_visible=False, yaxis_visible=False), None, msg
 
     grid_lon = np.linspace(gdf_bounds[0] - 0.1, gdf_bounds[2] + 0.1, 150)
     grid_lat = np.linspace(gdf_bounds[1] - 0.1, gdf_bounds[3] + 0.1, 150)
-    z_grid, error_message = None, None
+    grid_x, grid_y = np.meshgrid(grid_lon, grid_lat)  # Forma (ny, nx)
 
-    # --- Interpolation Calculation ---
-    try:
-        if method in ["Kriging Ordinario", "Kriging con Deriva Externa (KED)"]:
-            model_map = {
-                "gaussian": gs.Gaussian(dim=2),
-                "exponential": gs.Exponential(dim=2),
-                "spherical": gs.Spherical(dim=2),
-                "linear": gs.Linear(dim=2),
-            }
-            model = model_map.get(variogram_model, gs.Spherical(dim=2))
-            bin_center, gamma = gs.vario_estimate((lons, lats), vals)
-            try:
-                model.fit_variogram(bin_center, gamma, nugget=True)
-            except ValueError as e_fit:
-                raise ValueError(
-                    f"Error ajustando variograma: {e_fit}. Datos insuficientes o sin varianza espacial?"
-                )
+    map_metodo = {
+        "Kriging Ordinario": "kriging",
+        "Kriging con Deriva Externa (KED)": "ked",
+        "IDW": "idw",
+        "Spline (Thin Plate)": "spline",
+    }
+    metodo_key = map_metodo.get(method, "kriging")
 
-            try:
-                fig_variogram_plt, ax = plt.subplots(figsize=(6, 4))
-                ax.plot(bin_center, gamma, "o", label="Experimental")
-                model.plot(ax=ax, label="Modelo Ajustado")
-                ax.set_xlabel("Distancia")
-                ax.set_ylabel("Semivarianza")
-                ax.set_title(f"Variograma para {period_name}")
-                ax.legend()
-                plt.tight_layout()
-                plt.close(fig_variogram_plt)
-            except Exception as e_plot:
-                print(
-                    f"Warning: No se pudo generar el gráfico del variograma: {e_plot}"
-                )
-                fig_var = None
-
-            if method == "Kriging Ordinario":
-                krig = gs.krige.Ordinary(model, (lons, lats), vals)
-                z_grid, _ = krig.structured([grid_lon, grid_lat])
-            else:  # KED
-                if elevs is None:
-                    raise ValueError(
-                        "Datos de elevación necesarios para KED no encontrados."
-                    )
-                grid_x_elev, grid_y_elev = np.meshgrid(grid_lon, grid_lat)
-                drift_grid = griddata(
-                    (lons, lats), elevs, (grid_x_elev, grid_y_elev), method="linear"
-                )
-                nan_mask_elev = np.isnan(drift_grid)
-                if np.any(nan_mask_elev):
-                    fill_values_elev = griddata(
-                        (lons, lats),
-                        elevs,
-                        (grid_x_elev[nan_mask_elev], grid_y_elev[nan_mask_elev]),
-                        method="nearest",
-                    )
-                    drift_grid[nan_mask_elev] = fill_values_elev
-                drift_grid = np.nan_to_num(drift_grid)
-
-                krig = gs.krige.ExtDrift(model, (lons, lats), vals, drift_src=elevs)
-                z_grid, _ = krig.structured(
-                    [grid_lon, grid_lat], drift_tgt=drift_grid.T
-                )
-
-        elif method == "IDW":
-            grid_x, grid_y = np.meshgrid(grid_lon, grid_lat)
-            z_grid = griddata((lons, lats), vals, (grid_x, grid_y), method="linear")
-            nan_mask = np.isnan(z_grid)
-            if np.any(nan_mask):
-                fill_values = griddata(
-                    (lons, lats),
-                    vals,
-                    (grid_x[nan_mask], grid_y[nan_mask]),
+    dem_grid = None
+    if metodo_key == "ked" and Config.ELEVATION_COL in df_clean.columns:
+        elevs = pd.to_numeric(df_clean[Config.ELEVATION_COL], errors="coerce").values
+        lons_e = df_clean[Config.LONGITUDE_COL].values
+        lats_e = df_clean[Config.LATITUDE_COL].values
+        valid_e = np.isfinite(elevs)
+        if np.sum(valid_e) >= 4:
+            dem_grid = griddata((lons_e[valid_e], lats_e[valid_e]), elevs[valid_e], (grid_x, grid_y), method="linear")
+            mask_n = np.isnan(dem_grid)
+            if np.any(mask_n):
+                dem_grid[mask_n] = griddata(
+                    (lons_e[valid_e], lats_e[valid_e]),
+                    elevs[valid_e],
+                    (grid_x[mask_n], grid_y[mask_n]),
                     method="nearest",
                 )
-                z_grid[nan_mask] = fill_values
 
-            if z_grid is not None:
-                z_grid = np.nan_to_num(z_grid)
-
-        elif method == "Spline (Thin Plate)":
-            grid_x, grid_y = np.meshgrid(grid_lon, grid_lat)
-            z_grid = griddata((lons, lats), vals, (grid_x, grid_y), method="cubic")
-            nan_mask = np.isnan(z_grid)
-            if np.any(nan_mask):
-                fill_values = griddata(
-                    (lons, lats),
-                    vals,
-                    (grid_x[nan_mask], grid_y[nan_mask]),
-                    method="nearest",
-                )
-                z_grid[nan_mask] = fill_values
-
-        if z_grid is not None:
-            z_grid = np.nan_to_num(z_grid)
-
-    except Exception as e:
-        error_message = f"Error al calcular {method}: {e}"
-        import traceback
-
-        print(traceback.format_exc())
-        fig = go.Figure().update_layout(
-            title=error_message, xaxis_visible=False, yaxis_visible=False
-        )
-        return fig, None, error_message
-
-    # --- Plotting Section ---
-    if z_grid is not None:
-        fig = go.Figure(
-            data=go.Contour(
-                z=z_grid.T,
-                x=grid_lon,
-                y=grid_lat,
-                colorscale=px.colors.sequential.YlGnBu,
-                colorbar_title="Precipitación (mm)",
-                contours=dict(
-                    coloring="heatmap",
-                    showlabels=True,
-                    labelfont=dict(size=10, color="white"),
-                    labelformat=".0f",
-                ),
-                line_smoothing=0.85,
-                line_color="black",
-                line_width=0.5,
-            )
-        )
-
-        hover_texts = [
-            f"<b>{row[Config.STATION_NAME_COL]}</b><br>"
-            + f"Municipio: {row.get(Config.MUNICIPALITY_COL, 'N/A')}<br>"
-            + f"Altitud: {row.get(Config.ALTITUDE_COL, 'N/A')} m<br>"
-            + f"Ppt. Promedio: {row[Config.PRECIPITATION_COL]:.0f} mm"
-            for _, row in df_clean.iterrows()
-        ]
-
-        fig.add_trace(
-            go.Scatter(
-                x=lons,
-                y=lats,
-                mode="markers",
-                marker=dict(color="red", size=5, line=dict(width=1, color="black")),
-                name="Estaciones",
-                hoverinfo="text",
-                text=hover_texts,
-            )
-        )
-
-        # Anotación de RMSE eliminada
-
-        fig.update_layout(
-            title=f"Precipitación Promedio en {period_name} ({method})",  # <-- Título Modificado
-            xaxis_title="Longitud",
-            yaxis_title="Latitud",
-            height=600,
-            legend=dict(x=0.01, y=0.01, bgcolor="rgba(0,0,0,0)"),
-        )
-        return fig, None, None
-
-    return (
-        go.Figure().update_layout(title="Error: No se pudo generar la superficie Z"),
-        None,
-        "Superficie Z es None",
+    z_grid, _ = interpolador_maestro(
+        df_puntos=df_clean,
+        col_val=Config.PRECIPITATION_COL,
+        grid_x=grid_x,
+        grid_y=grid_y,
+        metodo=metodo_key,
+        modelo_variograma=variogram_model,
+        dem_grid=dem_grid,
     )
 
+    # z_grid ya tiene forma exacta (ny, nx) acorde a x=grid_lon, y=grid_lat (sin .T erróneo)
+    fig = go.Figure(
+        data=go.Contour(
+            z=z_grid,
+            x=grid_lon,
+            y=grid_lat,
+            colorscale=px.colors.sequential.YlGnBu,
+            colorbar_title="Precipitación (mm)",
+            contours=dict(coloring="heatmap", showlabels=True, labelfont=dict(size=10, color="white"), labelformat=".0f"),
+            line_smoothing=0.85,
+            line_color="black",
+            line_width=0.5,
+        )
+    )
 
-@st.cache_data
+    hover_texts = [
+        f"<b>{row[Config.STATION_NAME_COL]}</b><br>"
+        f"Municipio: {row.get(Config.MUNICIPALITY_COL, 'N/A')}<br>"
+        f"Altitud: {row.get(Config.ALTITUDE_COL, 'N/A')} m<br>"
+        f"Ppt. Promedio: {row[Config.PRECIPITATION_COL]:.0f} mm"
+        for _, row in df_clean.iterrows()
+    ]
+    fig.add_trace(
+        go.Scatter(
+            x=df_clean[Config.LONGITUDE_COL],
+            y=df_clean[Config.LATITUDE_COL],
+            mode="markers",
+            marker=dict(color="red", size=5, line=dict(width=1, color="black")),
+            name="Estaciones",
+            hoverinfo="text",
+            text=hover_texts,
+        )
+    )
+    fig.update_layout(
+        title=f"Precipitación Promedio en {period_name} ({method})",
+        xaxis_title="Longitud",
+        yaxis_title="Latitud",
+        height=600,
+        legend=dict(x=0.01, y=0.01, bgcolor="rgba(0,0,0,0)"),
+    )
+    return fig, None, None
 
+
+@st.cache_data(ttl=3600, max_entries=10, show_spinner=False)
 def create_kriging_by_basin(_gdf_points, grid_lon, grid_lat, value_col="Valor"):
-    """
-    Realiza Kriging. El argumento _gdf_points tiene guion bajo para evitar
-    el error de hashing de Streamlit.
-    """
-    # Dentro de la función, usa la variable normal (quitamos el guion bajo para usarla)
-    gdf_points = _gdf_points 
-    
-    lons = gdf_points.geometry.x
-    lats = gdf_points.geometry.y
-    vals = gdf_points[value_col].values
+    """Wrapper limpio de Kriging Ordinario sobre cuenca (sin widgets de UI dentro del caché)."""
+    grid_x, grid_y = np.meshgrid(grid_lon, grid_lat)
+    z_grid, std_grid = interpolador_maestro(_gdf_points, value_col, grid_x, grid_y, metodo="kriging")
+    variance = (std_grid ** 2) if std_grid is not None else np.zeros_like(z_grid)
+    return z_grid, variance
 
-    valid_indices = ~np.isnan(vals)
-    lons, lats, vals = lons[valid_indices], lats[valid_indices], vals[valid_indices]
 
-    if len(vals) < 3:
-        st.error(
-            "Se necesitan al menos 3 puntos con datos para realizar la interpolación."
-        )
-        ny, nx = len(grid_lat), len(grid_lon)
-        return np.zeros((ny, nx)), np.zeros((ny, nx))
-
-    try:
-        st.write("🛰️ Intentando interpolación con Kriging Ordinario...")
-        bin_center, gamma = gs.vario_estimate((lons, lats), vals)
-        model = gs.Spherical(dim=2)
-        model.fit_variogram(bin_center, gamma, nugget=True)
-        kriging = gs.krige.Ordinary(model, cond_pos=(lons, lats), cond_val=vals)
-        grid_z, variance = kriging.structured([grid_lon, grid_lat], return_var=True)
-        st.success("✅ Interpolación con Kriging completada con éxito.")
-    except (RuntimeError, ValueError) as e:
-        st.warning(
-            f"⚠️ El Kriging falló: '{e}'. Usando interpolación de respaldo (lineal + vecino cercano)."
-        )
-        points = np.column_stack((lons, lats))
-        grid_x, grid_y = np.meshgrid(grid_lon, grid_lat)
-
-        grid_z = griddata(points, vals, (grid_x, grid_y), method="linear")
-        nan_mask = np.isnan(grid_z)
-        if np.any(nan_mask):
-            fill_values = griddata(
-                points, vals, (grid_x[nan_mask], grid_y[nan_mask]), method="nearest"
-            )
-            grid_z[nan_mask] = fill_values
-
-        grid_z = np.nan_to_num(grid_z)
-        variance = np.zeros_like(grid_z)
-
-    return grid_z, variance
+def interpolate_idw(lons, lats, vals, grid_lon, grid_lat, method="idw"):
+    """Wrapper de compatibilidad usando IDW real."""
+    lons, lats, vals, _ = _limpiar_y_agrupar_puntos(lons, lats, vals)
+    grid_x, grid_y = np.meshgrid(grid_lon, grid_lat)
+    if len(vals) == 0:
+        return np.zeros_like(grid_x)
+    z = _interpolar_idw_flat(lons, lats, vals, grid_x.ravel(), grid_y.ravel(), power=2.0)
+    return z.reshape(grid_x.shape)
 
 
 def generate_grid_coordinates(bounds, resolution=100j):
-    """
-    Genera las coordenadas X, Y para la malla de interpolación.
-    bounds: (minx, maxx, miny, maxy)
-    resolution: número complejo (ej: 100j) para cantidad de celdas
-    """
+    """Genera malla (gx, gy) a partir de bounds (minx, maxx, miny, maxy)."""
     minx, maxx, miny, maxy = bounds
-    gx, gy = np.mgrid[minx:maxx:resolution, miny:maxy:resolution]
-    return gx, gy
+    return np.mgrid[minx:maxx:resolution, miny:maxy:resolution]
 
-def interpolate_spatial(df_points, val_col, gx, gy, method='linear'):
-    """
-    Interpola valores puntuales sobre la malla gx, gy.
-    Combina Rbf/Linear para el centro y Nearest para rellenar bordes.
-    """
-    # Eliminar duplicados espaciales
-    df_unique = df_points.drop_duplicates(subset=["longitude", "latitude"])
-    pts = df_unique[["longitude", "latitude"]].values
-    vals = df_unique[val_col].values
-    
-    if len(pts) < 3: return None
-    
-    # Límites para evitar sobreoscilación (overshooting)
-    val_min = np.min(vals)
-    val_max = np.max(vals)
-    
-    gz = None
-    
-    # 1. Interpolación Principal
-    if method == 'kriging' or method == 'rbf':
-        try:
-            # Thin Plate Spline es excelente para topografía suave
-            rbf = Rbf(pts[:, 0], pts[:, 1], vals, function="thin_plate")
-            gz = rbf(gx, gy)
-            # Aplicar recorte para evitar picos irreales
-            gz = np.clip(gz, a_min=val_min, a_max=val_max)
-        except:
-            pass # Fallback a linear
-            
-    if gz is None:
-        gz = griddata(pts, vals, (gx, gy), method='linear')
-        
-    # 2. Relleno de Bordes (Extrapolación)
-    # Griddata linear deja NaNs fuera del casco convexo. Los llenamos con el vecino más cercano.
-    mask_nan = np.isnan(gz)
-    if np.any(mask_nan):
-        gz_nearest = griddata(pts, vals, (gx, gy), method='nearest')
-        gz[mask_nan] = gz_nearest[mask_nan]
-        
-    return gz
 
-# -----------------------------------------------------------------------------
-# MOTOR DE INTERPOLACIÓN UNIFICADO (BLINDADO CONTRA DATOS DISPERSOS Y FORMAS)
-# -----------------------------------------------------------------------------
-def interpolador_maestro(df_puntos, col_val, grid_x, grid_y, metodo='kriging', modelo_variograma='spherical', dem_grid=None):
-    import gstools as gs
-    from scipy.interpolate import Rbf, griddata
-    import numpy as np
-
-    # 1. Preparar datos
-    lons = df_puntos.geometry.x.values
-    lats = df_puntos.geometry.y.values
-    vals = df_puntos[col_val].values
-    
-    # Limpieza de NaNs
-    mask = ~np.isnan(vals)
-    lons, lats, vals = lons[mask], lats[mask], vals[mask]
-    
-    # Micro-ruido (Jitter) para evitar el colapso por coordenadas idénticas
-    np.random.seed(42)
-    lons = lons + np.random.normal(0, 1e-6, size=len(lons))
-    lats = lats + np.random.normal(0, 1e-6, size=len(lats))
-    
-    if len(vals) < 3:
-        z = griddata((lons, lats), vals, (grid_x, grid_y), method='nearest')
-        return np.nan_to_num(z), None
-
-    val_min, val_max = np.min(vals), np.max(vals)
-    varianza = np.var(vals)
-    if varianza == 0: varianza = 0.01
-
-    lons_m, lats_m = np.meshgrid(lons, lats)
-    max_dist = np.max(np.sqrt((lons_m - lons_m.T)**2 + (lats_m - lats_m.T)**2))
-    rango_teorico = max_dist / 2.0 if max_dist > 0 else 0.1
-
-    # Extraemos vectores 1D puros para GSTools (la malla estructurada)
-    grid_lon_1d = grid_x[0, :]
-    grid_lat_1d = grid_y[:, 0]
-
-    # 2. Selección de Método
-    try:
-        if metodo == 'ked' and dem_grid is None:
-            metodo = 'kriging'
-            
-        # --- A. KRIGING ORDINARIO ---
-        if metodo == 'kriging':
-            if modelo_variograma == 'spherical': model = gs.Spherical(dim=2)
-            elif modelo_variograma == 'exponential': model = gs.Exponential(dim=2)
-            elif modelo_variograma == 'gaussian': model = gs.Gaussian(dim=2)
-            else: model = gs.Linear(dim=2)
-                
-            if len(vals) < 15:
-                model.var = float(varianza)
-                model.len_scale = float(rango_teorico)
-                model.nugget = float(varianza * 0.05)
-            else:
-                try:
-                    bin_center, gamma = gs.vario_estimate((lons, lats), vals)
-                    model.fit_variogram(bin_center, gamma, nugget=True)
-                    if model.var < 1e-4 or np.isnan(model.var):
-                        model.var = float(varianza)
-                        model.len_scale = float(rango_teorico)
-                        model.nugget = float(varianza * 0.05)
-                except:
-                    model.var = float(varianza)
-                    model.len_scale = float(rango_teorico)
-            
-            krig = gs.krige.Ordinary(model, (lons, lats), vals)
-            
-            # 💉 FIX DEFINITIVO: Usamos 'structured' que es el método nativo para mallas 2D en GSTools
-            # Requiere pasarle los ejes 1D de la grilla, no la matriz 2D completa
-            z_krig, ss_krig = krig.structured([grid_lon_1d, grid_lat_1d], return_var=True)
-            
-            # GSTools structured devuelve matriz transpuesta respecto a meshgrid, hay que ajustarla
-            z_krig = z_krig.T
-            ss_krig = ss_krig.T
-            
-            if np.isnan(z_krig).all():
-                raise ValueError("Kriging devolvió matriz vacía.")
-            
-            z_krig = np.clip(z_krig, a_min=val_min, a_max=val_max)
-            return z_krig, np.sqrt(np.abs(ss_krig))
-
-        # --- B. KRIGING CON DERIVA EXTERNA (KED) ---
-        elif metodo == 'ked' and dem_grid is not None:
-            elev_stations = griddata((grid_x.flatten(), grid_y.flatten()), dem_grid.flatten(), (lons, lats), method='linear')
-            mask_nan_elev = np.isnan(elev_stations)
-            if np.any(mask_nan_elev):
-                elev_stations[mask_nan_elev] = griddata((grid_x.flatten(), grid_y.flatten()), dem_grid.flatten(), (lons[mask_nan_elev], lats[mask_nan_elev]), method='nearest')
-            
-            model = gs.Spherical(dim=2)
-            if len(vals) < 15:
-                model.var = float(varianza)
-                model.len_scale = float(rango_teorico)
-            else:
-                try:
-                    bin_center, gamma = gs.vario_estimate((lons, lats), vals)
-                    model.fit_variogram(bin_center, gamma, nugget=True)
-                    if model.var < 1e-4 or np.isnan(model.var):
-                        model.var = float(varianza)
-                        model.len_scale = float(rango_teorico)
-                except:
-                    model.var = float(varianza)
-                    model.len_scale = float(rango_teorico)
-            
-            krig = gs.krige.ExtDrift(model, (lons, lats), vals, drift_src=elev_stations)
-            
-            # 💉 FIX DEFINITIVO KED: Pasamos los ejes 1D y la deriva transpuesta
-            z_ked, ss_ked = krig.structured([grid_lon_1d, grid_lat_1d], drift_tgt=dem_grid.T, return_var=True)
-            
-            z_ked = z_ked.T
-            ss_ked = ss_ked.T
-            
-            if np.isnan(z_ked).all():
-                raise ValueError("KED devolvió matriz vacía.")
-            
-            z_ked = np.clip(z_ked, a_min=val_min, a_max=val_max)
-            return z_ked, np.sqrt(np.abs(ss_ked))
-
-        # --- C. IDW ---
-        elif metodo == 'idw':
-            xi, yi = grid_x.flatten(), grid_y.flatten()
-            dist = np.sqrt((xi[:,None]-lons[None,:])**2 + (yi[:,None]-lats[None,:])**2)
-            dist = np.where(dist == 0, 1e-10, dist) 
-            weights = 1.0 / dist**2
-            z_idw = np.sum(weights * vals, axis=1) / np.sum(weights, axis=1)
-            z_idw = z_idw.reshape(grid_x.shape)
-            return np.clip(z_idw, a_min=val_min, a_max=val_max), None
-
-        # --- D. SPLINE ---
-        elif metodo == 'spline':
-            rbf = Rbf(lons, lats, vals, function='linear')
-            z_rbf = rbf(grid_x, grid_y)
-            return np.clip(z_rbf, a_min=val_min, a_max=val_max), None
-            
-        # --- E. TENDENCIA LINEAL ---
-        elif metodo == 'trend':
-            z_trend = griddata((lons, lats), vals, (grid_x, grid_y), method='linear')
-            mask_nan = np.isnan(z_trend)
-            if np.any(mask_nan):
-                z_nearest = griddata((lons, lats), vals, (grid_x[mask_nan], grid_y[mask_nan]), method='nearest')
-                z_trend[mask_nan] = z_nearest
-            return np.clip(z_trend, a_min=val_min, a_max=val_max), None
-
-    except Exception as e:
-        print(f"Fallback activado en interpolador_maestro. Error original: {e}")
-        # --- FALLBACK 100% SEGURO ---
-        z_lin = griddata((lons, lats), vals, (grid_x, grid_y), method='linear')
-        mask_nan = np.isnan(z_lin)
-        if np.any(mask_nan):
-            z_near = griddata((lons, lats), vals, (grid_x[mask_nan], grid_y[mask_nan]), method='nearest')
-            z_lin[mask_nan] = z_near
-        
-        return np.clip(z_lin, a_min=val_min, a_max=val_max), None
-        
-    return np.zeros_like(grid_x), None
+def interpolate_spatial(df_points, val_col, gx, gy, method="linear"):
+    """Wrapper de compatibilidad delegado a interpolador_maestro."""
+    z, _ = interpolador_maestro(df_points, val_col, gx, gy, metodo=method)
+    return z
