@@ -357,95 +357,77 @@ def main():
 
     # --- D. FILTROS EN BARRA LATERAL (TIEMPO Y LIMPIEZA) ---
     with st.sidebar:
-        with st.expander("⏳ Tiempo y Limpieza", expanded=False):
-            
-            # 🛡️ FIX: Blindaje del Slider de Tiempo
+        with st.expander("⏳ Tiempo y Calidad de Series", expanded=False):
             if df_long is not None and not df_long.empty:
                 min_y = int(df_long[Config.YEAR_COL].min())
                 max_y = int(df_long[Config.YEAR_COL].max())
             else:
-                min_y, max_y = 1980, 2026 # Valores de seguridad
-                
-            year_range = st.slider("📅 Años:", min_y, max_y, (min_y, max_y))
-            
-            c1, c2 = st.columns(2)
-            ignore_zeros = c1.checkbox("🚫 Sin Ceros", value=False)
-            ignore_nulls = c2.checkbox("🚫 Sin Nulos", value=False)
-            apply_interp = st.checkbox("🔄 Interpolación", value=False)
+                min_y, max_y = 1980, 2026
 
-        # 🛡️ INYECCIÓN QUIRÚRGICA: Filtro de Homogenización
-        st.markdown("---")
-        st.markdown("### ⏳ Filtro de Homogenización")
-        min_years = st.slider(
-            "Años mínimos de registro continuos", 
-            min_value=0, max_value=50, value=0, step=1, 
-            help="Filtra estaciones que no cumplan con este mínimo de años históricos. Útil para eliminar el 'escalón' de estaciones post-2010."
-        )
+            year_range = st.slider("📅 Período de Análisis:", min_y, max_y, (min_y, max_y))
+            ignore_zeros = st.checkbox(
+                "🚫 Excluir ceros mensuales (posibles fallas de sensor)",
+                value=True,
+                help="Desactívalo solo si analizas meses completamente secos reales (ej. bosque seco tropical)."
+            )
+            apply_interp = st.checkbox(
+                "🔄 Rellenar vacíos temporales",
+                value=False,
+                help="Imputa meses faltantes en las series antes de graficar."
+            )
+            min_years = st.slider(
+                "⏳ Años mínimos de registro:",
+                min_value=0, max_value=50, value=0, step=1,
+                help="Filtra estaciones cortas (útil para separar red histórica IDEAM de estaciones recientes SIATA)."
+            )
 
     # --- E. PROCESAMIENTO ESTRATÉGICO ---
-    # 1. Aplicar filtro temporal primero
     mask_time = (df_long[Config.YEAR_COL] >= year_range[0]) & (df_long[Config.YEAR_COL] <= year_range[1])
-    df_monthly_filtered = df_long.loc[mask_time].copy()
-    
-    # 2. LIMPIEZA DE CALIDAD (Fundamental hacerlo antes de contar años)
-    if ignore_zeros: 
-        df_monthly_filtered = df_monthly_filtered[df_monthly_filtered[Config.PRECIPITATION_COL] > 0]
-    if ignore_nulls: 
-        df_monthly_filtered = df_monthly_filtered.dropna(subset=[Config.PRECIPITATION_COL])
+    df_monthly_filtered = df_long.loc[mask_time].dropna(subset=[Config.PRECIPITATION_COL]).copy()
 
-    # 3. ⏳ FILTRO DE HOMOGENIZACIÓN (Ahora sí, contando solo la verdad)
+    if ignore_zeros:
+        df_monthly_filtered = df_monthly_filtered[df_monthly_filtered[Config.PRECIPITATION_COL] > 0]
+
     if min_years > 0 and not df_monthly_filtered.empty:
-        # Contamos años únicos que sobrevivieron a la purga de ceros y nulos
         conteo_agnos = df_monthly_filtered.groupby(Config.STATION_NAME_COL)[Config.YEAR_COL].nunique()
         estaciones_validas = conteo_agnos[conteo_agnos >= min_years].index.tolist()
-        
-        # Recortamos la matriz
         df_monthly_filtered = df_monthly_filtered[df_monthly_filtered[Config.STATION_NAME_COL].isin(estaciones_validas)]
-        st.sidebar.success(f"✅ {len(estaciones_validas)} estaciones cumplen con >{min_years} años reales.")
+        st.sidebar.success(f"✅ {len(estaciones_validas)} estaciones con ≥ {min_years} años.")
 
-    # 4. Extraemos la lista final y purificada para los módulos de análisis
-    if not df_monthly_filtered.empty:
-        stations_for_analysis = df_monthly_filtered[Config.STATION_NAME_COL].unique().tolist()
-    else:
-        stations_for_analysis = []
-        st.warning(f"Ninguna estación cumple con el requisito de tener {min_years} años de datos continuos.")
+    if df_monthly_filtered.empty:
+        st.warning(f"Ninguna estación cumple con los filtros actuales (≥ {min_years} años en {year_range[0]}-{year_range[1]}).")
         st.stop()
 
-    # 5. Interpolación (Solo a las estaciones sobrevivientes históricas)
+    stations_for_analysis = df_monthly_filtered[Config.STATION_NAME_COL].unique().tolist()
+
     if apply_interp:
-        with st.spinner("Interpolando series..."):
+        with st.spinner("Rellenando vacíos temporales..."):
             df_monthly_filtered = complete_series(df_monthly_filtered)
-    
-    df_anual_melted = df_monthly_filtered.groupby([Config.STATION_NAME_COL, Config.YEAR_COL])[Config.PRECIPITATION_COL].sum(min_count=10).reset_index()
 
-    # 4. Ajuste de seguridad para year_range
-    if 'year_range' not in locals() or year_range is None:
-        year_range = [2020, 2026]
+    # Agregación anual limpia (descarta años incompletos <10 meses para no ensuciar gráficos ni rankings)
+    df_anual_melted = (
+        df_monthly_filtered
+        .groupby([Config.STATION_NAME_COL, Config.YEAR_COL])[Config.PRECIPITATION_COL]
+        .sum(min_count=10)
+        .dropna()
+        .reset_index()
+    )
 
     # =========================================================================
-    # 🌟 CEREBRO TELEMÉTRICO ESTRUCTURAL (FIX RAÍZ)
+    # 🌟 CEREBRO TELEMÉTRICO ESTRUCTURAL (SIN CONSULTAS REPETIDAS EN CADA CLIC)
     # =========================================================================
-    
-    # 🚀 0. DETECTOR DE CAMBIO DE TERRITORIO (El Descongelador)
     territorio_actual = str(nombre_zona).strip().upper()
-    territorio_anterior = st.session_state.get('aleph_lugar_memoria', '')
-
-    if territorio_actual != territorio_anterior:
-        # ¡Cambio de rumbo detectado! Vaciamos la memoria vieja
-        keys_to_reset = ['aleph_area_km2', 'aleph_pob_total', 'aleph_altitud_m', 'aleph_altitud_max', 'aleph_altitud_min']
-        for k in keys_to_reset:
-            if k in st.session_state:
-                del st.session_state[k]
-        
-        # Guardamos el nuevo territorio para la próxima comparación
+    if territorio_actual != st.session_state.get('aleph_lugar_memoria', ''):
+        for k in ['aleph_area_km2', 'aleph_pob_total', 'aleph_altitud_m', 'aleph_altitud_max', 'aleph_altitud_min']:
+            st.session_state.pop(k, None)
         st.session_state['aleph_lugar_memoria'] = territorio_actual
 
-    # 1. Área
+    # 1. Área (solo si no está en memoria)
     area_actual_km2 = float(st.session_state.get('aleph_area_km2', 0.0))
     if area_actual_km2 <= 0 and gdf_zona is not None and not gdf_zona.empty:
         try:
             gdf_zona_calc = gdf_zona.copy()
-            if gdf_zona_calc.crs is None: 
+            if gdf_zona_calc.crs is None:
                 gdf_zona_calc = gdf_zona_calc.set_crs("EPSG:4326")
             gdf_zona_calc['geometry'] = gdf_zona_calc.geometry.make_valid()
             area_actual_km2 = float(gdf_zona_calc.to_crs(epsg=3116).area.sum() / 1e6)
@@ -453,102 +435,77 @@ def main():
         except Exception:
             pass
 
-    # 2. Población Estructural (Conectado al motor demográfico oficial)
-    pob_actual = float(st.session_state.get('aleph_pob_total', 0.0))
-    if pob_actual <= 0:
+    # 2. Población (una sola vez por territorio)
+    if float(st.session_state.get('aleph_pob_total', 0.0)) <= 0:
+        pob_calc = 0.0
         try:
-            # 🚀 CIRUGÍA ESTRUCTURAL: Importamos tu motor demográfico
             from modules.demografia_tools import calcular_poblacion_al_vuelo
-            
-            # Usamos las variables globales que ya tienes en la página 01
             datos_demo = calcular_poblacion_al_vuelo(nombre_zona, nivel_jerarquico, "Total")
-            
             if datos_demo is not None and len(datos_demo.get('hist_pob', [])) > 0:
-                # Tomamos la población proyectada más reciente (el último dato de la lista)
-                pob_real_dane = float(datos_demo['hist_pob'][-1])
-                st.session_state['aleph_pob_total'] = pob_real_dane
-            elif area_actual_km2 > 0:
-                # Solo si el DANE no tiene la cuenca/municipio, usamos la densidad matemática
-                st.session_state['aleph_pob_total'] = max((area_actual_km2 * 35.0), 10000.0)
-        except Exception as e:
-            # Fallback silencioso en caso de error de red
-            pass
-
-    # 3. 🚀 NUEVO: Conexión robusta a Matrices Maestras (Inmune a tildes como Medellín/Medelln)
-    try:
-        from modules.db_manager import get_engine
-        from sqlalchemy import text
-        import pandas as pd
-        import unicodedata, re
-
-        def _norm_alt(txt):
-            s = unicodedata.normalize('NFKD', str(txt).upper().strip()).encode('ascii', 'ignore').decode('utf-8')
-            return re.sub(r'[^A-Z0-9]', '', s)
-
-        zona_limpia = str(nombre_zona).replace("CAR: ", "").split(" - (")[0].strip()
-        key_zona = _norm_alt(zona_limpia)
-        cons_zona = re.sub(r'[AEIOU]', '', key_zona)
-        eng_alt = get_engine()
-
-        alt_med_ok, alt_min_ok, alt_max_ok = 0.0, 0.0, 0.0
-
-        # A. Intentar primero Matriz Hidro-Geomorfológica (trae Mín, Media y Máx reales)
-        try:
-            with eng_alt.connect() as conn:
-                df_gm = pd.read_sql(text('SELECT "Territorio", "H_Minima", "H_Media", "H_Maxima" FROM matriz_hidrogeomorfologica_maestra'), conn)
-            if not df_gm.empty:
-                s_gm = df_gm['Territorio'].apply(_norm_alt)
-                m_gm = df_gm[s_gm == key_zona]
-                if m_gm.empty:
-                    m_gm = df_gm[s_gm.apply(lambda x: re.sub(r'[AEIOU]', '', x)) == cons_zona]
-                if not m_gm.empty:
-                    alt_med_ok = float(m_gm['H_Media'].iloc[0] or 0.0)
-                    alt_min_ok = float(m_gm['H_Minima'].iloc[0] or alt_med_ok)
-                    alt_max_ok = float(m_gm['H_Maxima'].iloc[0] or alt_med_ok)
+                pob_calc = float(datos_demo['hist_pob'][-1])
         except Exception:
             pass
 
-        # B. Si no estuvo, intentar Matriz Hidrológica Maestra
-        if alt_med_ok <= 0:
-            with eng_alt.connect() as conn:
-                df_hm = pd.read_sql(text('SELECT "Territorio", "Altitud_m" FROM matriz_hidrologica_maestra'), conn)
-            if not df_hm.empty:
-                s_hm = df_hm['Territorio'].apply(_norm_alt)
-                m_hm = df_hm[s_hm == key_zona]
-                if m_hm.empty:
-                    m_hm = df_hm[s_hm.apply(lambda x: re.sub(r'[AEIOU]', '', x)) == cons_zona]
-                if not m_hm.empty:
-                    alt_med_ok = float(m_hm['Altitud_m'].iloc[0] or 0.0)
-                    alt_min_ok, alt_max_ok = alt_med_ok, alt_med_ok
+        if pob_calc <= 0:
+            if "ANTIOQUIA" in territorio_actual:
+                pob_calc = 6901160.0
+            elif "COLOMBIA" in territorio_actual:
+                pob_calc = 52828000.0
+            elif area_actual_km2 > 0:
+                pob_calc = max(area_actual_km2 * 35.0, 10000.0)
+        st.session_state['aleph_pob_total'] = pob_calc
 
-        # C. Respaldo final: altitud real de las estaciones filtradas en la zona
-        if alt_med_ok <= 0 and gdf_filtered is not None and not gdf_filtered.empty and 'altitud' in gdf_filtered.columns:
-            alts_est = pd.to_numeric(gdf_filtered['altitud'], errors='coerce').dropna()
-            alts_est = alts_est[alts_est > 0]
-            if not alts_est.empty:
-                alt_med_ok = float(alts_est.mean())
-                alt_min_ok = float(alts_est.min())
-                alt_max_ok = float(alts_est.max())
+    # 3. Altitud (solo consulta BD cuando cambia el territorio, no en cada interacción)
+    if 'aleph_altitud_m' not in st.session_state:
+        try:
+            def _norm_alt(txt):
+                s = unicodedata.normalize('NFKD', str(txt).upper().strip()).encode('ascii', 'ignore').decode('utf-8')
+                return re.sub(r'[^A-Z0-9]', '', s)
 
-        if alt_med_ok > 0:
+            zona_limpia = str(nombre_zona).replace("CAR: ", "").split(" - (")[0].strip()
+            key_zona = _norm_alt(zona_limpia)
+            cons_zona = re.sub(r'[AEIOU]', '', key_zona)
+            eng_alt = get_engine()
+            alt_med_ok, alt_min_ok, alt_max_ok = 0.0, 0.0, 0.0
+
+            try:
+                with eng_alt.connect() as conn:
+                    df_gm = pd.read_sql(text('SELECT "Territorio", "H_Minima", "H_Media", "H_Maxima" FROM matriz_hidrogeomorfologica_maestra'), conn)
+                if not df_gm.empty:
+                    s_gm = df_gm['Territorio'].apply(_norm_alt)
+                    m_gm = df_gm[s_gm == key_zona]
+                    if m_gm.empty:
+                        m_gm = df_gm[s_gm.apply(lambda x: re.sub(r'[AEIOU]', '', x)) == cons_zona]
+                    if not m_gm.empty:
+                        alt_med_ok = float(m_gm['H_Media'].iloc[0] or 0.0)
+                        alt_min_ok = float(m_gm['H_Minima'].iloc[0] or alt_med_ok)
+                        alt_max_ok = float(m_gm['H_Maxima'].iloc[0] or alt_med_ok)
+            except Exception:
+                pass
+
+            if alt_med_ok <= 0:
+                with eng_alt.connect() as conn:
+                    df_hm = pd.read_sql(text('SELECT "Territorio", "Altitud_m" FROM matriz_hidrologica_maestra'), conn)
+                if not df_hm.empty:
+                    s_hm = df_hm['Territorio'].apply(_norm_alt)
+                    m_hm = df_hm[s_hm == key_zona]
+                    if m_hm.empty:
+                        m_hm = df_hm[s_hm.apply(lambda x: re.sub(r'[AEIOU]', '', x)) == cons_zona]
+                    if not m_hm.empty:
+                        alt_med_ok = float(m_hm['Altitud_m'].iloc[0] or 0.0)
+                        alt_min_ok, alt_max_ok = alt_med_ok, alt_med_ok
+
+            if alt_med_ok <= 0 and gdf_filtered is not None and not gdf_filtered.empty and 'altitud' in gdf_filtered.columns:
+                alts_est = pd.to_numeric(gdf_filtered['altitud'], errors='coerce').dropna()
+                alts_est = alts_est[alts_est > 0]
+                if not alts_est.empty:
+                    alt_med_ok, alt_min_ok, alt_max_ok = float(alts_est.mean()), float(alts_est.min()), float(alts_est.max())
+
             st.session_state['aleph_altitud_m'] = alt_med_ok
             st.session_state['aleph_altitud_min'] = alt_min_ok
             st.session_state['aleph_altitud_max'] = alt_max_ok
-        else:
+        except Exception:
             st.session_state['aleph_altitud_m'] = 0.0
-    except Exception:
-        pass
-
-    # Calculamos y fijamos la población estructuralmente para todas las pestañas
-    pob_actual = float(st.session_state.get('aleph_pob_total', 0.0))
-    if pob_actual <= 0:
-        str_zona = str(nombre_zona).upper()
-        if "ANTIOQUIA" in str_zona:
-            st.session_state['aleph_pob_total'] = 6901160.0
-        elif "COLOMBIA" in str_zona:
-            st.session_state['aleph_pob_total'] = 52828000.0
-        elif area_actual_km2 > 0:
-            st.session_state['aleph_pob_total'] = max((area_actual_km2 * 35.0), 10000.0)
 
     # =========================================================================
     # 🌟 INYECCIÓN DE CLIMA GLOBAL EN VIVO (BYPASS TABLAS ESTÁTICAS)
@@ -2180,7 +2137,7 @@ def main():
 
                     # 1. Cargamos el clima global priorizando la serie limpia y filtrada del modelo
                     with st.spinner("📡 Cargando red de Estaciones y Perfiles Mensuales Depurados..."):
-                        q_est = text("SELECT id_estacion, nombre, altitud, ST_SetSRID(ST_MakePoint(CAST(longitud AS FLOAT), CAST(latitud AS FLOAT)), 4326) as geometry FROM estaciones WHERE latitud IS NOT NULL")
+                        q_est = "SELECT id_estacion, nombre, altitud, ST_SetSRID(ST_MakePoint(CAST(longitud AS FLOAT), CAST(latitud AS FLOAT)), 4326) as geometry FROM estaciones WHERE latitud IS NOT NULL"
                         gdf_est = cargar_capa_espacial_cache(q_est, geom_col="geometry").to_crs("EPSG:3116")
                         gdf_est['id_estacion'] = gdf_est['id_estacion'].astype(str)
                         

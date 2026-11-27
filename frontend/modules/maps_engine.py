@@ -295,10 +295,20 @@ def generar_mapa_interactivo(grid_data, bounds, gdf_stations, gdf_zona, gdf_buff
         # ==========================================================================
         try:
             import ee
-            # 🚀 FIX: Verificamos si ya está inicializado, sino, lo inicializamos.
-            if not ee.data._credentials:
-                ee.Initialize(project='ee-omejiariv')
-                
+            # 🚀 FIX: Verificación compatible con versiones recientes de earthengine-api
+            try:
+                ee.data.getAssetRoots()
+            except Exception:
+                try:
+                    credenciales_dict = dict(st.secrets["gcp_service_account"])
+                    credentials = ee.ServiceAccountCredentials(
+                        email=credenciales_dict["client_email"],
+                        key_data=credenciales_dict["private_key"]
+                    )
+                    ee.Initialize(credentials)
+                except Exception:
+                    ee.Initialize(project='ee-omejiariv')
+
             # 1. Definir la función puente para Folium
             if not hasattr(folium.Map, 'add_ee_layer'):
                 def add_ee_layer(self, ee_image_object, vis_params, name, show=False):
