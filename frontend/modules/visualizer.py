@@ -1501,18 +1501,78 @@ def display_graphs_tab(
         diag = ce.calcular_diagnostico_ml(
             df_monthly_filtered, df_anual_melted, gdf_stations, col_estacion, col_anio, col_valor
         )
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("🌧️ Media Anual Regional", f"{diag['media_anual']:,.0f} mm", f"{diag['n_estaciones']} estaciones")
-        m2.metric("🔄 Régimen Detectado", diag["regimen"], f"Pico: {diag['mes_pico']}")
-        m3.metric("📉 Tendencia (Theil-Sen)", f"{diag['pendiente_decada']:+.1f} mm/déc", diag["tendencia_txt"].split("(")[-1].replace(")", ""))
-        m4.metric("🌵 Mes Más Seco", diag["mes_seco"], diag["gradiente_txt"] or "Sin gradiente altitudinal")
+
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric(
+            "🌧️ Media Anual",
+            f"{diag['media_anual']:,.0f} mm",
+            f"{diag['n_estaciones']} estaciones",
+            delta_color="off",
+            help="Promedio multianual de precipitación total (mm/año) calculado sobre las estaciones activas con años completos (≥10 meses)."
+        )
+        m2.metric(
+            "🔄 Régimen",
+            diag["regimen"],
+            "Ciclo climatológico",
+            delta_color="off",
+            help="Clasificación automática del ciclo anual: 'Bimodal Andino' si existen dos temporadas lluviosas (Abr–May y Sep–Nov) separadas por un mínimo en Jul–Ago."
+        )
+        m3.metric(
+            "📉 Tendencia (Sen)",
+            f"{diag['pendiente_decada']:+.1f} mm/déc",
+            diag["tendencia_txt"].split("(")[-1].replace(")", ""),
+            delta_color="off",
+            help="Pendiente no paramétrica de Theil-Sen (en mm por década) validada con la prueba de Mann-Kendall. Un p-valor < 0.05 indica tendencia estadísticamente significativa."
+        )
+        m4.metric(
+            "🌊 Mes Más Húmedo",
+            diag["mes_pico"],
+            diag["gradiente_txt"] or "Sin gradiente altitudinal",
+            delta_color="off",
+            help="Mes con mayor precipitación promedio histórica en el territorio. Debajo se muestra el gradiente orográfico estimado (cambio de lluvia por cada 100 m de altitud)."
+        )
+        m5.metric(
+            "🌵 Mes Más Seco",
+            diag["mes_seco"],
+            "Mínimo climatológico",
+            delta_color="off",
+            help="Mes con menor precipitación promedio histórica en el territorio (referencia crítica para estiaje y seguridad hídrica)."
+        )
 
         if not diag["clusters_df"].empty:
-            st.caption("Agrupación automática de estaciones (K-Means por régimen de precipitación):")
+            st.markdown(
+                "**Agrupación automática de estaciones (K-Means por régimen de precipitación)**",
+                help=(
+                    "Algoritmo de aprendizaje no supervisado (K-Means, k=3) que agrupa automáticamente las estaciones "
+                    "según su precipitación media anual en tres zonas homogéneas: Núcleo Húmedo (mayor lluvia), "
+                    "Transición (rango intermedio) y Sombra de Lluvia (menor lluvia)."
+                )
+            )
             st.dataframe(
-                diag["clusters_df"].style.format({"Media_mm": "{:,.0f} mm", "Max_mm": "{:,.0f} mm"}),
+                diag["clusters_df"],
                 width="stretch",
                 hide_index=True,
+                column_config={
+                    "Zona": st.column_config.TextColumn(
+                        "Zona Climática (Clúster)",
+                        help="Grupo asignado por K-Means según el volumen medio anual de lluvia de cada estación."
+                    ),
+                    "Estaciones": st.column_config.NumberColumn(
+                        "N° Estaciones",
+                        format="%d",
+                        help="Cantidad de estaciones meteorológicas que pertenecen a este grupo."
+                    ),
+                    "Media_mm": st.column_config.NumberColumn(
+                        "Media Anual",
+                        format="%.0f mm",
+                        help="Precipitación anual promedio de las estaciones agrupadas en esta zona."
+                    ),
+                    "Max_mm": st.column_config.NumberColumn(
+                        "Máximo del Grupo",
+                        format="%.0f mm",
+                        help="Precipitación media anual más alta registrada por una estación dentro de este grupo."
+                    ),
+                },
             )
 
     # --- ESTRUCTURA DE PESTAÑAS ---
