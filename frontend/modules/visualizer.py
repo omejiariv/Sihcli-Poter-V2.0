@@ -1496,6 +1496,25 @@ def display_graphs_tab(
     if "Nombre_Mes" not in df_monthly_filtered.columns:
         df_monthly_filtered["Nombre_Mes"] = df_monthly_filtered["Mes"].map(meses_orden)
 
+    # --- PANEL DE DIAGNÓSTICO AUTOMÁTICO (ML + ESTADÍSTICA) ---
+    with st.expander("🧠 Diagnóstico Automático del Territorio (ML & Estadística)", expanded=True):
+        diag = ce.calcular_diagnostico_ml(
+            df_monthly_filtered, df_anual_melted, gdf_stations, col_estacion, col_anio, col_valor
+        )
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("🌧️ Media Anual Regional", f"{diag['media_anual']:,.0f} mm", f"{diag['n_estaciones']} estaciones")
+        m2.metric("🔄 Régimen Detectado", diag["regimen"], f"Pico: {diag['mes_pico']}")
+        m3.metric("📉 Tendencia (Theil-Sen)", f"{diag['pendiente_decada']:+.1f} mm/déc", diag["tendencia_txt"].split("(")[-1].replace(")", ""))
+        m4.metric("🌵 Mes Más Seco", diag["mes_seco"], diag["gradiente_txt"] or "Sin gradiente altitudinal")
+
+        if not diag["clusters_df"].empty:
+            st.caption("Agrupación automática de estaciones (K-Means por régimen de precipitación):")
+            st.dataframe(
+                diag["clusters_df"].style.format({"Media_mm": "{:,.0f} mm", "Max_mm": "{:,.0f} mm"}),
+                width="stretch",
+                hide_index=True,
+            )
+
     # --- ESTRUCTURA DE PESTAÑAS ---
     tabs = st.tabs([
         "1. Serie Anual", "2. Ranking Multianual", "3. Serie Mensual", 

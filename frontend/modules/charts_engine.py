@@ -2,140 +2,372 @@
 
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
+
+MESES_ORDEN = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
+MESES_MAPA = {i + 1: m for i, m in enumerate(MESES_ORDEN)}
+
 
 # ==============================================================================
 # 1. GRÁFICOS DE SERIES DE TIEMPO Y TENDENCIAS
 # ==============================================================================
 
 def plot_serie_anual(df, col_anio, col_valor, col_estacion):
-    """Genera el gráfico de líneas de precipitación anual."""
+    """Serie anual con banda P10-P90 y promedio regional superpuesto."""
+    df_clean = df.dropna(subset=[col_anio, col_valor]).sort_values([col_estacion, col_anio]).copy()
+    n_est = df_clean[col_estacion].nunique()
+
     fig = px.line(
-        df, x=col_anio, y=col_valor, color=col_estacion, markers=True,
-        labels={col_valor: "Lluvia (mm)", col_anio: "Año"}
+        df_clean,
+        x=col_anio,
+        y=col_valor,
+        color=col_estacion,
+        markers=(n_est <= 12),
+        labels={col_valor: "Lluvia Anual (mm)", col_anio: "Año"},
     )
-    fig.update_layout(hovermode="x unified", margin=dict(l=20, r=20, t=40, b=20))
+    if n_est > 12:
+        fig.update_traces(opacity=0.35, line=dict(width=1.2))
+
+    # Promedio regional y banda interdecil (P10 - P90)
+    stats_yr = df_clean.groupby(col_anio)[col_valor].agg(
+        media="mean",
+        p10=lambda s: np.percentile(s, 10),
+        p90=lambda s: np.percentile(s, 90),
+    ).reset_index()
+
+    if len(stats_yr) > 1 and n_est >= 3:
+        fig.add_trace(go.Scatter(
+            x=pd.concat([stats_yr[col_anio], stats_yr[col_anio][::-1]]),
+            y=pd.concat([stats_yr["p90"], stats_yr["p10"][::-1]]),
+            fill="toself",
+            fillcolor="rgba(52, 152, 219, 0.14)",
+            line=dict(color="rgba(255,255,255,0)"),
+            name="Banda P10–P90",
+            hoverinfo="skip",
+        ))
+        fig.add_trace(go.Scatter(
+            x=stats_yr[col_anio],
+            y=stats_yr["media"],
+            mode="lines+markers",
+            name="PROMEDIO REGIONAL",
+            line=dict(color="#111827", width=3.2),
+            marker=dict(size=5),
+        ))
+
+    fig.update_layout(hovermode="x unified", margin=dict(l=20, r=20, t=40, b=20), height=480)
     return fig
 
-def plot_ranking_multianual(df, col_estacion, col_valor, sort_opt):
-    """Genera el gráfico de barras del ranking de precipitación media."""
-    df_plot = df.copy()
-    if sort_opt == "Mayor a Menor": 
+
+def plot_ranking_multianual(df, col_estacion, col_valor, sort_opt, top_n=25):
+    """Ranking de precipitación media. Usa barras horizontales legibles cuando hay muchas estaciones."""
+    df_plot = df.dropna(subset=[col_valor]).copy()
+    df_plot = df_plot[df_plot[col_valor] > 0]
+
+    if sort_opt == "Mayor a Menor":
         df_plot = df_plot.sort_values(col_valor, ascending=False)
-    elif sort_opt == "Menor a Mayor": 
+    elif sort_opt == "Menor a Mayor":
         df_plot = df_plot.sort_values(col_valor, ascending=True)
-    else: 
+    else:
         df_plot = df_plot.sort_values(col_estacion)
 
-    fig = px.bar(
-        df_plot, x=col_estacion, y=col_valor, color=col_valor, 
-        color_continuous_scale='Blues', text_auto=".0f"
-    )
-    fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+    if len(df_plot) > top_n:
+        df_plot = df_plot.head(top_n)
+        titulo = f"Top {top_n} Estaciones ({sort_opt})"
+    else:
+        titulo = f"Ranking de Precipitación Media ({len(df_plot)} estaciones)"
+
+    if len(df_plot) > 15:
+        df_plot = df_plot.iloc[::-1]  # Para que el #1 quede arriba en barras horizontales
+        fig = px.bar(
+            df_plot,
+            y=col_estacion,
+            x=col_valor,
+            orientation="h",
+            color=col_valor,
+            color_continuous_scale="Blues",
+            text_auto=".0f",
+            title=titulo,
+        )
+        fig.update_layout(height=max(460, len(df_plot) * 24), margin=dict(l=20, r=20, t=45, b=20))
+    else:
+        fig = px.bar(
+            df_plot,
+            x=col_estacion,
+            y=col_valor,
+            color=col_valor,
+            color_continuous_scale="Blues",
+            text_auto=".0f",
+            title=titulo,
+        )
+        fig.update_layout(height=450, margin=dict(l=20, r=20, t=45, b=20))
+
     return fig
 
+
 def plot_serie_mensual(df, show_markers, show_regional):
-    """Genera la serie histórica mensual con opción de promedio regional."""
+    """Serie histórica mensual ordenada estrictamente por estación y fecha."""
+    df_clean = df.dropna(subset=["fecha", "valor"]).sort_values(["id_estacion", "fecha"]).copy()
+    n_est = df_clean["id_estacion"].nunique()
+
     fig = px.line(
-        df, x='fecha', y='valor', color='id_estacion',
-        markers=show_markers, title="Precipitación Mensual"
+        df_clean,
+        x="fecha",
+        y="valor",
+        color="id_estacion",
+        markers=show_markers,
+        title="Precipitación Mensual",
+        labels={"valor": "Lluvia (mm)", "fecha": "Fecha"},
     )
+    if n_est > 12:
+        fig.update_traces(opacity=0.45, line=dict(width=1.1))
+
     if show_regional:
-        reg_mean = df.groupby('fecha')['valor'].mean().reset_index()
+        reg_mean = df_clean.groupby("fecha")["valor"].mean().reset_index().sort_values("fecha")
         fig.add_trace(go.Scatter(
-            x=reg_mean['fecha'], y=reg_mean['valor'], mode="lines",
-            name="PROMEDIO REGIONAL", line=dict(color="black", width=3, dash="dash")
+            x=reg_mean["fecha"],
+            y=reg_mean["valor"],
+            mode="lines",
+            name="PROMEDIO REGIONAL",
+            line=dict(color="#111827", width=3, dash="dash"),
         ))
-    fig.update_layout(hovermode="x unified", margin=dict(l=20, r=20, t=40, b=20))
+
+    fig.update_layout(hovermode="x unified", margin=dict(l=20, r=20, t=40, b=20), height=460)
     return fig
+
 
 # ==============================================================================
 # 2. GRÁFICOS DE CICLO ANUAL Y ESTACIONALIDAD
 # ==============================================================================
 
 def plot_ciclo_anual(df, year_comp=None):
-    """Genera el régimen de lluvias (ciclo promedio) con comparación opcional."""
-    ciclo = df.groupby(['Mes', 'Nombre_Mes', 'id_estacion'])['valor'].mean().reset_index().sort_values('Mes')
-    
-    fig = px.line(
-        ciclo, x='Nombre_Mes', y='valor', color='id_estacion', markers=True,
-        title="Ciclo Anual Promedio"
+    """Régimen de lluvias con orden calendario estricto (Ene-Dic) y mediana regional."""
+    df_clean = df.dropna(subset=["Mes", "valor"]).copy()
+    df_clean["Nombre_Mes"] = df_clean["Mes"].map(MESES_MAPA)
+
+    ciclo = (
+        df_clean.groupby(["Mes", "Nombre_Mes", "id_estacion"], as_index=False)["valor"]
+        .mean()
+        .sort_values(["id_estacion", "Mes"])
     )
-    
+    n_est = ciclo["id_estacion"].nunique()
+
+    fig = px.line(
+        ciclo,
+        x="Nombre_Mes",
+        y="valor",
+        color="id_estacion",
+        markers=(n_est <= 15),
+        category_orders={"Nombre_Mes": MESES_ORDEN},
+        title="Ciclo Anual Promedio (Régimen Climatológico)",
+        labels={"valor": "Lluvia Media (mm/mes)", "Nombre_Mes": "Mes"},
+    )
+    if n_est > 15:
+        fig.update_traces(opacity=0.32, line=dict(width=1.1))
+
+    # Mediana regional destacada
+    reg_clim = df_clean.groupby(["Mes", "Nombre_Mes"], as_index=False)["valor"].median().sort_values("Mes")
+    fig.add_trace(go.Scatter(
+        x=reg_clim["Nombre_Mes"],
+        y=reg_clim["valor"],
+        mode="lines+markers",
+        name="MEDIANA REGIONAL",
+        line=dict(color="#111827", width=3.5),
+        marker=dict(size=7),
+    ))
+
     if year_comp:
-        df_year = df[df['Año'] == year_comp].sort_values('Mes')
-        for est in df_year['id_estacion'].unique():
-            df_y_st = df_year[df_year['id_estacion'] == est]
+        df_year = df_clean[df_clean["Año"] == year_comp].groupby(["Mes", "Nombre_Mes"], as_index=False)["valor"].mean().sort_values("Mes")
+        if not df_year.empty:
             fig.add_trace(go.Scatter(
-                x=df_y_st['Nombre_Mes'], y=df_y_st['valor'],
-                mode='lines+markers', name=f"{est} ({year_comp})",
-                line=dict(dash='dot', width=2), marker=dict(symbol='x')
+                x=df_year["Nombre_Mes"],
+                y=df_year["valor"],
+                mode="lines+markers",
+                name=f"Promedio Regional ({year_comp})",
+                line=dict(color="#dc2626", dash="dot", width=3),
+                marker=dict(symbol="diamond", size=7),
             ))
-            
-    fig.update_layout(hovermode="x unified", margin=dict(l=20, r=20, t=40, b=20))
+
+    fig.update_xaxes(categoryorder="array", categoryarray=MESES_ORDEN)
+    fig.update_layout(hovermode="x unified", margin=dict(l=20, r=20, t=40, b=20), height=480)
     return fig
 
+
 def plot_spaghetti_estacional(df_st, col_anio, col_valor, hl_year=None):
-    """Genera el Spaghetti Plot del ciclo anual comparativo."""
+    """Spaghetti Plot del ciclo anual comparativo."""
     years = sorted(df_st[col_anio].unique(), reverse=True)
     fig = go.Figure()
-    
-    # Trazas por año
+
     for yr in years:
         df_y = df_st[df_st[col_anio] == yr].sort_values("MES_NUM")
-        color, width, opacity, show_leg = "rgba(200, 200, 200, 0.4)", 1, 0.5, False
+        color, width, opacity, show_leg = "rgba(180, 180, 180, 0.45)", 1, 0.5, False
         if hl_year and yr == hl_year:
-            color, width, opacity, show_leg = "red", 4, 1.0, True
-        
+            color, width, opacity, show_leg = "#dc2626", 4, 1.0, True
+
         fig.add_trace(go.Scatter(
-            x=df_y["Nombre_Mes"], y=df_y[col_valor], mode="lines",
-            name=str(yr), line=dict(color=color, width=width), 
-            opacity=opacity, showlegend=show_leg
+            x=df_y["Nombre_Mes"],
+            y=df_y[col_valor],
+            mode="lines",
+            name=str(yr),
+            line=dict(color=color, width=width),
+            opacity=opacity,
+            showlegend=show_leg,
         ))
-    
-    # Promedio
+
     clim = df_st.groupby("MES_NUM")[col_valor].mean().sort_index()
-    meses_mapa = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
-    names_clim = [meses_mapa.get(m, str(m)) for m in clim.index]
-    
+    names_clim = [MESES_MAPA.get(m, str(m)) for m in clim.index]
+
     fig.add_trace(go.Scatter(
-        x=names_clim, y=clim.values, mode="lines+markers",
-        name="Promedio Histórico", line=dict(color="black", width=3, dash="dot")
+        x=names_clim,
+        y=clim.values,
+        mode="lines+markers",
+        name="Promedio Histórico",
+        line=dict(color="black", width=3, dash="dot"),
     ))
-    
-    fig.update_xaxes(categoryorder='array', categoryarray=list(meses_mapa.values()), title="Mes")
+
+    fig.update_xaxes(categoryorder="array", categoryarray=MESES_ORDEN, title="Mes")
     fig.update_layout(hovermode="x unified", margin=dict(l=20, r=20, t=20, b=20))
     return fig
 
+
 def plot_cajas_estacional(df_st, col_valor):
-    """Genera el Boxplot de variabilidad estacional."""
+    """Boxplot de variabilidad estacional."""
     fig = px.box(
-        df_st, x="Nombre_Mes", y=col_valor, color="Nombre_Mes", points="all",
-        category_orders={"Nombre_Mes": ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]}
+        df_st,
+        x="Nombre_Mes",
+        y=col_valor,
+        color="Nombre_Mes",
+        points="all",
+        category_orders={"Nombre_Mes": MESES_ORDEN},
     )
     fig.update_layout(showlegend=False, margin=dict(l=20, r=20, t=20, b=20))
     return fig
+
 
 # ==============================================================================
 # 3. GRÁFICOS ESTADÍSTICOS
 # ==============================================================================
 
-def plot_distribucion_estadistica(df, col_x, col_y, chart_typ, sort_ord):
-    """Genera Violín, Histograma o ECDF según lo seleccionado."""
+def plot_distribucion_estadistica(df, col_x, col_y, chart_typ, sort_ord, max_estaciones=20):
+    """Genera Violín (sin valores negativos), Histograma o ECDF."""
+    df_clean = df.dropna(subset=[col_x, col_y]).copy()
+
+    # Limitar a las estaciones con más datos si hay demasiadas para mantener legibilidad
+    if df_clean[col_x].nunique() > max_estaciones:
+        top_ests = df_clean[col_x].value_counts().head(max_estaciones).index
+        df_clean = df_clean[df_clean[col_x].isin(top_ests)]
+
     cat_orders = {}
     if sort_ord != "Alfabético":
-        medians = df.groupby(col_x)[col_y].median()
-        order_list = medians.sort_values(ascending=False).index.tolist()
-        cat_orders = {col_x: order_list}
+        medians = df_clean.groupby(col_x)[col_y].median()
+        cat_orders = {col_x: medians.sort_values(ascending=False).index.tolist()}
 
     if "Violín" in chart_typ:
-        fig = px.violin(df, x=col_x, y=col_y, color=col_x, box=True, points="all", category_orders=cat_orders)
+        fig = px.violin(
+            df_clean, x=col_x, y=col_y, color=col_x,
+            box=True, points="outliers", category_orders=cat_orders
+        )
+        fig.update_traces(spanmode="hard")  # Impide colas negativas imposibles (< 0 mm)
     elif "Histograma" in chart_typ:
-        fig = px.histogram(df, x=col_y, color=col_x, marginal="box", barmode="overlay", category_orders=cat_orders)
+        fig = px.histogram(
+            df_clean, x=col_y, color=col_x,
+            marginal="box", barmode="overlay", category_orders=cat_orders
+        )
     else:
-        fig = px.ecdf(df, x=col_y, color=col_x)
+        fig = px.ecdf(df_clean, x=col_y, color=col_x)
 
-    fig.update_layout(height=600, showlegend=(chart_typ != "Violín"), margin=dict(l=20, r=20, t=40, b=20))
+    fig.update_layout(height=550, showlegend=(chart_typ != "Violín"), margin=dict(l=20, r=20, t=40, b=20))
     return fig
+
+
+# ==============================================================================
+# 4. MOTOR DE DIAGNÓSTICO AUTOMÁTICO (CAPA 1: ML + ESTADÍSTICA)
+# ==============================================================================
+
+def calcular_diagnostico_ml(df_monthly, df_anual, gdf_stations, col_estacion, col_anio, col_valor):
+    """
+    Calcula un diagnóstico hidroclimático sintético en tiempo real:
+    - Régimen de lluvias (Bimodal vs Unimodal) y meses pico/seco
+    - Tendencia regional (Theil-Sen / Mann-Kendall en mm/década)
+    - Clustering K-Means (Núcleo Húmedo / Transición / Sombra de Lluvia) y gradiente orográfico
+    """
+    diag = {}
+
+    # 1. Régimen climatológico
+    clim = df_monthly.groupby("Mes")[col_valor].mean().reindex(range(1, 13))
+    mes_max = int(clim.idxmax()) if clim.notna().any() else 5
+    mes_min = int(clim.idxmin()) if clim.notna().any() else 1
+
+    # Detección simple de bimodalidad: dos picos separados (Abr-May y Sep-Nov) con valle en Jul-Ago
+    p1 = clim.loc[[4, 5]].mean()
+    p2 = clim.loc[[9, 10, 11]].mean()
+    valle_jul = clim.loc[[7, 8]].mean()
+    es_bimodal = pd.notna(valle_jul) and (p1 > valle_jul * 1.15) and (p2 > valle_jul * 1.15)
+
+    diag["regimen"] = "Bimodal Andino" if es_bimodal else "Unimodal / Transicional"
+    diag["mes_pico"] = f"{MESES_MAPA[mes_max]} ({clim.loc[mes_max]:.0f} mm)"
+    diag["mes_seco"] = f"{MESES_MAPA[mes_min]} ({clim.loc[mes_min]:.0f} mm)"
+
+    # 2. Tendencia regional (Mann-Kendall + Pendiente de Sen)
+    serie_reg = df_anual.groupby(col_anio)[col_valor].mean().sort_index()
+    diag["media_anual"] = float(serie_reg.mean()) if not serie_reg.empty else 0.0
+    diag["tendencia_txt"] = "Sin datos suficientes"
+    diag["pendiente_decada"] = 0.0
+
+    if len(serie_reg) >= 8:
+        try:
+            import pymannkendall as mk
+            res = mk.original_test(serie_reg.values)
+            pend_dec = float(res.slope) * 10.0
+            diag["pendiente_decada"] = pend_dec
+            sig = "Significativa" if res.p < 0.05 else "No significativa"
+            flecha = "📈" if pend_dec > 5 else ("📉" if pend_dec < -5 else "➡️")
+            diag["tendencia_txt"] = f"{flecha} {pend_dec:+.1f} mm/década ({sig}, p={res.p:.3f})"
+        except Exception:
+            pass
+
+    # 3. Clustering K-Means (Estaciones por Precipitación Media) + Gradiente Orográfico
+    est_media = df_anual.groupby(col_estacion)[col_valor].mean().dropna().reset_index()
+    est_media.columns = ["estacion", "ppt_media"]
+    diag["n_estaciones"] = len(est_media)
+    diag["clusters_df"] = pd.DataFrame()
+    diag["gradiente_txt"] = None
+
+    if len(est_media) >= 6:
+        try:
+            from sklearn.cluster import KMeans
+            km = KMeans(n_clusters=3, n_init=10, random_state=42)
+            est_media["cluster_id"] = km.fit_predict(est_media[["ppt_media"]])
+            orden = est_media.groupby("cluster_id")["ppt_media"].mean().sort_values().index.tolist()
+            etiquetas = {
+                orden[0]: "🌵 Sombra de Lluvia",
+                orden[1]: "⚖️ Transición",
+                orden[2]: "🌧️ Núcleo Húmedo",
+            }
+            est_media["Zona"] = est_media["cluster_id"].map(etiquetas)
+            diag["clusters_df"] = (
+                est_media.groupby("Zona", as_index=False)
+                .agg(Estaciones=("estacion", "count"), Media_mm=("ppt_media", "mean"), Max_mm=("ppt_media", "max"))
+                .sort_values("Media_mm", ascending=False)
+            )
+        except Exception:
+            pass
+
+    # Gradiente orográfico si hay altitud en gdf_stations
+    if gdf_stations is not None and not gdf_stations.empty and "altitud" in gdf_stations.columns:
+        col_nom_g = next((c for c in [col_estacion, "nombre", "id_estacion"] if c in gdf_stations.columns), None)
+        if col_nom_g:
+            m_alt = pd.merge(
+                est_media,
+                gdf_stations[[col_nom_g, "altitud"]].drop_duplicates(),
+                left_on="estacion",
+                right_on=col_nom_g,
+            )
+            m_alt["altitud"] = pd.to_numeric(m_alt["altitud"], errors="coerce")
+            m_alt = m_alt.dropna(subset=["altitud", "ppt_media"])
+            m_alt = m_alt[m_alt["altitud"] > 0]
+            if len(m_alt) >= 5 and m_alt["altitud"].std() > 50:
+                slope_alt = np.polyfit(m_alt["altitud"], m_alt["ppt_media"], 1)[0] * 100.0
+                diag["gradiente_txt"] = f"{slope_alt:+.1f} mm por cada 100 m de elevación"
+
+    return diag
