@@ -1590,6 +1590,11 @@ def display_graphs_tab(
             st.plotly_chart(fig_anual, width="stretch")
             st.download_button("📥 CSV Anual", df_anual_melted.to_csv(index=False).encode("utf-8"), "anual.csv")
 
+            if not diag.get("estaciones_clusters_df", pd.DataFrame()).empty:
+                st.markdown("##### 🗺️ Mapa de Estaciones Clasificadas (Clústeres K-Means)")
+                fig_cl_map = ce.plot_mapa_clusters_kmeans(diag["estaciones_clusters_df"])
+                st.plotly_chart(fig_cl_map, width="stretch")
+
     # --- TAB 2: RANKING MULTIANUAL ---
     with tabs[1]:
         st.markdown("##### Ranking de Precipitación Media")

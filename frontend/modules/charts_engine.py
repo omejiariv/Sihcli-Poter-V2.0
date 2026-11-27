@@ -370,4 +370,63 @@ def calcular_diagnostico_ml(df_monthly, df_anual, gdf_stations, col_estacion, co
                 slope_alt = np.polyfit(m_alt["altitud"], m_alt["ppt_media"], 1)[0] * 100.0
                 diag["gradiente_txt"] = f"{slope_alt:+.1f} mm por cada 100 m de elevación"
 
+    # 4. Tabla georreferenciada de estaciones por clúster (para mapa interactivo)
+    diag["estaciones_clusters_df"] = pd.DataFrame()
+    if "Zona" in est_media.columns and gdf_stations is not None and not gdf_stations.empty:
+        col_nom_g = next((c for c in [col_estacion, "nombre", "id_estacion"] if c in gdf_stations.columns), None)
+        if col_nom_g:
+            gdf_geo = gdf_stations.drop_duplicates(subset=[col_nom_g]).copy()
+            if "latitud" in gdf_geo.columns:
+                gdf_geo["_lat"] = pd.to_numeric(gdf_geo["latitud"], errors="coerce")
+            elif "latitude" in gdf_geo.columns:
+                gdf_geo["_lat"] = pd.to_numeric(gdf_geo["latitude"], errors="coerce")
+            else:
+                gdf_geo["_lat"] = gdf_geo.geometry.y
+
+            if "longitud" in gdf_geo.columns:
+                gdf_geo["_lon"] = pd.to_numeric(gdf_geo["longitud"], errors="coerce")
+            elif "longitude" in gdf_geo.columns:
+                gdf_geo["_lon"] = pd.to_numeric(gdf_geo["longitude"], errors="coerce")
+            else:
+                gdf_geo["_lon"] = gdf_geo.geometry.x
+
+            cols_geo = [col_nom_g, "_lat", "_lon"] + (["altitud"] if "altitud" in gdf_geo.columns else [])
+            df_map_cl = pd.merge(est_media, gdf_geo[cols_geo], left_on="estacion", right_on=col_nom_g, how="inner")
+            df_map_cl = df_map_cl.dropna(subset=["_lat", "_lon", "ppt_media"])
+            diag["estaciones_clusters_df"] = df_map_cl
+
     return diag
+
+def plot_mapa_clusters_kmeans(df_clusters):
+    """Mapa interactivo de estaciones clasificadas por clúster K-Means."""
+    colores_zona = {
+        "🌧️ Núcleo Húmedo": "#1d4ed8",
+        "⚖️ Transición": "#10b981",
+        "🌵 Sombra de Lluvia": "#ea580c",
+    }
+    hover_cols = {"ppt_media": ":.0f", "Zona": True, "_lat": False, "_lon": False}
+    if "altitud" in df_clusters.columns:
+        hover_cols["altitud"] = ":.0f"
+
+    fig = px.scatter_mapbox(
+        df_clusters,
+        lat="_lat",
+        lon="_lon",
+        color="Zona",
+        size="ppt_media",
+        size_max=16,
+        hover_name="estacion",
+        hover_data=hover_cols,
+        color_discrete_map=colores_zona,
+        category_orders={"Zona": ["🌧️ Núcleo Húmedo", "⚖️ Transición", "🌵 Sombra de Lluvia"]},
+        mapbox_style="open-street-map",
+        zoom=9.5,
+        height=460,
+        labels={"ppt_media": "Media Anual (mm)", "altitud": "Altitud (msnm)"},
+        title="Distribución Espacial de Estaciones por Zona Climática (K-Means)",
+    )
+    fig.update_layout(
+        margin=dict(l=0, r=0, t=40, b=0),
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1),
+    )
+    return fig    
