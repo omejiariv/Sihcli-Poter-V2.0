@@ -4375,6 +4375,32 @@ def display_drought_analysis_tab(df_long, gdf_stations, **kwargs):
         except Exception as e:
             st.error(f"Error: {e}")
 
+        with st.expander("📘 Guía Técnica: Metodología, Conceptos e Interpretación (SPI, SPEI y Extremos)", expanded=False):
+            st.markdown("""
+### 1. Conceptos y Metodología
+* **SPI (Índice Estandarizado de Precipitación):** Evalúa únicamente el déficit o exceso de lluvia ($P$) acumulado en una ventana móvil ($1, 3, 6, 12$ o $24$ meses), estandarizado como desviaciones respecto a la climatología histórica ($Z$-score).
+* **SPEI (Índice Estandarizado de Precipitación y Evapotranspiración):** Evalúa el **balance hídrico climático** ($D = P - \\text{PET}$). En esta plataforma calcula la Evapotranspiración Potencial (PET) mediante **Thornthwaite (1948)** ajustado a latitud andina ($6.25^\\circ\\text{ N}$), incorporando **modulación térmica dinámica por el índice ONI (ENSO)** y ajuste probabilístico Log-Laplace. Esto permite capturar cómo el calentamiento en fases *El Niño* agrava la sequía incluso con lluvias moderadas.
+* **Extremos Climáticos:** Eventos que cruzan los umbrales críticos de sequía o exceso hídrico. Se caracterizan por su **duración** (meses consecutivos), **magnitud** (déficit acumulado), **intensidad** (valor medio) y **período de retorno** (ajuste Gumbel).
+
+### 2. Utilidad según la Escala Temporal
+| Escala | Tipo de Sequía / Respuesta | Aplicación en Gestión Hídrica |
+| :--- | :--- | :--- |
+| **1 – 3 meses** | Meteorológica y agrícola superficial | Monitoreo de humedad del suelo, incendios forestales y alertas tempranas. |
+| **6 meses** | Agrícola e hidrológica intermedia | Estrés en cultivos, caudales de quebradas y microcuencas abastecedoras. |
+| **12 – 24 meses** | Hidrológica y estructural | Niveles de embalses, recarga de acuíferos y seguridad hídrica regional. |
+
+### 3. Tabla de Interpretación (Estándar OMM)
+| Rango SPI / SPEI | Categoría | Señal en el Gráfico |
+| :--- | :--- | :--- |
+| **$\\ge +2.00$** | Extremadamente húmedo | Barras azules altas (riesgo de crecientes y deslizamientos). |
+| **$+1.50$ a $+1.99$** | Muy húmedo | Excedente hídrico marcado (típico en fases *La Niña*). |
+| **$+1.00$ a $+1.49$** | Moderadamente húmedo | Condiciones por encima de lo normal. |
+| **$-0.99$ a $+0.99$** | **Normal** | Variabilidad climática habitual del territorio. |
+| **$-1.00$ a $-1.49$** | Moderadamente seco | Alerta temprana por reducción de oferta hídrica. |
+| **$-1.50$ a $-1.99$** | **Severamente seco** | **Línea roja punteada (`-1.5`):** umbral de activación de planes de contingencia. |
+| **$\\le -2.00$** | Extremadamente seco | Déficit crítico (típico en episodios intensos de *El Niño*). |
+            """)            
+
     # --- TAB 2: FRECUENCIA (GUMBEL) ---
     with tabs[1]:
         from modules.analysis import calculate_return_periods
