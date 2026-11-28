@@ -4399,6 +4399,7 @@ def display_drought_analysis_tab(df_long, gdf_stations, **kwargs):
 | **$-1.00$ a $-1.49$** | Moderadamente seco | Alerta temprana por reducción de oferta hídrica. |
 | **$-1.50$ a $-1.99$** | **Severamente seco** | **Línea roja punteada (`-1.5`):** umbral de activación de planes de contingencia. |
 | **$\\le -2.00$** | Extremadamente seco | Déficit crítico (típico en episodios intensos de *El Niño*). |
+> **Nota técnica sobre el uso de ETP (PET) en el SPEI:** En regiones tropicales andinas, la precipitación presenta una variabilidad mucho mayor que la temperatura, por lo que las curvas de **SPI** y **SPEI** muestran patrones muy similares. Sin embargo, incluir la ETP dinámica modulada por el índice ONI es clave para capturar el **estrés térmico evaporativo**: en episodios cálidos de *El Niño* la atmósfera demanda más agua (agravando la sequía real en suelos y embalses), mientras que en períodos húmedos la ETP amortigua los picos de excedente respecto al SPI puro.
             """)            
 
     # --- TAB 2: FRECUENCIA (GUMBEL) ---
