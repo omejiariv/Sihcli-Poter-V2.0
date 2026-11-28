@@ -4341,9 +4341,26 @@ def display_drought_analysis_tab(df_long, gdf_stations, **kwargs):
                 from modules.analysis import calculate_spi
                 series_idx = calculate_spi(ts_ppt, window=scale)
             else:
-                from modules.analysis import calculate_spei
-                t_series = pd.Series([28 - (0.006 * float(alt))] * len(ts_ppt), index=ts_ppt.index)
-                series_idx = calculate_spei(ts_ppt, t_series, window=scale)
+            from modules.analysis import calculate_spei
+            from modules import climate_api
+
+            t_series = pd.Series([28 - (0.006 * float(alt))] * len(ts_ppt), index=ts_ppt.index)
+
+            serie_oni = None
+            try:
+                df_oni = climate_api.get_live_oni_data()
+                if df_oni is not None and not df_oni.empty:
+                    df_oni = df_oni.copy()
+                    if "fecha" in df_oni.columns:
+                        df_oni["fecha"] = pd.to_datetime(df_oni["fecha"], errors="coerce").dt.to_period("M").dt.to_timestamp()
+                        df_oni = df_oni.dropna(subset=["fecha"]).set_index("fecha")
+                    col_oni = next((c for c in ["oni", "ONI", "valor", "anomalia", "ANOM"] if c in df_oni.columns), None)
+                    if col_oni:
+                        serie_oni = pd.to_numeric(df_oni[col_oni], errors="coerce").groupby(level=0).mean()
+            except Exception:
+                serie_oni = None
+
+            series_idx = calculate_spei(ts_ppt, t_series, window=scale, oni_series=serie_oni)
 
             if series_idx is not None and not series_idx.dropna().empty:
                 df_vis = pd.DataFrame({"Val": series_idx})

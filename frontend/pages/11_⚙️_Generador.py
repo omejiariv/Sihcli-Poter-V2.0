@@ -1230,73 +1230,8 @@ with tab7:
             else:
                 st.warning("No se obtuvieron registros nuevos. Verifica tu conexión a internet.")
 
-# ==========================
-# 🚀 ZONA DE PRUEBAS Y MANTENIMIENTO SQL
-# ==========================
-if __name__ == "__main__":
-    st.markdown("---")
-    st.subheader("🧹 Limpieza de Emergencia de la Base de Datos")
-    st.markdown(
-        "Si entraron datos corruptos, fechas fantasmas (como diciembre de 2026), "
-        "valores negativos o diluvios irreales de Excel, usa estos controles para sanar Supabase."
-    )
-
-    col_purga1, col_purga2 = st.columns(2)
-
-    with col_purga1:
-        if st.button("🧨 Purgar Anomalías, Fechas Futuras y Valores Imposibles", type="primary", use_container_width=True):
-            from modules.db_manager import get_engine
-            from sqlalchemy import text
-
-            try:
-                engine = get_engine()
-                with engine.begin() as conn:
-                    res_val = conn.execute(text("""
-                        DELETE FROM precipitacion 
-                        WHERE valor < 0 OR valor > 1500 OR valor IN (999, 999.9, 9999, -999, -99.9);
-                    """))
-                    res_fec = conn.execute(text("""
-                        DELETE FROM precipitacion 
-                        WHERE fecha > CURRENT_DATE 
-                           OR (UPPER(id_estacion) LIKE 'SIATA_%' AND fecha < '2010-01-01');
-                    """))
-                    total_purgados = res_val.rowcount + res_fec.rowcount
-
-                st.cache_data.clear()
-                st.success(
-                    f"✅ ¡Caza de anomalías completada! Se eliminaron {total_purgados} registros "
-                    f"({res_val.rowcount} por valor inválido y {res_fec.rowcount} por fecha fuera de rango)."
-                )
-                st.balloons()
-            except Exception as e:
-                st.error(f"Error en la purga: {e}")
-
-    with col_purga2:
-        if st.button("🗑️ Borrar ÚNICAMENTE datos del SIATA", type="primary", use_container_width=True):
-            from modules.db_manager import get_engine
-            from sqlalchemy import text
-
-            try:
-                engine = get_engine()
-                with engine.begin() as conn:
-                    res = conn.execute(text("""
-                        DELETE FROM precipitacion 
-                        WHERE UPPER(id_estacion) LIKE 'SIATA_%';
-                    """))
-
-                st.cache_data.clear()
-                st.success(
-                    f"✅ ¡Limpieza quirúrgica completada! Se borraron {res.rowcount} registros del SIATA "
-                    f"y se refrescó la memoria caché. Tus datos del IDEAM están a salvo."
-                )
-                st.balloons()
-            except Exception as e:
-                st.error(f"Error en el borrado: {e}")
-
-# ==========================
-# 🚀 ZONA DE PRUEBAS Y MANTENIMIENTO SQL AVANZADO Tabla Precipitacion
 # =====================================================================
-# 🧹 QUIRÓFANO SQL: MANTENIMIENTO Y DEPURACIÓN DE SUPABASE
+# 🧹 QUIRÓFANO SQL: MANTENIMIENTO Y DEPURACIÓN DE SUPABASE - Tabla Precipitacion
 # =====================================================================
 st.markdown("---")
 with st.expander("🧹 Quirófano SQL: Depuración Profunda de Supabase (Tabla `precipitacion`)", expanded=False):

@@ -116,38 +116,80 @@ def calculate_spi(df, col=None, window=12):
     return df_spi["spi"]
 
 
+def calculate_pet_thornthwaite(temp_series, lat_deg=6.25):
+    """
+    Calcula Evapotranspiración Potencial mensual (mm/mes) mediante Thornthwaite (1948),
+    ajustada por duración del mes y fotoperíodo para latitud tropical/andina.
+    """
+    t = pd.to_numeric(temp_series, errors="coerce").clip(lower=0.0)
+    if t.dropna().empty:
+        return pd.Series(np.nan, index=temp_series.index)
+
+    # Índice de calor anual (I) sobre el ciclo climatológico de 12 meses
+    t_clim = t.groupby(t.index.month).mean()
+    i_anual = float(((t_clim / 5.0) ** 1.514).sum())
+    if i_anual <= 0:
+        return pd.Series(0.0, index=temp_series.index)
+
+    a = (6.75e-7 * (i_anual ** 3)) - (7.71e-5 * (i_anual ** 2)) + (1.792e-2 * i_anual) + 0.49239
+    pet_sin_ajuste = 16.0 * ((10.0 * t / i_anual) ** a)
+
+    # Factor de corrección por días del mes y horas de sol (aprox. astronómica)
+    dias_mes = t.index.days_in_month
+    dia_juliano = pd.Series(t.index.dayofyear, index=t.index)
+    declinacion = 0.409 * np.sin((2.0 * np.pi / 365.0) * dia_juliano - 1.39)
+    lat_rad = np.deg2rad(lat_deg)
+    ws = np.arccos(np.clip(-np.tan(lat_rad) * np.tan(declinacion), -1.0, 1.0))
+    horas_sol = (24.0 / np.pi) * ws
+
+    factor_k = (horas_sol / 12.0) * (dias_mes / 30.0)
+    return (pet_sin_ajuste * factor_k).clip(lower=0.0)
+
+
 @st.cache_data
-def calculate_spei(precip_series, et_series, window=12):
+def calculate_spei(precip_series, et_series, window=12, oni_series=None, delta_temp_c=0.0, lat_deg=6.25):
     """
-    Calcula el SPEI usando la distribución Log-Laplace.
+    Calcula el SPEI usando la distribución Log-Laplace con ETP dinámica (Thornthwaite + modulación ENSO).
     """
-    scale = int(window) 
+    scale = int(window)
 
     # Validación básica
-    if (precip_series is None or et_series is None or precip_series.empty or et_series.empty):
+    if precip_series is None or et_series is None or precip_series.empty or et_series.empty:
         return pd.Series(dtype=float)
 
     # Alineación por índice
     df = pd.DataFrame({"precip": precip_series, "et": et_series}).sort_index()
-    # Asumimos frecuencia mensual para llenar huecos correctamente
     if not df.index.freq:
-        try: df = df.asfreq("MS")
-        except: pass
+        try:
+            df = df.asfreq("MS")
+        except Exception:
+            pass
 
-    # Limpieza
+    # Limpieza (compatible con Pandas 2.x / Python 3.11)
     df.dropna(subset=["precip"], inplace=True)
-    df["et"] = df["et"].fillna(method="ffill").fillna(method="bfill")
+    df["et"] = df["et"].ffill().bfill()
     df.dropna(subset=["et"], inplace=True)
 
+    # Anomalía térmica dinámica por ENSO (ONI) + delta de escenario
+    delta_dinamico = pd.Series(float(delta_temp_c), index=df.index, dtype=float)
+    if oni_series is not None and not oni_series.empty:
+        oni_aligned = pd.to_numeric(oni_series, errors="coerce").reindex(df.index).ffill().bfill().fillna(0.0)
+        # Sensibilidad térmica andina aprox.: +0.65 °C por cada +1.0 °C en ONI
+        delta_dinamico = delta_dinamico + (oni_aligned * 0.65).clip(-1.5, 2.5)
+
     # --- AJUSTE INTELIGENTE DE UNIDADES ---
-    # Si 'et' parece ser Temperatura (< 40 promedio), lo convertimos a ET aprox.
+    # Si 'et' es Temperatura (°C, media < 40), calcula PET mensual dinámica con Thornthwaite
     if df["et"].mean() < 40:
-        df["et"] = df["et"] * 4.5 
+        temp_dinamica = df["et"] + delta_dinamico
+        df["et"] = calculate_pet_thornthwaite(temp_dinamica, lat_deg=lat_deg)
+    elif (delta_dinamico != 0).any():
+        # Si ya es ETP en mm/mes (ej. TerraClimate), aplica sensibilidad ~4% por cada +1 °C
+        df["et"] = df["et"] * (1.0 + 0.04 * delta_dinamico).clip(lower=0.7)
 
     if len(df) < scale * 2:
         return pd.Series(dtype=float)
 
-    # Balance Hídrico (D)
+    # Balance Hídrico (D = P - PET)
     water_balance = df["precip"] - df["et"]
 
     # Acumulación
@@ -161,23 +203,19 @@ def calculate_spei(precip_series, et_series, window=12):
 
     if not data_for_fit.empty and len(data_for_fit.unique()) > 1:
         try:
-            # Ajuste de parámetros
             params = loglaplace.fit(
                 data_for_fit,
                 floc=data_for_fit.min() - 1e-5 if data_for_fit.min() <= 0 else 0,
             )
-            # CDF
             cdf = loglaplace.cdf(rolling_balance.dropna(), *params)
             cdf_series = pd.Series(cdf, index=rolling_balance.dropna().index)
-            # Clipping y Z-Score
             cdf_clipped = np.clip(cdf_series.values, 1e-7, 1 - 1e-7)
             spei.loc[cdf_series.index] = norm.ppf(cdf_clipped)
         except Exception:
-            pass 
+            pass
 
     spei.replace([np.inf, -np.inf], np.nan, inplace=True)
     return spei
-
 
 def calculate_monthly_anomalies(df_monthly, df_long_full):
     """
