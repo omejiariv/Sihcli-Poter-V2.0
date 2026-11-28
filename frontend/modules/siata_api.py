@@ -116,39 +116,48 @@ def _procesar_sensores_siata(p1_raw, p2_raw):
         return p1.fillna(p2).fillna(0.0)
 
 
-def extraer_lluvia_reciente_siata(diccionario_homologacion, meses_atras=5, gdf_estaciones=None):
+def extraer_lluvia_reciente_siata(
+    diccionario_homologacion,
+    meses_atras=5,
+    gdf_estaciones=None,
+    usar_reanalisis=True,
+    formato="ancho",
+):
     """
-    Extrae la precipitación mensual de los últimos `meses_atras` meses combinando:
-    - Capa 1: Telemetría en vivo de los últimos 30 días del Geoportal SIATA (si está accesible).
-    - Capa 2: Serie diaria Archive (hasta hoy - 6 días) + Forecast (últimos 14 días) en las coordenadas
-      exactas de las estaciones para completar todos los meses posteriores a junio de 2026.
+    Extrae la precipitación mensual de los últimos `meses_atras` meses diferenciando origen:
+    - Capa 1: 'SIATA (Telemetría Real)' desde el Geoportal SIATA.
+    - Capa 2 (opcional): 'Open-Meteo (Reanálisis ERA5)' para completar meses faltantes.
+
+    Parámetros:
+    - formato='ancho': retorna matriz (fecha x estaciones) y adjunta trazabilidad en df.attrs['detalle_origen'].
+    - formato='largo': retorna DataFrame ['fecha', 'id_estacion', 'valor', 'origen'] listo para Supabase.
     """
     if not diccionario_homologacion:
         return pd.DataFrame()
-    
+
     hoy = pd.Timestamp.today().normalize()
-    mes_actual_tope = hoy.to_period('M').to_timestamp()
-    fecha_inicio_trim = (hoy - pd.DateOffset(months=int(meses_atras))).to_period('M').to_timestamp()
-    
+    mes_actual_tope = hoy.to_period("M").to_timestamp()
+    fecha_inicio_trim = (hoy - pd.DateOffset(months=int(meses_atras))).to_period("M").to_timestamp()
+
     URLS_DATOS = [
         "https://geoportal.siata.gov.co/fastgeoapi/geodata/geographJson/2/pluvio_30d/{id_estacion}",
-        "https://geoportal.siata.gov.co/fastgeoapi/geodata/geographJson/2/pluvio_72h/{id_estacion}"
+        "https://geoportal.siata.gov.co/fastgeoapi/geodata/geographJson/2/pluvio_72h/{id_estacion}",
     ]
-    
-    resultados_geoportal = []
+
+    registros_reales = []
     items_est = list(diccionario_homologacion.items())
-    
-    # Ping rápido (3 s) a la primera estación para verificar si el Geoportal responde
+
     geoportal_activo = False
     if items_est:
         try:
             test_url = URLS_DATOS[0].format(id_estacion=items_est[0][1])
             r_test = requests.get(test_url, headers=HEADERS, verify=False, timeout=3)
-            if r_test.status_code == 200 and 'info' in r_test.json():
+            if r_test.status_code == 200 and "info" in r_test.json():
                 geoportal_activo = True
         except Exception:
             geoportal_activo = False
 
+    # --- CAPA 1: TELEMETRÍA REAL SIATA ---
     if geoportal_activo:
         for cod_destino, cod_siata in items_est:
             for url_base in URLS_DATOS:
@@ -156,71 +165,75 @@ def extraer_lluvia_reciente_siata(diccionario_homologacion, meses_atras=5, gdf_e
                 try:
                     res = requests.get(url, headers=HEADERS, verify=False, timeout=3)
                     if res.status_code == 200:
-                        datos = res.json()
-                        info = datos.get('info', {})
-                        tiempos = info.get('Tiempo', [])
+                        info = res.json().get("info", {})
+                        tiempos = info.get("Tiempo", [])
                         if tiempos:
-                            df_est = pd.DataFrame({'fecha_dt': pd.to_datetime(tiempos, errors='coerce')})
-                            df_est['precipitacion'] = _procesar_sensores_siata(
-                                info.get('pluvio_1', []),
-                                info.get('pluvio_2', [])
+                            df_est = pd.DataFrame({"fecha_dt": pd.to_datetime(tiempos, errors="coerce")})
+                            df_est["precipitacion"] = _procesar_sensores_siata(
+                                info.get("pluvio_1", []),
+                                info.get("pluvio_2", []),
                             )
-                            df_est = df_est.dropna(subset=['fecha_dt'])
+                            df_est = df_est.dropna(subset=["fecha_dt"])
                             if not df_est.empty:
-                                df_est['dia'] = df_est['fecha_dt'].dt.date
-                                df_est['fecha'] = df_est['fecha_dt'].dt.to_period('M').dt.to_timestamp()
-                                resumen_m = df_est.groupby('fecha').agg(
-                                    lluvia=('precipitacion', 'sum'),
-                                    n_dias=('dia', 'nunique')
-                                ).reset_index()
-                                # Permite meses con >= 10 días en la ventana móvil de 30 días
-                                resumen_m = resumen_m[(resumen_m['n_dias'] >= 10) & (resumen_m['lluvia'] > 0)]
-                                if not resumen_m.empty:
-                                    df_m = resumen_m[['fecha', 'lluvia']].round(2).rename(columns={'lluvia': cod_destino})
-                                    resultados_geoportal.append(df_m)
+                                df_est["dia"] = df_est["fecha_dt"].dt.date
+                                df_est["fecha"] = df_est["fecha_dt"].dt.to_period("M").dt.to_timestamp()
+                                resumen_m = df_est.groupby("fecha", as_index=False).agg(
+                                    valor=("precipitacion", "sum"),
+                                    n_dias=("dia", "nunique"),
+                                )
+                                # Meses cerrados: >= 15 días; mes actual en curso: >= 10 días
+                                mask_dias = np.where(
+                                    resumen_m["fecha"] < mes_actual_tope,
+                                    resumen_m["n_dias"] >= 15,
+                                    resumen_m["n_dias"] >= 10,
+                                )
+                                resumen_m = resumen_m[mask_dias & (resumen_m["valor"] > 0) & (resumen_m["valor"] <= 1500.0)]
+                                for _, r in resumen_m.iterrows():
+                                    registros_reales.append({
+                                        "fecha": r["fecha"],
+                                        "id_estacion": cod_destino,
+                                        "valor": round(float(r["valor"]), 2),
+                                        "origen": "SIATA (Telemetría Real)",
+                                    })
                             break
                 except Exception:
                     continue
 
-    df_siata_vivo = pd.DataFrame()
-    if resultados_geoportal:
-        df_siata_vivo = reduce(lambda left, right: pd.merge(left, right, on='fecha', how='outer'), resultados_geoportal)
+    df_largo_real = pd.DataFrame(registros_reales, columns=["fecha", "id_estacion", "valor", "origen"])
 
-    # Capa 2: Empalme continuo Archive (hasta hoy - 6 días) + Forecast (últimos 14 días)
-    if gdf_estaciones is not None and not gdf_estaciones.empty:
+    # --- CAPA 2: RESPALDO REANÁLISIS (OPEN-METEO ERA5 + FORECAST) ---
+    registros_reanalisis = []
+    if usar_reanalisis and gdf_estaciones is not None and not gdf_estaciones.empty:
         try:
-            col_id = next((c for c in gdf_estaciones.columns if c.lower() in ['codigo', 'id_estacion']), None)
+            col_id = next((c for c in gdf_estaciones.columns if c.lower() in ["codigo", "id_estacion"]), None)
             df_coords = gdf_estaciones.copy()
-            
-            if 'lat' in df_coords.columns:
-                df_coords['lat'] = pd.to_numeric(df_coords['lat'], errors='coerce')
-            elif 'latitud' in df_coords.columns:
-                df_coords['lat'] = pd.to_numeric(df_coords['latitud'], errors='coerce')
-            elif hasattr(df_coords, 'geometry'):
-                df_coords['lat'] = df_coords.geometry.y
 
-            if 'lon' in df_coords.columns:
-                df_coords['lon'] = pd.to_numeric(df_coords['lon'], errors='coerce')
-            elif 'longitud' in df_coords.columns:
-                df_coords['lon'] = pd.to_numeric(df_coords['longitud'], errors='coerce')
-            elif hasattr(df_coords, 'geometry'):
-                df_coords['lon'] = df_coords.geometry.x
+            if "lat" in df_coords.columns:
+                df_coords["lat"] = pd.to_numeric(df_coords["lat"], errors="coerce")
+            elif "latitud" in df_coords.columns:
+                df_coords["lat"] = pd.to_numeric(df_coords["latitud"], errors="coerce")
+            elif hasattr(df_coords, "geometry"):
+                df_coords["lat"] = df_coords.geometry.y
 
-            df_coords = df_coords[df_coords[col_id].astype(str).isin(diccionario_homologacion.keys())].dropna(subset=['lat', 'lon'])
+            if "lon" in df_coords.columns:
+                df_coords["lon"] = pd.to_numeric(df_coords["lon"], errors="coerce")
+            elif "longitud" in df_coords.columns:
+                df_coords["lon"] = pd.to_numeric(df_coords["longitud"], errors="coerce")
+            elif hasattr(df_coords, "geometry"):
+                df_coords["lon"] = df_coords.geometry.x
+
+            df_coords = df_coords[df_coords[col_id].astype(str).isin(diccionario_homologacion.keys())].dropna(subset=["lat", "lon"])
 
             if not df_coords.empty:
-                df_coords['lat_r'] = df_coords['lat'].round(1)
-                df_coords['lon_r'] = df_coords['lon'].round(1)
-                
-                start_str = fecha_inicio_trim.strftime('%Y-%m-%d')
-                end_archive_dt = max(fecha_inicio_trim, hoy - pd.Timedelta(days=6))
-                end_archive_str = end_archive_dt.strftime('%Y-%m-%d')
+                df_coords["lat_r"] = df_coords["lat"].round(1)
+                df_coords["lon_r"] = df_coords["lon"].round(1)
 
-                series_trimestre = {}
-                for (lat_c, lon_c), df_grp in df_coords.groupby(['lat_r', 'lon_r']):
+                start_str = fecha_inicio_trim.strftime("%Y-%m-%d")
+                end_archive_str = max(fecha_inicio_trim, hoy - pd.Timedelta(days=6)).strftime("%Y-%m-%d")
+
+                for (lat_c, lon_c), df_grp in df_coords.groupby(["lat_r", "lon_r"]):
                     partes_diarias = []
-                    
-                    # Tramo A: Meses consolidados hasta hace 6 días (evita HTTP 400 por rezago de ERA5)
+
                     try:
                         url_arch = (
                             f"https://archive-api.open-meteo.com/v1/archive?"
@@ -229,16 +242,15 @@ def extraer_lluvia_reciente_siata(diccionario_homologacion, meses_atras=5, gdf_e
                         )
                         r_arch = requests.get(url_arch, headers=HEADERS, verify=False, timeout=10)
                         if r_arch.status_code == 200:
-                            d_arch = r_arch.json().get('daily', {})
-                            if 'time' in d_arch and 'precipitation_sum' in d_arch:
+                            d_arch = r_arch.json().get("daily", {})
+                            if "time" in d_arch and "precipitation_sum" in d_arch:
                                 partes_diarias.append(pd.DataFrame({
-                                    'fecha_dt': pd.to_datetime(d_arch['time']),
-                                    'ppt': pd.to_numeric(d_arch['precipitation_sum'], errors='coerce')
+                                    "fecha_dt": pd.to_datetime(d_arch["time"]),
+                                    "ppt": pd.to_numeric(d_arch["precipitation_sum"], errors="coerce"),
                                 }))
                     except Exception:
                         pass
 
-                    # Tramo B: Últimos 14 días en vivo
                     try:
                         url_fc = (
                             f"https://api.open-meteo.com/v1/forecast?"
@@ -247,45 +259,52 @@ def extraer_lluvia_reciente_siata(diccionario_homologacion, meses_atras=5, gdf_e
                         )
                         r_fc = requests.get(url_fc, headers=HEADERS, verify=False, timeout=10)
                         if r_fc.status_code == 200:
-                            d_fc = r_fc.json().get('daily', {})
-                            if 'time' in d_fc and 'precipitation_sum' in d_fc:
+                            d_fc = r_fc.json().get("daily", {})
+                            if "time" in d_fc and "precipitation_sum" in d_fc:
                                 partes_diarias.append(pd.DataFrame({
-                                    'fecha_dt': pd.to_datetime(d_fc['time']),
-                                    'ppt': pd.to_numeric(d_fc['precipitation_sum'], errors='coerce')
+                                    "fecha_dt": pd.to_datetime(d_fc["time"]),
+                                    "ppt": pd.to_numeric(d_fc["precipitation_sum"], errors="coerce"),
                                 }))
                     except Exception:
                         pass
 
                     if partes_diarias:
-                        df_d = pd.concat(partes_diarias, ignore_index=True).dropna(subset=['fecha_dt'])
-                        df_d = df_d.sort_values('fecha_dt').drop_duplicates(subset=['fecha_dt'], keep='first')
-                        df_d['ppt'] = df_d['ppt'].fillna(0.0)
-                        df_d = df_d[df_d['fecha_dt'] <= hoy]
-                        df_d['fecha'] = df_d['fecha_dt'].dt.to_period('M').dt.to_timestamp()
-                        s_mes = df_d.groupby('fecha')['ppt'].sum().round(2)
-                        s_mes = s_mes[s_mes > 0]
-                        if not s_mes.empty:
-                            for est_id in df_grp[col_id].astype(str):
-                                series_trimestre[est_id] = s_mes
-
-                if series_trimestre:
-                    df_respaldo = pd.DataFrame(series_trimestre)
-                    df_respaldo.index.name = 'fecha'
-                    df_respaldo = df_respaldo.reset_index()
-                    if df_siata_vivo.empty:
-                        df_siata_vivo = df_respaldo
-                    else:
-                        df_siata_vivo = df_siata_vivo.set_index('fecha').combine_first(df_respaldo.set_index('fecha')).reset_index()
+                        df_d = pd.concat(partes_diarias, ignore_index=True).dropna(subset=["fecha_dt"])
+                        df_d = df_d.sort_values("fecha_dt").drop_duplicates(subset=["fecha_dt"], keep="first")
+                        df_d["ppt"] = df_d["ppt"].fillna(0.0)
+                        df_d = df_d[df_d["fecha_dt"] <= hoy]
+                        df_d["fecha"] = df_d["fecha_dt"].dt.to_period("M").dt.to_timestamp()
+                        s_mes = df_d.groupby("fecha")["ppt"].sum().round(2)
+                        s_mes = s_mes[(s_mes > 0) & (s_mes <= 1500.0)]
+                        for est_id in df_grp[col_id].astype(str):
+                            for f_mes, val_mes in s_mes.items():
+                                registros_reanalisis.append({
+                                    "fecha": f_mes,
+                                    "id_estacion": est_id,
+                                    "valor": float(val_mes),
+                                    "origen": "Open-Meteo (Reanálisis ERA5)",
+                                })
         except Exception as e:
             print(f"Aviso en malla trimestral: {e}")
 
-    if not df_siata_vivo.empty:
-        df_siata_vivo['fecha'] = pd.to_datetime(df_siata_vivo['fecha']).dt.to_period('M').dt.to_timestamp()
-        df_siata_vivo = df_siata_vivo[
-            (df_siata_vivo['fecha'] >= fecha_inicio_trim) &
-            (df_siata_vivo['fecha'] <= mes_actual_tope)
-        ].sort_values('fecha').reset_index(drop=True)
-        df_siata_vivo['fecha'] = df_siata_vivo['fecha'].dt.strftime('%Y-%m-%d')
-        return df_siata_vivo
+    df_largo_re = pd.DataFrame(registros_reanalisis, columns=["fecha", "id_estacion", "valor", "origen"])
 
-    return pd.DataFrame()
+    # Prioridad absoluta a la telemetría real SIATA sobre el reanálisis
+    df_largo = pd.concat([df_largo_real, df_largo_re], ignore_index=True)
+    if df_largo.empty:
+        return pd.DataFrame()
+
+    df_largo["fecha"] = pd.to_datetime(df_largo["fecha"]).dt.to_period("M").dt.to_timestamp()
+    df_largo = df_largo[
+        (df_largo["fecha"] >= fecha_inicio_trim) & (df_largo["fecha"] <= mes_actual_tope)
+    ].drop_duplicates(subset=["fecha", "id_estacion"], keep="first")
+    df_largo = df_largo.sort_values(["fecha", "id_estacion"]).reset_index(drop=True)
+    df_largo["fecha"] = df_largo["fecha"].dt.strftime("%Y-%m-%d")
+
+    if str(formato).lower() == "largo":
+        return df_largo
+
+    df_ancho = df_largo.pivot(index="fecha", columns="id_estacion", values="valor").reset_index()
+    df_ancho = df_ancho.sort_values("fecha").reset_index(drop=True)
+    df_ancho.attrs["detalle_origen"] = df_largo
+    return df_ancho

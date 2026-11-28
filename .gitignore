@@ -13,3 +13,7 @@ __pycache__/
 data/*.geojson
 
 data/cloud_cache/
+
+# Secretos locales de Streamlit
+.streamlit/secrets.toml
+frontend/.streamlit/secrets.toml

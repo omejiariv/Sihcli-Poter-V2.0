@@ -55,7 +55,15 @@ def plot_serie_anual(df, col_anio, col_valor, col_estacion):
             marker=dict(size=5),
         ))
 
-    fig.update_layout(hovermode="x unified", margin=dict(l=20, r=20, t=40, b=20), height=480)
+    fig.update_traces(
+        hovertemplate="<b>%{fullData.name}</b><br>Año: %{x}<br>Lluvia: %{y:,.0f} mm<extra></extra>",
+        selector=dict(mode="lines"),
+    )
+    fig.update_layout(
+        hovermode="closest",
+        margin=dict(l=20, r=20, t=40, b=20),
+        height=480,
+    )
     return fig
 
 
@@ -188,10 +196,16 @@ def plot_ciclo_anual(df, year_comp=None):
                 marker=dict(symbol="diamond", size=7),
             ))
 
-    fig.update_xaxes(categoryorder="array", categoryarray=MESES_ORDEN)
-    fig.update_layout(hovermode="x unified", margin=dict(l=20, r=20, t=40, b=20), height=480)
+    fig.update_traces(
+        hovertemplate="<b>%{fullData.name}</b><br>Año: %{x}<br>Lluvia: %{y:,.0f} mm<extra></extra>",
+        selector=dict(mode="lines"),
+    )
+    fig.update_layout(
+        hovermode="closest",
+        margin=dict(l=20, r=20, t=40, b=20),
+        height=480,
+    )
     return fig
-
 
 def plot_spaghetti_estacional(df_st, col_anio, col_valor, hl_year=None):
     """Spaghetti Plot del ciclo anual comparativo."""
@@ -478,3 +492,73 @@ def plot_mapa_clusters_kmeans(df_clusters, gdf_zona=None):
         legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1),
     )
     return fig
+
+def generar_dictamen_ia(diag, nombre_zona, periodo_str, api_key):
+    """
+    Capa 2: Envía el resumen JSON de la Capa 1 a Gemini y retorna un dictamen
+    hidroclimático ejecutivo (2-3 párrafos) orientado a seguridad hídrica y gestión del riesgo.
+    """
+    import json
+    import requests
+
+    clusters_resumen = []
+    if not diag.get("clusters_df", pd.DataFrame()).empty:
+        for _, r in diag["clusters_df"].iterrows():
+            clusters_resumen.append({
+                "zona": r["Zona"],
+                "estaciones": int(r["Estaciones"]),
+                "media_anual_mm": round(float(r["Media_mm"]), 0),
+                "max_grupo_mm": round(float(r["Max_mm"]), 0),
+            })
+
+    payload_datos = {
+        "territorio": nombre_zona,
+        "periodo_analizado": periodo_str,
+        "estaciones_activas": diag.get("n_estaciones", 0),
+        "media_anual_regional_mm": round(float(diag.get("media_anual", 0)), 1),
+        "regimen_lluvias": diag.get("regimen", "N/D"),
+        "mes_mas_humedo": diag.get("mes_pico", "N/D"),
+        "mes_mas_seco": diag.get("mes_seco", "N/D"),
+        "tendencia_mann_kendall": diag.get("tendencia_txt", "N/D"),
+        "gradiente_orografico": diag.get("gradiente_txt", "No disponible"),
+        "zonificacion_kmeans": clusters_resumen,
+    }
+
+    prompt = (
+        "Eres un hidroclimatólogo especialista en cuencas andinas de Antioquia, Colombia. "
+        "Con base únicamente en el siguiente resumen estadístico en JSON, redacta un dictamen ejecutivo "
+        "técnico y concreto en exactamente 3 párrafos cortos:\n"
+        "1) Síntesis del régimen de lluvias, volumen medio y gradiente espacial/orográfico.\n"
+        "2) Lectura de la tendencia histórica (Theil-Sen / Mann-Kendall) y contraste entre el núcleo húmedo y la sombra de lluvia.\n"
+        "3) Implicaciones prácticas para seguridad hídrica, estiaje y gestión del riesgo en este territorio.\n"
+        "Usa un tono técnico claro, sin saludos ni encabezados innecesarios.\n\n"
+        f"DATOS JSON:\n{json.dumps(payload_datos, ensure_ascii=False, indent=2)}"
+    )
+
+    api_key = str(api_key).strip()
+    body = {
+    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+    "generationConfig": {"temperature": 0.3, "maxOutputTokens": 4096},
+    }
+
+    modelos = ["gemini-3.8-flash", "gemini-3.8-flash-lite", "gemini-3.5-flash", "gemini-2.5-flash-lite"]
+    urls = [
+        f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}"
+        for m in modelos
+    ]
+
+    ultimo_error = None
+    for url in urls:
+        try:
+            resp = requests.post(url, json=body, timeout=120)
+            if resp.status_code == 200:
+                data = resp.json()
+                parts = data["candidates"][0]["content"].get("parts", [])
+                texto = "".join(p.get("text", "") for p in parts if not p.get("thought", False)).strip()
+                if texto:
+                    return texto
+            ultimo_error = f"{resp.status_code}: {resp.text[:250]}"
+        except requests.exceptions.RequestException as e:
+            ultimo_error = str(e)
+
+    raise RuntimeError(ultimo_error)

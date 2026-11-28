@@ -1575,6 +1575,50 @@ def display_graphs_tab(
                 },
             )
 
+        # --- CAPA 2: DICTAMEN EJECUTIVO CON IA ---
+        st.markdown("---")
+        nombre_zona_ia = st.session_state.get("aleph_lugar", "Territorio Seleccionado")
+        yr_rng = kwargs.get("year_range")
+        if yr_rng and len(yr_rng) == 2:
+            periodo_ia = f"{yr_rng[0]}–{yr_rng[1]}"
+        else:
+            periodo_ia = f"{int(df_anual_melted[col_anio].min())}–{int(df_anual_melted[col_anio].max())}"
+
+        clave_cache_ia = f"dictamen_ia_{nombre_zona_ia}_{periodo_ia}_{diag['n_estaciones']}"
+
+        c_ia_btn, c_ia_info = st.columns([1.2, 3])
+        with c_ia_btn:
+            btn_ia = st.button(
+                "✨ Interpretar con IA",
+                key="btn_interpretar_ia_graficos",
+                type="primary",
+                use_container_width=True,
+            )
+        with c_ia_info:
+            st.caption("Genera una síntesis técnica ejecutiva a partir de los indicadores ML del territorio y período activos.")
+
+        if btn_ia:
+            api_key_gemini = (
+                st.secrets.get("GEMINI_API_KEY")
+                or st.secrets.get("GOOGLE_API_KEY")
+                or os.environ.get("GEMINI_API_KEY")
+                or os.environ.get("GOOGLE_API_KEY")
+            )
+            if not api_key_gemini:
+                st.warning(
+                    "⚠️ No se encontró `GEMINI_API_KEY` en `.streamlit/secrets.toml` ni en las variables de entorno."
+                )
+            else:
+                with st.spinner("🧠 Redactando dictamen hidroclimático ejecutivo..."):
+                    try:
+                        texto_ia = ce.generar_dictamen_ia(diag, nombre_zona_ia, periodo_ia, api_key_gemini)
+                        st.session_state[clave_cache_ia] = texto_ia
+                    except Exception as e:
+                        st.error(f"⚠️ Error consultando Gemini: {e}")
+
+        if clave_cache_ia in st.session_state:
+            st.info(f"**📋 Dictamen Hidroclimático ({nombre_zona_ia} · {periodo_ia})**\n\n{st.session_state[clave_cache_ia]}")
+
     # --- ESTRUCTURA DE PESTAÑAS ---
     tabs = st.tabs([
         "1. Serie Anual", "2. Ranking Multianual", "3. Serie Mensual", 

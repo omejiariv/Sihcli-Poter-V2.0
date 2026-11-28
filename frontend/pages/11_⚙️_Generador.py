@@ -10,8 +10,6 @@ import os
 import warnings
 import re
 import unicodedata
-import requests
-import time
 
 
 from modules import climate_api
@@ -50,31 +48,6 @@ def muro_de_acceso_beta():
 # Llamamos a la función para activar el escudo
 muro_de_acceso_beta()
 
-# ==========================================================
-# 🧠 MOTOR DE INFERENCIA: RECONSTRUCCIÓN POR VECINOS
-# ==========================================================
-def reconstruir_vacios(df, matriz_corr_path):
-    if not os.path.exists(matriz_corr_path):
-        return df
-    df_corr = pd.read_csv(matriz_corr_path, index_col=0)
-    for est_objetivo in df.columns:
-        if est_objetivo == 'fecha': continue
-        if df[est_objetivo].isna().sum() > 0:
-            donantes = df_corr[est_objetivo].sort_values(ascending=False)
-            donantes = donantes[(donantes > 0.65) & (donantes.index != est_objetivo)].index.tolist()
-            if donantes:
-                media_objetivo = df.groupby(df.index.month)[est_objetivo].mean()
-                vacios = df[df[est_objetivo].isna()].index
-                for fecha in vacios:
-                    mes = fecha.month
-                    for donante in donantes:
-                        if donante in df.columns and pd.notna(df.loc[fecha, donante]):
-                            media_donante = df.groupby(df.index.month)[donante].mean()[mes]
-                            if media_donante > 0:
-                                df.loc[fecha, est_objetivo] = df.loc[fecha, donante] * (media_objetivo[mes] / media_donante)
-                                break
-    return df
-    
 # ==============================================================================
 
 # --- ACTUALIZACIÓN: AGREGAMOS LA CUARTA PESTAÑA ---
@@ -551,99 +524,99 @@ with tab4:
 # PESTAÑA 5: Generador de Diccionario Maestro (Veredas)
 # =====================================================================
 
-    with tab5:
-        st.markdown("### 🔗 Generador de Diccionario Maestro (Veredas)")
-        st.info("Cruza las bases tabulares (DANE) con las espaciales (GeoJSON) usando el Código DANE para generar el diccionario `homologacion_veredas.csv`.")
+with tab5:
+    st.markdown("### 🔗 Generador de Diccionario Maestro (Veredas)")
+    st.info("Cruza las bases tabulares (DANE) con las espaciales (GeoJSON) usando el Código DANE para generar el diccionario `homologacion_veredas.csv`.")
 
-        col_h1, col_h2 = st.columns(2)
-        with col_h1:
-            file_dane = st.file_uploader("1. Archivo Matriz (ej. veredas_dane.csv)", type=['csv'], key="dane_csv")
-            st.caption("Debe tener columnas: `codigo_vereda`, `NOMB_MPIO`, `NOMBRE_VER`")
-        with col_h2:
-            file_gis = st.file_uploader("2. Archivo Espacial (ej. veredas_gisant.csv)", type=['csv'], key="gis_csv")
-            st.caption("Debe tener columnas: `codigo_vereda`, `NOMB_MPIO`, `NOMBRE_VER`")
+    col_h1, col_h2 = st.columns(2)
+    with col_h1:
+        file_dane = st.file_uploader("1. Archivo Matriz (ej. veredas_dane.csv)", type=['csv'], key="dane_csv")
+        st.caption("Debe tener columnas: `codigo_vereda`, `NOMB_MPIO`, `NOMBRE_VER`")
+    with col_h2:
+        file_gis = st.file_uploader("2. Archivo Espacial (ej. veredas_gisant.csv)", type=['csv'], key="gis_csv")
+        st.caption("Debe tener columnas: `codigo_vereda`, `NOMB_MPIO`, `NOMBRE_VER`")
 
-        if file_dane and file_gis:
-            if st.button("🚀 Generar Diccionario de Homologación", type="primary", width="stretch"):
-                with st.spinner("Realizando exorcismo de datos y cruzando bases..."):
-                    try:
-                        # 🛡️ LECTOR MEGA-BLINDADO (Anti-BOM y Anti-Punto y Coma)
-                        def leer_csv_robusto(file_obj):
+    if file_dane and file_gis:
+        if st.button("🚀 Generar Diccionario de Homologación", type="primary", width="stretch"):
+            with st.spinner("Realizando exorcismo de datos y cruzando bases..."):
+                try:
+                    # 🛡️ LECTOR MEGA-BLINDADO (Anti-BOM y Anti-Punto y Coma)
+                    def leer_csv_robusto(file_obj):
+                        file_obj.seek(0)
+                        # Detectar separador manualmente leyendo una muestra
+                        sample = file_obj.read(1000).decode('utf-8', errors='ignore')
+                        sep_char = ';' if ';' in sample else ','
+                        file_obj.seek(0)
+                        
+                        try:
+                            # utf-8-sig DESTRUYE el carácter fantasma \ufeff de Excel
+                            return pd.read_csv(file_obj, sep=sep_char, encoding='utf-8-sig')
+                        except UnicodeDecodeError:
                             file_obj.seek(0)
-                            # Detectar separador manualmente leyendo una muestra
-                            sample = file_obj.read(1000).decode('utf-8', errors='ignore')
-                            sep_char = ';' if ';' in sample else ','
-                            file_obj.seek(0)
-                            
-                            try:
-                                # utf-8-sig DESTRUYE el carácter fantasma \ufeff de Excel
-                                return pd.read_csv(file_obj, sep=sep_char, encoding='utf-8-sig')
-                            except UnicodeDecodeError:
-                                file_obj.seek(0)
-                                return pd.read_csv(file_obj, sep=sep_char, encoding='latin1')
+                            return pd.read_csv(file_obj, sep=sep_char, encoding='latin1')
 
-                        # 1. Leer archivos
-                        df_dane = leer_csv_robusto(file_dane)
-                        df_gis = leer_csv_robusto(file_gis)
+                    # 1. Leer archivos
+                    df_dane = leer_csv_robusto(file_dane)
+                    df_gis = leer_csv_robusto(file_gis)
 
-                        # 2. Exorcismo de columnas (Eliminar TODO rastro de caracteres invisibles)
-                        df_dane.columns = [str(c).replace('\ufeff', '').replace('\xef\xbb\xbf', '').strip() for c in df_dane.columns]
-                        df_gis.columns = [str(c).replace('\ufeff', '').replace('\xef\xbb\xbf', '').strip() for c in df_gis.columns]
+                    # 2. Exorcismo de columnas (Eliminar TODO rastro de caracteres invisibles)
+                    df_dane.columns = [str(c).replace('\ufeff', '').replace('\xef\xbb\xbf', '').strip() for c in df_dane.columns]
+                    df_gis.columns = [str(c).replace('\ufeff', '').replace('\xef\xbb\xbf', '').strip() for c in df_gis.columns]
 
-                        # 3. Forzar el nombre de la llave (Si dice "codigo" en algún lado, lo volvemos codigo_vereda)
-                        df_dane.columns = ['codigo_vereda' if 'codigo' in c.lower() else c for c in df_dane.columns]
-                        df_gis.columns = ['codigo_vereda' if 'codigo' in c.lower() else c for c in df_gis.columns]
+                    # 3. Forzar el nombre de la llave (Si dice "codigo" en algún lado, lo volvemos codigo_vereda)
+                    df_dane.columns = ['codigo_vereda' if 'codigo' in c.lower() else c for c in df_dane.columns]
+                    df_gis.columns = ['codigo_vereda' if 'codigo' in c.lower() else c for c in df_gis.columns]
 
-                        # 4. Asegurar que sean strings limpios de 8 dígitos
-                        df_dane['codigo_vereda'] = df_dane['codigo_vereda'].astype(str).str.replace(r'\.0$', '', regex=True).str.zfill(8)
-                        df_gis['codigo_vereda'] = df_gis['codigo_vereda'].astype(str).str.replace(r'\.0$', '', regex=True).str.zfill(8)
+                    # 4. Asegurar que sean strings limpios de 8 dígitos
+                    df_dane['codigo_vereda'] = df_dane['codigo_vereda'].astype(str).str.replace(r'\.0$', '', regex=True).str.zfill(8)
+                    df_gis['codigo_vereda'] = df_gis['codigo_vereda'].astype(str).str.replace(r'\.0$', '', regex=True).str.zfill(8)
 
-                        # 5. Cruzar bases
-                        df_cruce = pd.merge(df_dane, df_gis, on='codigo_vereda', suffixes=('_DANE', '_GIS'))
+                    # 5. Cruzar bases
+                    df_cruce = pd.merge(df_dane, df_gis, on='codigo_vereda', suffixes=('_DANE', '_GIS'))
 
-                        # Verificar si cruzaron
-                        if df_cruce.empty:
-                            st.error("❌ Los archivos se leyeron bien, pero no hay códigos DANE que coincidan. Revisa los datos de las columnas de código.")
-                            st.stop()
+                    # Verificar si cruzaron
+                    if df_cruce.empty:
+                        st.error("❌ Los archivos se leyeron bien, pero no hay códigos DANE que coincidan. Revisa los datos de las columnas de código.")
+                        st.stop()
 
-                        # Función limpiadora interna
-                        def limpiar_texto(t, municipio=""):
-                            if not isinstance(t, str): return ""
-                            t = str(t).upper().strip()
-                            t = ''.join(c for c in unicodedata.normalize('NFD', t) if unicodedata.category(c) != 'Mn')
-                            for word in [r'\bVEREDA\b', r'\bVDA\.?\b', r'\bSECTOR\b', r'\bCASERIO\b']:
-                                t = re.sub(word, '', t)
-                            if municipio:
-                                mun = ''.join(c for c in unicodedata.normalize('NFD', str(municipio).upper()) if unicodedata.category(c) != 'Mn')
-                                id_final = t + "_" + mun
-                            else:
-                                id_final = t
-                            return re.sub(r'[^A-Z0-9_]', '', id_final)
+                    # Función limpiadora interna
+                    def limpiar_texto(t, municipio=""):
+                        if not isinstance(t, str): return ""
+                        t = str(t).upper().strip()
+                        t = ''.join(c for c in unicodedata.normalize('NFD', t) if unicodedata.category(c) != 'Mn')
+                        for word in [r'\bVEREDA\b', r'\bVDA\.?\b', r'\bSECTOR\b', r'\bCASERIO\b']:
+                            t = re.sub(word, '', t)
+                        if municipio:
+                            mun = ''.join(c for c in unicodedata.normalize('NFD', str(municipio).upper()) if unicodedata.category(c) != 'Mn')
+                            id_final = t + "_" + mun
+                        else:
+                            id_final = t
+                        return re.sub(r'[^A-Z0-9_]', '', id_final)
 
-                        # Construir los ADN
-                        df_cruce['ID_TABLA'] = df_cruce.apply(lambda row: limpiar_texto(row.get('NOMBRE_VER_DANE', ''), row.get('NOMB_MPIO_DANE', '')), axis=1)
-                        df_cruce['ID_MAPA'] = df_cruce.apply(lambda row: limpiar_texto(row.get('NOMBRE_VER_GIS', ''), row.get('NOMB_MPIO_GIS', '')), axis=1)
+                    # Construir los ADN
+                    df_cruce['ID_TABLA'] = df_cruce.apply(lambda row: limpiar_texto(row.get('NOMBRE_VER_DANE', ''), row.get('NOMB_MPIO_DANE', '')), axis=1)
+                    df_cruce['ID_MAPA'] = df_cruce.apply(lambda row: limpiar_texto(row.get('NOMBRE_VER_GIS', ''), row.get('NOMB_MPIO_GIS', '')), axis=1)
 
-                        # Extraer rebeldes
-                        df_rebeldes = df_cruce[df_cruce['ID_TABLA'] != df_cruce['ID_MAPA']]
-                        df_final = df_rebeldes[['ID_TABLA', 'ID_MAPA']].drop_duplicates()
+                    # Extraer rebeldes
+                    df_rebeldes = df_cruce[df_cruce['ID_TABLA'] != df_cruce['ID_MAPA']]
+                    df_final = df_rebeldes[['ID_TABLA', 'ID_MAPA']].drop_duplicates()
 
-                        st.success(f"✅ ¡Éxito Total! Se cruzaron los datos y se detectaron {len(df_final)} discrepancias territoriales.")
-                        st.dataframe(df_final, width="stretch")
+                    st.success(f"✅ ¡Éxito Total! Se cruzaron los datos y se detectaron {len(df_final)} discrepancias territoriales.")
+                    st.dataframe(df_final, width="stretch")
 
-                        # Botón de descarga
-                        csv_dict = df_final.to_csv(index=False).encode('utf-8')
-                        st.download_button(
-                            label="📥 Descargar homologacion_veredas.csv",
-                            data=csv_dict,
-                            file_name="homologacion_veredas.csv",
-                            mime="text/csv",
-                            type="primary"
-                        )
-                        st.info("💡 Instrucción: Descarga este archivo y guárdalo en la carpeta `data/` de tu proyecto. El `Modelo Demográfico` lo leerá automáticamente para arreglar los mapas.")
+                    # Botón de descarga
+                    csv_dict = df_final.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="📥 Descargar homologacion_veredas.csv",
+                        data=csv_dict,
+                        file_name="homologacion_veredas.csv",
+                        mime="text/csv",
+                        type="primary"
+                    )
+                    st.info("💡 Instrucción: Descarga este archivo y guárdalo en la carpeta `data/` de tu proyecto. El `Modelo Demográfico` lo leerá automáticamente para arreglar los mapas.")
 
-                    except Exception as e:
-                        st.error(f"❌ Error interno durante el procesamiento: {e}")
+                except Exception as e:
+                    st.error(f"❌ Error interno durante el procesamiento: {e}")
 
 # ------------------------------------------------------------------------------
 # 🚀 PESTAÑA 6: GEMELO DIGITAL (CONSOLIDADOR MAESTRO DE REDES)
@@ -980,60 +953,6 @@ with tab6:
             use_container_width=True
         )
         
-# Extraer datos del IDEAM
-
-def extraer_ideam_datos_abiertos(lista_estaciones, limite_registros=50000):
-    """
-    Se conecta al API de Datos Abiertos de Colombia (Socrata) para extraer 
-    registros de precipitación del IDEAM.
-    """
-    print("📡 Iniciando conexión con el portal de Datos Abiertos del Gobierno...")
-    
-    # El ID del dataset oficial del IDEAM en datos.gov.co (Catálogo de precipitación)
-    # Nota: Este ID corresponde a Catálogo de Datos Climáticos, puede requerir ajuste 
-    # si el IDEAM migra el servidor, pero es el punto de entrada estándar.
-    DATASET_ID = "s54a-sgyg"
-    URL_BASE = f"https://www.datos.gov.co/resource/{DATASET_ID}.json"
-    
-    resultados = []
-    
-    for estacion in lista_estaciones:
-        print(f"Buscando estación: {estacion}...")
-        
-        # Construimos la consulta SoQL (Socrata Query Language)
-        parametros = {
-            "codigoestacion": str(estacion),
-            "$limit": limite_registros,
-            "$order": "fechaobservacion ASC"
-        }
-        
-        try:
-            respuesta = requests.get(URL_BASE, params=parametros)
-            
-            if respuesta.status_code == 200:
-                datos = respuesta.json()
-                if datos:
-                    df_temp = pd.DataFrame(datos)
-                    resultados.append(df_temp)
-                    print(f"  ✅ {len(datos)} registros encontrados.")
-                else:
-                    print("  ⚠️ Sin datos recientes en la API.")
-            else:
-                print(f"  ❌ Error de conexión: {respuesta.status_code}")
-                
-        except Exception as e:
-            print(f"  ❌ Fallo crítico en estación {estacion}: {e}")
-            
-        # Pausa táctica para no saturar el servidor del gobierno
-        time.sleep(1)
-        
-    if resultados:
-        df_final = pd.concat(resultados, ignore_index=True)
-        print("\n✅ Extracción completada.")
-        return df_final
-    else:
-        return pd.DataFrame()
-
 # =====================================================================
 # 📡 PESTAÑA 7: PUENTE SIATA (GESTIÓN INTEGRAL DE ESTACIONES Y LLUVIA)
 # =====================================================================
@@ -1376,59 +1295,81 @@ if __name__ == "__main__":
 
 # ==========================
 # 🚀 ZONA DE PRUEBAS Y MANTENIMIENTO SQL AVANZADO Tabla Precipitacion
-# ==========================
-if __name__ == "__main__":
-    st.markdown("---")
-    st.subheader("🧹 Quirófano SQL: Depuración Profunda de Supabase")
-    st.markdown("Este motor ejecuta limpieza directa en la tabla `precipitacion` (>1 millón de registros) utilizando identificadores físicos de PostgreSQL.")
+# =====================================================================
+# 🧹 QUIRÓFANO SQL: MANTENIMIENTO Y DEPURACIÓN DE SUPABASE
+# =====================================================================
+st.markdown("---")
+with st.expander("🧹 Quirófano SQL: Depuración Profunda de Supabase (Tabla `precipitacion`)", expanded=False):
+    st.markdown(
+        "Ejecuta limpieza directa en PostgreSQL para eliminar valores imposibles, fechas futuras, "
+        "registros SIATA previos a 2010 y duplicados exactos (`ctid`)."
+    )
 
-    if st.button("🧨 Ejecutar Depuración Integral de Anomalías", type="primary", use_container_width=True):
-        from modules.db_manager import get_engine
-        from sqlalchemy import text
+    col_sql1, col_sql2 = st.columns(2)
 
-        try:
-            engine = get_engine()
-            with engine.begin() as conn:
-                # 1. Eliminar valores físicamente imposibles en un mes (negativos, códigos de error y diluvios irreales > 1500)
-                res_anomalias = conn.execute(text("""
-                    DELETE FROM precipitacion 
-                    WHERE valor < 0 OR valor > 1500 OR valor IN (999, 999.9, 9999, -999, -99.9);
-                """))
-                
-                # 2. Eliminar fechas futuras fantasmas (ej. Diciembre de 2026 o años posteriores)
-                res_futuras = conn.execute(text("""
-                    DELETE FROM precipitacion WHERE fecha > CURRENT_DATE;
-                """))
-                
-                # 3. Eliminar estaciones SIATA previas a la creación de la red (2010)
-                res_hist = conn.execute(text("""
-                    DELETE FROM precipitacion 
-                    WHERE UPPER(id_estacion) LIKE 'SIATA_%' AND fecha < '2010-01-01';
-                """))
-                
-                # 4. Eliminar duplicados exactos usando el identificador físico ctid de PostgreSQL
-                res_duplicados = conn.execute(text("""
-                    DELETE FROM precipitacion
-                    WHERE ctid IN (
-                        SELECT ctid
-                        FROM (
-                            SELECT ctid, ROW_NUMBER() OVER(PARTITION BY id_estacion, fecha) as fila
-                            FROM precipitacion
-                        ) t
-                        WHERE t.fila > 1
-                    );
-                """))
+    with col_sql1:
+        if st.button("🧨 Ejecutar Depuración Integral de Anomalías y Duplicados", type="primary", use_container_width=True):
+            from modules.db_manager import get_engine
+            from sqlalchemy import text
 
-                total = res_anomalias.rowcount + res_futuras.rowcount + res_hist.rowcount + res_duplicados.rowcount
+            try:
+                engine = get_engine()
+                with engine.begin() as conn:
+                    res_anomalias = conn.execute(text("""
+                        DELETE FROM precipitacion
+                        WHERE valor < 0 OR valor > 1500 OR valor IN (999, 999.9, 9999, -999, -99.9);
+                    """))
+                    res_futuras = conn.execute(text("""
+                        DELETE FROM precipitacion WHERE fecha > CURRENT_DATE;
+                    """))
+                    res_hist = conn.execute(text("""
+                        DELETE FROM precipitacion
+                        WHERE UPPER(id_estacion) LIKE 'SIATA_%' AND fecha < '2010-01-01';
+                    """))
+                    res_duplicados = conn.execute(text("""
+                        DELETE FROM precipitacion
+                        WHERE ctid IN (
+                            SELECT ctid
+                            FROM (
+                                SELECT ctid, ROW_NUMBER() OVER(PARTITION BY id_estacion, fecha) AS fila
+                                FROM precipitacion
+                            ) t
+                            WHERE t.fila > 1
+                        );
+                    """))
+                    total = (
+                        res_anomalias.rowcount
+                        + res_futuras.rowcount
+                        + res_hist.rowcount
+                        + res_duplicados.rowcount
+                    )
 
-            st.cache_data.clear()
-            st.success(f"✅ ¡Cirugía completada! Se eliminaron {total} registros corruptos o redundantes:")
-            st.info(f"""
-            - **{res_anomalias.rowcount}** valores imposibles / códigos de error.
-            - **{res_futuras.rowcount}** fechas futuras fantasmas.
-            - **{res_hist.rowcount}** registros SIATA previos a 2010.
-            - **{res_duplicados.rowcount}** filas duplicadas exactas.
-            """)
-            st.balloons()
-        except Exception as e:
-            st.error(f"Error en la depuración SQL: {e}")
+                st.cache_data.clear()
+                st.success(f"✅ ¡Cirugía completada! Se eliminaron {total} registros corruptos o redundantes.")
+                st.info(
+                    f"- **{res_anomalias.rowcount}** valores imposibles / códigos de error.\n"
+                    f"- **{res_futuras.rowcount}** fechas futuras fantasmas.\n"
+                    f"- **{res_hist.rowcount}** registros SIATA previos a 2010.\n"
+                    f"- **{res_duplicados.rowcount}** filas duplicadas exactas."
+                )
+            except Exception as e:
+                st.error(f"Error en la depuración SQL: {e}")
+
+    with col_sql2:
+        confirmar_siata = st.checkbox("⚠️ Confirmar borrado total de registros SIATA en `precipitacion`")
+        if st.button("🗑️ Borrar ÚNICAMENTE datos del SIATA", disabled=not confirmar_siata, use_container_width=True):
+            from modules.db_manager import get_engine
+            from sqlalchemy import text
+
+            try:
+                engine = get_engine()
+                with engine.begin() as conn:
+                    res = conn.execute(text("""
+                        DELETE FROM precipitacion
+                        WHERE UPPER(id_estacion) LIKE 'SIATA_%';
+                    """))
+
+                st.cache_data.clear()
+                st.success(f"✅ Se borraron {res.rowcount} registros del SIATA. Los datos del IDEAM están a salvo.")
+            except Exception as e:
+                st.error(f"Error en el borrado: {e}")
